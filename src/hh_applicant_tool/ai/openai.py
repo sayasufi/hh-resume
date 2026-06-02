@@ -32,8 +32,30 @@ class ChatOpenAI:
             self.completion_endpoint or DEFAULT_COMPLETION_ENDPOINT
         )
 
+    _resolved_model: str | None = None
+
     def _default_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"}
+
+    async def _resolve_model(self, client: "httpx.AsyncClient") -> str | None:
+        """Если model == 'auto' (или пусто) — берём текущую модель с сервера
+        (/v1/models). Так не нужно хардкодить имя: меняешь модель в vLLM —
+        бот подхватывает сам."""
+        if self.model and self.model != "auto":
+            return self.model
+        if self._resolved_model:
+            return self._resolved_model
+        base = self.completion_endpoint.rsplit("/chat/completions", 1)[0]
+        try:
+            r = await client.get(
+                base + "/models", headers=self._default_headers()
+            )
+            r.raise_for_status()
+            ids = [m["id"] for m in r.json().get("data", [])]
+            self._resolved_model = ids[0] if ids else None
+        except Exception:
+            self._resolved_model = None
+        return self._resolved_model
 
     async def send_message(self, message: str) -> str:
         messages = []
@@ -46,13 +68,14 @@ class ChatOpenAI:
             "temperature": self.temperature,
             "max_completion_tokens": self.max_completion_tokens,
         }
-        if self.model:
-            payload["model"] = self.model
 
         try:
             async with httpx.AsyncClient(
                 proxy=self.proxy, timeout=self.timeout
             ) as client:
+                model = await self._resolve_model(client)
+                if model:
+                    payload["model"] = model
                 response = await client.post(
                     self.completion_endpoint,
                     json=payload,

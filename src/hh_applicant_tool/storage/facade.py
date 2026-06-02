@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import sqlite3
+import psycopg
 
 from .repositories.contacts import VacancyContactsRepository
 from .repositories.employers import EmployersRepository
@@ -14,7 +14,7 @@ from .utils import init_db
 class StorageFacade:
     """Единая точка доступа к persistence-слою."""
 
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: psycopg.AsyncConnection):
         init_db(conn)
         self.employers = EmployersRepository(conn)
         self.vacancies = VacanciesRepository(conn)

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import sqlite3
 import sys
 from collections.abc import Sequence
 from functools import cached_property
@@ -14,11 +13,13 @@ from pathlib import Path
 from pkgutil import iter_modules
 from typing import Any, Iterable
 
+import psycopg
 import requests
 import urllib3
 
 from . import ai, api, utils
 from .storage import StorageFacade
+from .storage.pgconn import connect as pg_connect
 from .utils.log import setup_logger
 from .utils.mixins import MegaTool
 
@@ -192,9 +193,8 @@ class HHApplicantTool(MegaTool):
         return self.config_path / DEFAULT_DATABASE_FILENAME
 
     @cached_property
-    def db(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        return conn
+    def db(self) -> psycopg.Connection:
+        return pg_connect()
 
     @cached_property
     def storage(self) -> StorageFacade:
@@ -309,15 +309,9 @@ class HHApplicantTool(MegaTool):
                     )
                 except api.errors.Forbidden:
                     logger.error("Требуется авторизация")
-                except sqlite3.Error as ex:
+                except psycopg.Error as ex:
                     logger.exception(ex)
-
-                    script_name = sys.argv[0].split(os.sep)[-1]
-
-                    logger.warning(
-                        f"Возможно база данных повреждена, попробуйте выполнить команду:\n\n"  # noqa: E501
-                        f"  {script_name} migrate-db"
-                    )
+                    logger.warning("Ошибка базы данных (Postgres).")
                 except Exception as e:
                     logger.exception(e)
                 finally:

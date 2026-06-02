@@ -1,5 +1,6 @@
 import logging
-from dataclasses import KW_ONLY, dataclass
+from dataclasses import dataclass
+from typing import ClassVar
 
 import httpx
 
@@ -8,32 +9,35 @@ from .base import AIError
 logger = logging.getLogger(__package__)
 
 
-DEFAULT_COMPLETION_ENDPOINT = "https://api.openai.com/v1/chat/completions"
-
-
-class OpenAIError(AIError):
+class OpenRouterError(AIError):
     pass
 
 
 @dataclass
-class ChatOpenAI:
+class ChatOpenRouter:
+    chat_endpoint: ClassVar[str] = (
+        "https://openrouter.ai/api/v1/chat/completions"
+    )
+
     token: str
-    _: KW_ONLY
+    model: str
+    referer: str | None = None
+    title: str | None = None
     system_prompt: str | None = None
-    timeout: float = 30.0
     temperature: float = 0.7
     max_completion_tokens: int = 1000
-    model: str | None = None
-    completion_endpoint: str = None
     proxy: str | None = None
 
-    def __post_init__(self) -> None:
-        self.completion_endpoint = (
-            self.completion_endpoint or DEFAULT_COMPLETION_ENDPOINT
-        )
-
     def _default_headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.token}"}
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+        if self.referer:
+            headers["HTTP-Referer"] = self.referer
+        if self.title:
+            headers["X-Title"] = self.title
+        return headers
 
     async def send_message(self, message: str) -> str:
         messages = []
@@ -42,26 +46,26 @@ class ChatOpenAI:
         messages.append({"role": "user", "content": message})
 
         payload = {
+            "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
             "max_completion_tokens": self.max_completion_tokens,
         }
-        if self.model:
-            payload["model"] = self.model
-
         try:
             async with httpx.AsyncClient(
-                proxy=self.proxy, timeout=self.timeout
+                proxy=self.proxy, timeout=30.0
             ) as client:
                 response = await client.post(
-                    self.completion_endpoint,
+                    self.chat_endpoint,
                     json=payload,
                     headers=self._default_headers(),
                 )
                 response.raise_for_status()
                 data = response.json()
             if "error" in data:
-                raise OpenAIError(data["error"]["message"])
+                raise OpenRouterError(
+                    data["error"].get("message", "Unknown error")
+                )
             return data["choices"][0]["message"]["content"]
         except httpx.HTTPError as ex:
-            raise OpenAIError(f"Network error: {ex}") from ex
+            raise OpenRouterError(f"Network error: {ex}") from ex

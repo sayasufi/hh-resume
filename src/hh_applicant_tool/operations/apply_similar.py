@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import logging
 import random
+import re
+from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
 
@@ -102,12 +104,33 @@ class Operation(BaseOperation):
         parser.add_argument(
             "--first-prompt",
             help="Начальный помпт чата для генерации сопроводительного письма",
-            default="Напиши сопроводительное письмо для отклика на эту вакансию. Не используй placeholder'ы, твой ответ будет отправлен без обработки.",  # noqa: E501
+            default=(
+                "Ты помогаешь написать короткое, живое и профессиональное "
+                "сопроводительное письмо на русском языке для отклика на hh.ru.\n"
+                "\n"
+                "Правила:\n"
+                "- Пиши от первого лица (как кандидат).\n"
+                "- Тон: дружелюбно и по делу, без канцелярита и пафоса.\n"
+                "- Не используй плейсхолдеры и не упоминай, что ты ИИ.\n"
+                "- Ничего не выдумывай: опирайся только на факты из входных данных.\n"
+                "- Не добавляй негатив/оговорки (например: «нет опыта…»).\n"
+                "- Длина: 4–7 предложений, желательно 600–1200 знаков.\n"
+                "- Формат: 1–2 абзаца, без заголовков.\n"
+                "- В конце подпись именем (если оно дано во входных данных).\n"
+                "\n"
+                "Выводи только готовый текст письма."
+            ),  # noqa: E501
         )
         parser.add_argument(
             "--prompt",
             help="Промпт для генерации сопроводительного письма",
-            default="Сгенерируй сопроводительное письмо не более 5-7 предложений от моего имени для вакансии",  # noqa: E501
+            default=(
+                "Составь сопроводительное письмо для отклика на вакансию.\n"
+                "Сделай текст человечным и конкретным: почему интересна роль "
+                "и 2–3 релевантных факта/результата из моего опыта под требования вакансии.\n"
+                "Пиши кратко (4–7 предложений), без воды, без клише и без повторения "
+                "описания вакансии целиком. Не используй плейсхолдеры."
+            ),  # noqa: E501
         )
         parser.add_argument(
             "--total-pages",
@@ -250,9 +273,49 @@ class Operation(BaseOperation):
         self,
         tool: HHApplicantTool,
     ) -> None:
+        # Проверяем, что процесс запущен в Docker контейнере
+        import os
+        from pathlib import Path
+        
+        # Проверяем наличие маркера Docker контейнера или переменной окружения из docker-compose
+        is_docker = (
+            Path("/.dockerenv").exists() or
+            os.getenv("CONFIG_DIR") == "/app/config"
+        )
+        
+        if not is_docker:
+            logger.error(
+                "Команда apply-similar должна запускаться только внутри Docker контейнера. "
+                "Используйте: docker compose run -u docker hh_applicant_tool hh-applicant-tool apply-similar"
+            )
+            print("❌ Ошибка: команда должна запускаться только в Docker контейнере!")
+            print("💡 Используйте: docker compose run -u docker hh_applicant_tool hh-applicant-tool apply-similar")
+            raise SystemExit(1)
+        
         self.tool = tool
         self.api_client = tool.api_client
         args: Namespace = tool.args
+        
+        # Загружаем сохраненные настройки, если аргументы не указаны
+        if not args.resume_id:
+            args.resume_id = tool.storage.settings.get_value("apply.resume_id") or None
+        if args.use_ai is None:
+            use_ai_value = tool.storage.settings.get_value("apply.use_ai")
+            if use_ai_value is not None:
+                # Может быть bool или str
+                if isinstance(use_ai_value, bool):
+                    args.use_ai = use_ai_value
+                else:
+                    args.use_ai = str(use_ai_value).lower() in ("true", "1", "yes")
+        if not args.force_message:
+            force_value = tool.storage.settings.get_value("apply.force_message")
+            if force_value is not None:
+                if isinstance(force_value, bool):
+                    args.force_message = force_value
+                else:
+                    args.force_message = (
+                        str(force_value).lower() in ("true", "1", "yes")
+                    )
         self.application_messages = self._get_application_messages(
             args.message_list_path
         )
@@ -293,9 +356,67 @@ class Operation(BaseOperation):
         self.openai_chat = (
             tool.get_openai_chat(args.first_prompt) if args.use_ai else None
         )
+        self.max_applications_per_day = 100
+        self._init_daily_counter()
         self._apply_similar()
 
+    def _init_daily_counter(self) -> None:
+        """Инициализирует счетчик откликов за день."""
+        today = date.today().isoformat()
+        pause_until = self.tool.storage.settings.get_value(
+            "_applications_pause_until", ""
+        )
+        if pause_until:
+            # Если еще действует пауза - останавливаем рассылку
+            if pause_until > today:
+                count_str = self.tool.storage.settings.get_value("_applications_count", "0")
+                self.applications_count = int(count_str) if count_str.isdigit() else 0
+                self.daily_limit_reached = True
+                logger.info(
+                    "Рассылка на паузе до %s из-за лимита откликов.",
+                    pause_until,
+                )
+                return
+            # Пауза истекла - очищаем флаг
+            self.tool.storage.settings.set_value("_applications_pause_until", "")
+        last_date = self.tool.storage.settings.get_value("_applications_date", "")
+        
+        if last_date != today:
+            # Новая дата - сбрасываем счетчик
+            self.tool.storage.settings.set_value("_applications_date", today)
+            self.tool.storage.settings.set_value("_applications_count", "0")
+            self.applications_count = 0
+        else:
+            # Та же дата - загружаем счетчик из базы
+            count_str = self.tool.storage.settings.get_value("_applications_count", "0")
+            self.applications_count = int(count_str) if count_str.isdigit() else 0
+
+        self.daily_limit_reached = (
+            self.applications_count >= self.max_applications_per_day
+        )
+
+    def _pause_until_next_day(self) -> None:
+        pause_until = (date.today() + timedelta(days=1)).isoformat()
+        self.tool.storage.settings.set_value(
+            "_applications_pause_until", pause_until
+        )
+        self.daily_limit_reached = True
+        logger.info("Рассылка остановлена до %s из-за лимита откликов.", pause_until)
+
     def _apply_similar(self) -> None:
+        if self.daily_limit_reached:
+            logger.info(
+                "Лимит откликов за день достигнут (%s/%s). "
+                "Повторный запуск будет возможен завтра.",
+                self.applications_count,
+                self.max_applications_per_day,
+            )
+            print(
+                "⏸️ Лимит откликов за день достигнут. "
+                "Запуск автоматически возобновится завтра."
+            )
+            return
+
         resumes: list[datatypes.Resume] = self.tool.get_resumes()
         try:
             self.tool.storage.resumes.save_batch(resumes)
@@ -342,23 +463,82 @@ class Operation(BaseOperation):
         logger.info("Начинаю рассылку откликов для резюме: %s (%s)", resume["alternate_url"], resume["title"])
         print("🚀 Начинаю рассылку откликов для резюме:", resume["title"])
 
+        # Получаем полное резюме с опытом, навыками и образованием
+        try:
+            full_resume = self.api_client.get(f"/resumes/{resume['id']}")
+        except Exception as ex:
+            logger.warning(f"Не удалось получить полное резюме через API: {ex}. Используется fallback из файла.")
+            full_resume = {}
+        
+        # Пытаемся загрузить резюме из файла как fallback
+        resume_file_path = self.tool.config_path / "resume.txt"
+        resume_file_content = None
+        if resume_file_path.exists():
+            try:
+                resume_file_content = resume_file_path.read_text(encoding="utf-8")
+                logger.debug(f"Загружено резюме из файла: {resume_file_path} ({len(resume_file_content)} символов)")
+            except Exception as ex:
+                logger.warning(f"Не удалось прочитать файл резюме {resume_file_path}: {ex}")
+        
         placeholders = {
             "first_name": user.get("first_name") or "",
             "last_name": user.get("last_name") or "",
+            "middle_name": user.get("middle_name") or "",
             "email": user.get("email") or "",
             "phone": user.get("phone") or "",
             "resume_title": resume.get("title") or "",
         }
+        
+        # Сохраняем полное резюме и содержимое файла для использования в промпте
+        self._full_resume = full_resume
+        self._resume_file_content = resume_file_content
 
         do_apply = True
 
         for vacancy in self._get_similar_vacancies(resume_id=resume["id"]):
+            
             try:
                 employer = vacancy.get("employer", {})
+                
+                # Получаем полное описание вакансии для более точной генерации письма
+                vacancy_description = ""
+                vacancy_requirements = ""
+                vacancy_responsibilities = ""
+                try:
+                    full_vacancy = self.api_client.get(f"/vacancies/{vacancy['id']}")
+                    if full_vacancy.get("description"):
+                        # Очищаем HTML теги из описания
+                        desc = full_vacancy["description"]
+                        # Удаляем HTML теги
+                        desc = re.sub(r'<[^>]+>', '', desc)
+                        # Заменяем HTML entities
+                        desc = desc.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+                        # Ограничиваем длину
+                        vacancy_description = desc[:2000] + "..." if len(desc) > 2000 else desc
+                    
+                    # Также используем snippet если есть
+                    if vacancy.get("snippet"):
+                        snippet = vacancy["snippet"]
+                        if snippet.get("requirement"):
+                            vacancy_requirements = snippet["requirement"][:500]
+                        if snippet.get("responsibility"):
+                            vacancy_responsibilities = snippet["responsibility"][:500]
+                except Exception as ex:
+                    logger.debug(f"Не удалось получить полное описание вакансии {vacancy.get('id')}: {ex}")
+                    # Используем только snippet если полная вакансия недоступна
+                    if vacancy.get("snippet"):
+                        snippet = vacancy["snippet"]
+                        if snippet.get("requirement"):
+                            vacancy_requirements = snippet["requirement"][:500]
+                        if snippet.get("responsibility"):
+                            vacancy_responsibilities = snippet["responsibility"][:500]
 
                 message_placeholders = {
                     "vacancy_name": vacancy.get("name", ""),
                     "employer_name": employer.get("name", ""),
+                    "vacancy_description": vacancy_description,
+                    "vacancy_requirements": vacancy_requirements,
+                    "vacancy_responsibilities": vacancy_responsibilities,
                     **placeholders,
                 }
 
@@ -444,20 +624,137 @@ class Operation(BaseOperation):
                     "message": "",
                 }
 
+                logger.debug(
+                    "force_message=%s, response_letter_required=%s, openai_chat=%s for vacancy %s",
+                    self.force_message,
+                    vacancy.get("response_letter_required"),
+                    bool(self.openai_chat),
+                    vacancy_id,
+                )
+
                 if self.force_message or vacancy.get(
                     "response_letter_required"
                 ):
                     if self.openai_chat:
+                        # Формируем полное имя пользователя (Фамилия Имя Отчество)
+                        full_name_parts = []
+                        if message_placeholders.get("last_name"):
+                            full_name_parts.append(message_placeholders["last_name"])
+                        if message_placeholders.get("first_name"):
+                            full_name_parts.append(message_placeholders["first_name"])
+                        if message_placeholders.get("middle_name"):
+                            full_name_parts.append(message_placeholders["middle_name"])
+                        full_name = " ".join(full_name_parts) if full_name_parts else ""
+                        
+                        # Формируем описание опыта работы
+                        experience_text = ""
+                        if self._full_resume.get("experience"):
+                            exp_items = []
+                            for exp in self._full_resume["experience"]:
+                                exp_str = f"- {exp.get('position', '')} в {exp.get('company', '')}"
+                                if exp.get("start"):
+                                    exp_str += f" ({exp.get('start', '')}"
+                                    if exp.get("end"):
+                                        exp_str += f" - {exp.get('end', '')})"
+                                    else:
+                                        exp_str += " - настоящее время)"
+                                if exp.get("description"):
+                                    desc = exp.get("description", "").strip()
+                                    if desc:
+                                        # Ограничиваем длину описания
+                                        if len(desc) > 500:
+                                            desc = desc[:500] + "..."
+                                        exp_str += f"\n  {desc}"
+                                exp_items.append(exp_str)
+                            if exp_items:
+                                experience_text = "Опыт работы:\n" + "\n".join(exp_items)
+                        
+                        # Формируем навыки
+                        skills_text = ""
+                        if self._full_resume.get("skills"):
+                            skills = self._full_resume["skills"]
+                            if isinstance(skills, str) and skills.strip():
+                                skills_text = f"Навыки: {skills}"
+                            elif isinstance(skills, list):
+                                skills_text = f"Навыки: {', '.join(skills)}"
+                        
+                        # Формируем образование
+                        education_text = ""
+                        if self._full_resume.get("education"):
+                            edu = self._full_resume["education"]
+                            edu_parts = []
+                            if edu.get("primary"):
+                                primary = edu["primary"]
+                                if isinstance(primary, list) and primary:
+                                    primary = primary[0]
+                                if isinstance(primary, dict):
+                                    org = primary.get("organization", "")
+                                    name = primary.get("name", "")
+                                    year = primary.get("year", "")
+                                    if org or name:
+                                        edu_str = f"Образование: {name}"
+                                        if org:
+                                            edu_str += f" ({org})"
+                                        if year:
+                                            edu_str += f", {year}"
+                                        edu_parts.append(edu_str)
+                            if edu_parts:
+                                education_text = "\n".join(edu_parts)
+                        
+                        # Используем файл резюме как fallback, если данных из API недостаточно
+                        resume_file_text = ""
+                        if self._resume_file_content:
+                            # Если нет опыта работы из API или он пустой, используем файл как основной источник
+                            if not experience_text and not skills_text and not education_text:
+                                resume_file_text = f"\nПолное резюме:\n{self._resume_file_content}"
+                                logger.info("Используется полное резюме из файла как fallback (данные из API недоступны)")
+                            # Если есть данные из API, но файл содержит больше информации, добавляем его
+                            elif len(self._resume_file_content) > 1000:
+                                # Ограничиваем длину, если файл слишком большой
+                                resume_file_text = f"\nДополнительная информация из резюме:\n{self._resume_file_content[:3000]}..."
+                                logger.debug("Добавлена дополнительная информация из файла резюме")
+                        
                         msg = self.pre_prompt + "\n\n"
-                        msg += (
-                            "Название вакансии: "
-                            + message_placeholders["vacancy_name"]
-                        )
-                        msg += (
-                            "Мое резюме:" + message_placeholders["resume_title"]
-                        )
-                        logger.debug("prompt: %s", msg)
-                        msg = self.openai_chat.send_message(msg)
+                        msg += f"Название вакансии: {message_placeholders['vacancy_name']}\n"
+                        if message_placeholders.get('employer_name'):
+                            msg += f"Компания: {message_placeholders['employer_name']}\n"
+                        
+                        # Добавляем описание вакансии
+                        if message_placeholders.get('vacancy_description'):
+                            msg += f"\nОписание вакансии:\n{message_placeholders['vacancy_description']}\n"
+                        elif message_placeholders.get('vacancy_requirements') or message_placeholders.get('vacancy_responsibilities'):
+                            msg += "\nИнформация о вакансии:\n"
+                            if message_placeholders.get('vacancy_responsibilities'):
+                                msg += f"Обязанности: {message_placeholders['vacancy_responsibilities']}\n"
+                            if message_placeholders.get('vacancy_requirements'):
+                                msg += f"Требования: {message_placeholders['vacancy_requirements']}\n"
+                        
+                        msg += f"\nНазвание моего резюме: {message_placeholders['resume_title']}\n"
+                        if full_name:
+                            msg += f"Мое полное имя: {full_name}\n"
+                        if experience_text:
+                            msg += f"\n{experience_text}\n"
+                        if skills_text:
+                            msg += f"{skills_text}\n"
+                        if education_text:
+                            msg += f"{education_text}\n"
+                        if resume_file_text:
+                            msg += resume_file_text
+                        
+                        logger.debug("Full name in prompt: %s", full_name)
+                        logger.debug("prompt length: %d chars", len(msg))
+                        try:
+                            msg = self.openai_chat.send_message(msg)
+                        except AIError as ex:
+                            logger.warning(
+                                f"Ошибка при генерации письма через AI: {ex}. "
+                                "Используется шаблонное сообщение."
+                            )
+                            # Fallback на шаблонное сообщение при ошибке AI
+                            msg = (
+                                rand_text(random.choice(self.application_messages))
+                                % message_placeholders
+                            )
                     else:
                         msg = unescape_string(
                             rand_text(random.choice(self.application_messages))
@@ -469,13 +766,27 @@ class Operation(BaseOperation):
 
                 try:
                     if not self.dry_run:
+                        logger.debug(
+                            "SENDING POST /negotiations: vacancy_id=%s, message_len=%d, message_preview=%.100s",
+                            params.get("vacancy_id"),
+                            len(params.get("message", "")),
+                            params.get("message", "")[:100],
+                        )
                         res = self.api_client.post(
                             "/negotiations",
                             params,
-                            delay=random.uniform(1, 3),
+                            delay=random.uniform(10, 15),
                         )
                         assert res == {}
-                        logger.debug("Откликнулись на %s", vacancy["alternate_url"])
+                        self.applications_count += 1
+                        # Сохраняем счетчик в базу данных
+                        self.tool.storage.settings.set_value("_applications_count", str(self.applications_count))
+                        logger.debug(
+                            "Откликнулись на %s с резюме %s (отклик #%d за сегодня)",
+                            vacancy["alternate_url"],
+                            resume["alternate_url"],
+                            self.applications_count,
+                        )
                     print(
                         "📨 Отправили отклик для резюме",
                         resume["alternate_url"],
@@ -493,6 +804,8 @@ class Operation(BaseOperation):
                 logger.info("Достигли лимита на отклики для резюме: %s", resume["alternate_url"])
                 print("⚠️ Достигли лимита рассылки для резюме", resume["alternate_url"])
                 do_apply = False
+                self._pause_until_next_day()
+                break
             except ApiError as ex:
                 logger.warning(ex)
             except (BadResponse, AIError) as ex:

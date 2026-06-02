@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import json as _json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
-from threading import Lock
 from typing import Any, Literal, TypeVar
 from urllib.parse import urlencode, urljoin
 
-import requests
-from requests import Session
+import httpx
 
 from hh_applicant_tool.api.user_agent import generate_android_useragent
 
@@ -34,13 +34,13 @@ T = TypeVar("T")
 logger = logging.getLogger(__package__)
 
 
-# Thread-safe
 @dataclass
 class BaseClient:
     base_url: str
     _: dataclasses.KW_ONLY
     user_agent: str | None = None
-    session: Session | None = None
+    client: httpx.AsyncClient | None = None
+    proxy: str | None = None
     delay: float | None = None
     _previous_request_time: float = 0.0
 
@@ -48,18 +48,17 @@ class BaseClient:
         assert self.base_url.endswith("/"), "base_url must ends with /"
         self.delay = self.delay or DEFAULT_DELAY
         self.user_agent = self.user_agent or generate_android_useragent()
-
-        # logger.debug(f"user agent: {self.user_agent}")
-
-        if not self.session:
-            logger.debug("create new session")
-            self.session = requests.session()
-
-        self.lock = Lock()
+        if not self.client:
+            logger.debug("create new httpx.AsyncClient")
+            self.client = httpx.AsyncClient(
+                proxy=self.proxy, timeout=30.0, follow_redirects=False
+            )
+        self.lock = asyncio.Lock()
 
     @property
     def proxies(self):
-        return self.session.proxies
+        # совместимость со старым кодом (некоторые места читали .proxies)
+        return {"https": self.proxy, "http": self.proxy} if self.proxy else {}
 
     def _default_headers(self) -> dict[str, str]:
         return {
@@ -67,7 +66,7 @@ class BaseClient:
             "x-hh-app-active": "true",
         }
 
-    def request(
+    async def request(
         self,
         method: AllowedMethods,
         endpoint: str,
@@ -76,49 +75,41 @@ class BaseClient:
         as_json: bool = False,
         **kwargs: Any,
     ) -> T:
-        # Не знаю насколько это "правильно"
         assert method in AllowedMethods.__args__
         params = dict(params or {})
         params.update(kwargs)
         url = self.resolve_url(endpoint)
-        with self.lock:
-            # На серваке какая-то анти-DDOS система
-            if (
-                delay := (self.delay if delay is None else delay)
+        async with self.lock:
+            wait = (
+                (self.delay if delay is None else delay)
                 - time.monotonic()
                 + self._previous_request_time
-            ) > 0:
-                logger.debug("wait %fs before request", delay)
-                time.sleep(delay)
-            has_body = method in ["POST", "PUT"]
-            payload = {
-                ["data", "json"][as_json] if has_body else "params": params
-            }
-            # logger.debug(f"request info: {method = }, {url = }, {headers = }, params = {repr(params)[:255]}")
-            response = self.session.request(
-                method,
-                url,
-                **payload,
-                headers=self._default_headers(),
-                allow_redirects=False,
             )
+            if wait > 0:
+                logger.debug("wait %fs before request", wait)
+                await asyncio.sleep(wait)
+            has_body = method in ["POST", "PUT"]
+            req_kwargs: dict[str, Any] = {}
+            if has_body:
+                req_kwargs["json" if as_json else "data"] = params
+            else:
+                req_kwargs["params"] = params
             try:
-                # У этих лошков сервер не отдает Content-Length, а кривое API
-                # отдает пустые ответы, например, при отклике на вакансии,
-                # и мы не можем узнать содержит ли ответ тело
-                # 'Server': 'ddos-guard'
-                # ...
-                # 'Transfer-Encoding': 'chunked'
+                response = await self.client.request(
+                    method,
+                    url,
+                    headers=self._default_headers(),
+                    **req_kwargs,
+                )
                 try:
                     rv = response.json() if response.text else {}
-                except as_json.decoder.JSONDecodeError as ex:
+                except _json.JSONDecodeError as ex:
                     raise errors.BadResponse(
                         f"Can't decode JSON: {method} {url} ({response.status_code})"
                     ) from ex
             finally:
                 logger.debug(
-                    "%d %s %s with params: %.1000s",
-                    response.status_code,
+                    "%s %s with params: %.1000s",
                     method,
                     url,
                     params or "-",
@@ -130,17 +121,21 @@ class BaseClient:
         )
         return rv
 
-    def get(self, *args, **kwargs) -> T:
-        return self.request("GET", *args, **kwargs)
+    async def get(self, *args, **kwargs) -> T:
+        return await self.request("GET", *args, **kwargs)
 
-    def post(self, *args, **kwargs) -> T:
-        return self.request("POST", *args, **kwargs)
+    async def post(self, *args, **kwargs) -> T:
+        return await self.request("POST", *args, **kwargs)
 
-    def put(self, *args, **kwargs) -> T:
-        return self.request("PUT", *args, **kwargs)
+    async def put(self, *args, **kwargs) -> T:
+        return await self.request("PUT", *args, **kwargs)
 
-    def delete(self, *args, **kwargs) -> T:
-        return self.request("DELETE", *args, **kwargs)
+    async def delete(self, *args, **kwargs) -> T:
+        return await self.request("DELETE", *args, **kwargs)
+
+    async def aclose(self) -> None:
+        if self.client:
+            await self.client.aclose()
 
     def resolve_url(self, url: str) -> str:
         return urljoin(self.base_url, url.lstrip("/"))
@@ -173,29 +168,27 @@ class OAuthClient(BaseClient):
         params_qs = urlencode({k: v for k, v in params.items() if v})
         return self.resolve_url(f"/authorize?{params_qs}")
 
-    def request_access_token(
+    async def request_access_token(
         self, endpoint: str, params: dict[str, Any] | None = None, **kw: Any
     ) -> AccessToken:
-        tok = self.post(endpoint, params, **kw)
+        tok = await self.post(endpoint, params, **kw)
         return {
             "access_token": tok.get("access_token"),
             "refresh_token": tok.get("refresh_token"),
             "access_expires_at": int(time.time()) + tok.pop("expires_in", 0),
         }
 
-    def authenticate(self, code: str) -> AccessToken:
+    async def authenticate(self, code: str) -> AccessToken:
         params = {
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "code": code,
             "grant_type": "authorization_code",
         }
-        return self.request_access_token("/token", params)
+        return await self.request_access_token("/token", params)
 
-    def refresh_access_token(self, refresh_token: str) -> AccessToken:
-        # refresh_token можно использовать только один раз и только по
-        # истечению срока действия access_token.
-        return self.request_access_token(
+    async def refresh_access_token(self, refresh_token: str) -> AccessToken:
+        return await self.request_access_token(
             "/token",
             grant_type="refresh_token",
             refresh_token=refresh_token,
@@ -204,7 +197,6 @@ class OAuthClient(BaseClient):
 
 @dataclass
 class ApiClient(BaseClient):
-    # Например, для просмотра информации о компании токен не нужен
     access_token: str | None = None
     refresh_token: str | None = None
     access_expires_at: int = 0
@@ -223,21 +215,17 @@ class ApiClient(BaseClient):
             client_id=self.client_id,
             client_secret=self.client_secret,
             user_agent=self.user_agent,
-            session=self.session,
+            client=self.client,
         )
 
-    def _default_headers(
-        self,
-    ) -> dict[str, str]:
+    def _default_headers(self) -> dict[str, str]:
         headers = super()._default_headers()
         if not self.access_token:
             return headers
-        # Это очень интересно, что access token'ы начинаются с USER, т.е. API может содержать какую-то уязвимость, связанную с этим
         assert self.access_token.startswith("USER")
         return headers | {"authorization": f"Bearer {self.access_token}"}
 
-    # Реализовано автоматическое обновление токена
-    def request(
+    async def request(
         self,
         method: AllowedMethods,
         endpoint: str,
@@ -246,32 +234,29 @@ class ApiClient(BaseClient):
         as_json: bool = False,
         **kwargs: Any,
     ) -> T:
-        def do_request():
-            return BaseClient.request(
+        async def do_request():
+            return await BaseClient.request(
                 self, method, endpoint, params, delay, as_json, **kwargs
             )
 
         try:
-            return do_request()
-        # TODO: добавить класс для ошибок типа AccessTokenExpired
+            return await do_request()
         except errors.Forbidden as ex:
             if not self.is_access_expired or not self.refresh_token:
                 raise ex
             logger.info("try to refresh access_token")
-            # Пробуем обновить токен
-            self.refresh_access_token()
-            # И повторно отправляем запрос
-            return do_request()
+            await self.refresh_access_token()
+            return await do_request()
 
     def handle_access_token(self, token: AccessToken) -> None:
-        for field in ("access_token", "refresh_token", "access_expires_at"):
-            if field in token and hasattr(self, field):
-                setattr(self, field, token[field])
+        for f in ("access_token", "refresh_token", "access_expires_at"):
+            if f in token and hasattr(self, f):
+                setattr(self, f, token[f])
 
-    def refresh_access_token(self) -> None:
+    async def refresh_access_token(self) -> None:
         if not self.refresh_token:
             raise ValueError("Refresh token required.")
-        token = self.oauth_client.refresh_access_token(self.refresh_token)
+        token = await self.oauth_client.refresh_access_token(self.refresh_token)
         self.handle_access_token(token)
 
     def get_access_token(self) -> AccessToken:

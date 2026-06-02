@@ -87,3 +87,9 @@ docker/
 
 # Конфиг, который создает докер
 /config
+
+# Локальные dev/audit скрипты (не для репозитория)
+/_*.py
+/audit_dialogs.py
+*.bak.*
+*.naumenko.bak

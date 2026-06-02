@@ -1,4 +1,22 @@
 services:
+  db:
+    container_name: hh_db
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hh
+      POSTGRES_PASSWORD: hh_local_pw
+      POSTGRES_DB: hh
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hh -d hh"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - default
+
   hh_applicant_tool:
     container_name: hh_applicant_tool
     image: hh_applicant_tool:latest
@@ -13,7 +31,23 @@ services:
     environment:
       # Это не трогаем
       - CONFIG_DIR=/app/config
+      # Postgres (схема-на-юзера; для Егора — u_egor)
+      - HH_DB_DSN=postgresql://hh:hh_local_pw@db:5432/hh
+      - HH_DB_SCHEMA=u_egor
       # Смените или закомментируйте при проблемах
       - TERM=${TERM}
       # Если время на сервере отличается
       # - TZ=Europe/Moscow
+    networks:
+      - default
+      # Локальная LLM (vLLM) живёт в стеке /var/www/test-llm — цепляемся к его сети,
+      # чтобы резолвить host "vllm" для сопроводительных писем.
+      - test-llm
+
+volumes:
+  pgdata:
+
+networks:
+  test-llm:
+    external: true
+    name: test-llm_default

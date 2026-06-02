@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar, Iterator, Mapping, Self, Type
+from typing import Any, AsyncIterator, ClassVar, Mapping, Self, Type
+
+import psycopg
 
 from ..models.base import BaseModel
 from .errors import wrap_db_errors
@@ -22,7 +23,7 @@ class BaseRepository:
     update_excludes: ClassVar[tuple[str, ...]] = ("created_at", "updated_at")
     __table__: ClassVar[str | None] = None
 
-    conn: sqlite3.Connection
+    conn: psycopg.AsyncConnection
     auto_commit: bool = True
 
     @property
@@ -30,51 +31,35 @@ class BaseRepository:
         return self.__table__ or self.model.__name__
 
     @wrap_db_errors
-    def commit(self):
-        if self.conn.in_transaction:
-            self.conn.commit()
+    async def commit(self):
+        await self.conn.commit()
 
     @wrap_db_errors
-    def rollback(self):
-        if self.conn.in_transaction:
-            self.conn.rollback()
+    async def rollback(self):
+        await self.conn.rollback()
 
-    def __enter__(self) -> Self:
+    async def __aenter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
-            self.commit()
+            await self.commit()
         else:
-            self.rollback()
+            await self.rollback()
         return False
 
-    def maybe_commit(self, commit: bool | None = None) -> bool:
+    async def maybe_commit(self, commit: bool | None = None) -> None:
         if commit is not None and commit or self.auto_commit:
-            self.commit()
+            await self.commit()
 
-    def _row_to_model(self, cursor: sqlite3.Cursor, row: tuple) -> BaseModel:
-        data = {col[0]: value for col, value in zip(cursor.description, row)}  # noqa: B905
-        return self.model.from_db(data)
-
-    @wrap_db_errors
-    def find(self, **kwargs: Any) -> Iterator[BaseModel]:
-        # logger.debug(kwargs)
+    async def find(self, **kwargs: Any) -> AsyncIterator[BaseModel]:
         operators = {
-            "lt": "<",
-            "le": "<=",
-            "gt": ">",
-            "ge": ">=",
-            "ne": "!=",
-            "eq": "=",
-            "like": "LIKE",
-            "is": "IS",
-            "is_not": "IS NOT",
-            "in": "IN",
-            "not_in": "NOT IN",
+            "lt": "<", "le": "<=", "gt": ">", "ge": ">=", "ne": "!=",
+            "eq": "=", "like": "LIKE", "is": "IS", "is_not": "IS NOT",
+            "in": "IN", "not_in": "NOT IN",
         }
         conditions = []
-        sql_params = {}
+        sql_params: dict[str, Any] = {}
         for key, value in kwargs.items():
             try:
                 key, op = key.rsplit("__", 1)
@@ -86,57 +71,69 @@ class BaseRepository:
                 in_placeholders = []
                 for i, v in enumerate(value, 1):
                     p_name = f"{key}_{i}"
-                    in_placeholders.append(f":{p_name}")
+                    in_placeholders.append(f"%({p_name})s")
                     sql_params[p_name] = v
                 conditions.append(
                     f"{key} {operators[op]} ({', '.join(in_placeholders)})"
                 )
             else:
-                placeholder = f":{key}"
                 sql_params[key] = value
-                conditions.append(f"{key} {operators[op]} {placeholder}")
+                conditions.append(f"{key} {operators[op]} %({key})s")
         sql = f"SELECT * FROM {self.table_name}"
         if conditions:
             sql += f" WHERE {' AND '.join(conditions)}"
-        sql += " ORDER BY rowid DESC;"
+        sql += " ORDER BY ctid DESC;"
+        results: list[BaseModel] = []
         try:
-            cur = self.conn.execute(sql, sql_params)
-        except sqlite3.Error:
+            cur = await self.conn.execute(sql, sql_params)
+            cols = [c[0] for c in cur.description]
+            rows = await cur.fetchall()
+        except psycopg.Error:
             logger.warning("SQL ERROR: %s", sql)
             raise
-
-        yield from (self._row_to_model(cur, row) for row in cur.fetchall())
-
-    @wrap_db_errors
-    def get(self, pk: Any) -> BaseModel | None:
-        return next(self.find(**{f"{self.pkey}": pk}), None)
-
-    @wrap_db_errors
-    def count_total(self) -> int:
-        cur = self.conn.execute(f"SELECT count(*) FROM {self.table_name};")
-        return cur.fetchone()[0]
+        for row in rows:
+            data = {col: value for col, value in zip(cols, row)}  # noqa: B905
+            results.append(self.model.from_db(data))
+        for r in results:
+            yield r
 
     @wrap_db_errors
-    def delete(self, obj_or_pkey: Any, /, commit: bool | None = None) -> None:
-        sql = f"DELETE FROM {self.table_name} WHERE {self.pkey} = ?"
+    async def get(self, pk: Any) -> BaseModel | None:
+        async for item in self.find(**{f"{self.pkey}": pk}):
+            return item
+        return None
+
+    @wrap_db_errors
+    async def count_total(self) -> int:
+        cur = await self.conn.execute(
+            f"SELECT count(*) FROM {self.table_name};"
+        )
+        row = await cur.fetchone()
+        return row[0]
+
+    @wrap_db_errors
+    async def delete(
+        self, obj_or_pkey: Any, /, commit: bool | None = None
+    ) -> None:
+        sql = f"DELETE FROM {self.table_name} WHERE {self.pkey} = %s"
         pk_value = (
             getattr(obj_or_pkey, self.pkey)
             if isinstance(obj_or_pkey, BaseModel)
             else obj_or_pkey
         )
-        self.conn.execute(sql, (pk_value,))
-        self.maybe_commit(commit=commit)
+        await self.conn.execute(sql, (pk_value,))
+        await self.maybe_commit(commit=commit)
 
     remove = delete
 
     @wrap_db_errors
-    def clear(self, commit: bool | None = None):
-        self.conn.execute(f"DELETE FROM {self.table_name};")
-        self.maybe_commit(commit)
+    async def clear(self, commit: bool | None = None):
+        await self.conn.execute(f"DELETE FROM {self.table_name};")
+        await self.maybe_commit(commit)
 
     clean = clear
 
-    def _insert(
+    async def _insert(
         self,
         data: Mapping[str, Any] | list[Mapping[str, Any]],
         /,
@@ -153,15 +150,14 @@ class BaseRepository:
             return
 
         columns = list(dict(data[0] if batch else data).keys())
+        placeholders = ", ".join(f"%({c})s" for c in columns)
         sql = (
             f"INSERT INTO {self.table_name} ({', '.join(columns)})"
-            f" VALUES (:{', :'.join(columns)})"
+            f" VALUES ({placeholders})"
         )
 
         if upsert:
             cols_set = set(columns)
-
-            # Определяем поля конфликта: или переданные, или pkey
             if conflict_columns:
                 conflict_set = set(conflict_columns) & cols_set
             else:
@@ -169,18 +165,12 @@ class BaseRepository:
 
             if conflict_set:
                 sql += f" ON CONFLICT({', '.join(conflict_set)})"
-
-                # Исключаем из обновления:
-                # 1. Поля конфликта (нельзя обновлять по законам SQL)
-                # 2. Primary key (никогда не меняем)
-                # 3. Технические поля (created_at и т.д.)
                 update_set = (
                     cols_set
                     - conflict_set
                     - {self.pkey}
                     - set(update_excludes or [])
                 )
-
                 if update_set:
                     update_clause = ", ".join(
                         f"{c} = excluded.{c}" for c in update_set
@@ -190,20 +180,19 @@ class BaseRepository:
                     sql += " DO NOTHING"
 
         sql += ";"
-        # logger.debug("%.2000s", sql)
         try:
             if batch:
-                self.conn.executemany(sql, data)
+                async with self.conn.cursor() as cur:
+                    await cur.executemany(sql, list(data))
             else:
-                self.conn.execute(sql, data)
-        except sqlite3.Error:
+                await self.conn.execute(sql, data)
+        except psycopg.Error:
             logger.warning("SQL ERROR: %s", sql)
-
             raise
-        self.maybe_commit(commit)
+        await self.maybe_commit(commit)
 
     @wrap_db_errors
-    def save(
+    async def save(
         self,
         obj: BaseModel | Mapping[str, Any],
         /,
@@ -212,10 +201,10 @@ class BaseRepository:
         if isinstance(obj, Mapping):
             obj = self.model.from_api(obj)
         data = obj.to_db()
-        self._insert(data, **kwargs)
+        await self._insert(data, **kwargs)
 
     @wrap_db_errors
-    def save_batch(
+    async def save_batch(
         self,
         items: list[BaseModel | Mapping[str, Any]],
         /,
@@ -227,4 +216,4 @@ class BaseRepository:
             (self.model.from_api(i) if isinstance(i, Mapping) else i).to_db()
             for i in items
         ]
-        self._insert(data, batch=True, **kwargs)
+        await self._insert(data, batch=True, **kwargs)

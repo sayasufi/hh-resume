@@ -7,8 +7,6 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from . import json
-
 
 @cache
 def get_config_path() -> Path:
@@ -22,34 +20,51 @@ def get_config_path() -> Path:
 
 
 class Config(dict):
+    """Конфиг, хранящийся в Postgres (таблица app_config: key text, value jsonb)
+    в схеме текущего юзера (HH_DB_SCHEMA). Совместим со старым API: .get(),
+    config["key"] (None если нет), .save(key=value)."""
+
     def __init__(self, config_path: str | Path | None = None):
-        self._config_path = Path(config_path or get_config_path())
+        # config_path игнорируется (оставлен для совместимости вызова)
         self._lock = Lock()
         self.load()
 
     def load(self) -> None:
-        if self._config_path.exists():
-            with self._lock:
-                with self._config_path.open(
-                    "r", encoding="utf-8", errors="replace"
-                ) as f:
-                    self.update(json.load(f))
+        from ..storage.pgconn import connect
+
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT key, value FROM app_config")
+                with self._lock:
+                    for key, value in cur.fetchall():
+                        self[key] = value
+        finally:
+            conn.close()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        self.update(*args, **kwargs)
-        self._config_path.parent.mkdir(exist_ok=True, parents=True)
-        with self._lock:
-            with self._config_path.open(
-                "w+", encoding="utf-8", errors="replace"
-            ) as fp:
-                json.dump(
-                    self,
-                    fp,
-                    indent=2,
-                    sort_keys=True,
-                )
+        import json as _json
+
+        from ..storage.pgconn import connect
+
+        changed = dict(*args, **kwargs)
+        self.update(changed)
+        items = changed.items() if changed else self.items()
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                for key, value in items:
+                    cur.execute(
+                        "INSERT INTO app_config(key, value) VALUES (%s, %s::jsonb) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                        "updated_at = now()",
+                        (key, _json.dumps(value, ensure_ascii=False)),
+                    )
+            conn.commit()
+        finally:
+            conn.close()
 
     __getitem__ = dict.get
 
     def __repr__(self) -> str:
-        return str(self._config_path)
+        return f"Config(pg:{getenv('HH_DB_SCHEMA', 'public')})"

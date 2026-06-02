@@ -1,17 +1,20 @@
-import sqlite3
 from functools import wraps
 
+import psycopg
 
-class RepositoryError(sqlite3.Error):
+
+class RepositoryError(psycopg.Error):
     pass
 
 
 def wrap_db_errors(func):
+    """Async-обёртка ошибок БД для корутин-методов репозитория."""
+
     @wraps(func)
-    def wrapper(*args, **kwargs):
+    async def wrapper(*args, **kwargs):
         try:
-            return func(*args, **kwargs)
-        except sqlite3.Error as e:
+            return await func(*args, **kwargs)
+        except psycopg.Error as e:
             raise RepositoryError(
                 f"Database error in {func.__name__}: {e}"
             ) from e

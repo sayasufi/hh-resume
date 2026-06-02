@@ -11,25 +11,27 @@ class SettingsRepository(BaseRepository):
     pkey: str = "key"
     model = SettingModel
 
-    def get_value(
+    async def get_value(
         self,
         key: str,
         /,
         default: Default = None,
     ) -> str | Default:
-        setting = self.get(key)
+        setting = await self.get(key)
         return setting.value if setting else default
 
-    def set_value(
+    async def set_value(
         self,
         key: str,
         value: str,
         /,
         commit: bool | None = None,
     ) -> None:
-        self.save(self.model(key=key, value=value), commit=commit)
+        await self.save(self.model(key=key, value=value), commit=commit)
 
-    def delete_value(self, key: str, /, commit: bool | None = None) -> None:
-        setting = self.get(key)
+    async def delete_value(
+        self, key: str, /, commit: bool | None = None
+    ) -> None:
+        setting = await self.get(key)
         if setting:
-            self.delete(setting, commit=commit)
+            await self.delete(setting, commit=commit)

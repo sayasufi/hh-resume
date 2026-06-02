@@ -11,8 +11,19 @@ SHELL=/bin/bash
 # вторых, чтобы антиспам не сработал
 0 */5 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python -m hh_applicant_tool update-resumes >> /var/log/cron.log 2>&1
 
-# Рассылаем отклики
+# Рассылаем отклики (настройки берутся из базы данных: resume_id и use_ai)
 0 8-21 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python -m hh_applicant_tool apply-similar >> /var/log/cron.log 2>&1
+
+# Уведомления о "делах" из диалогов (тест/анкета/интервью/написать в ТГ) -> Telegram-группа.
+# Запускаем РАНЬШЕ авто-ответов, чтобы выцепить действие из сообщения работодателя.
+20 8-21 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python /app/notify_actions.py >> /var/log/cron.log 2>&1
+
+# Авто-ответы в диалогах с работодателями (AI через локальную LLM, заземление на резюме)
+30 8-21 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python -m hh_applicant_tool reply-employers --use-ai >> /var/log/cron.log 2>&1
+
+# Авто-отклик на вакансии с ТЕСТОМ через браузер (текст/radio/checkbox/микс). Каждые 3ч днём, до 10 за прогон.
+# (Дневного лимита у тест-откликов нет — только этот потолок на один запуск.)
+0 9-21/3 * * * /bin/bash -c 'sleep $((RANDOM \% 90))' && /usr/local/bin/python /app/apply_tests.py --apply --limit 10 >> /var/log/cron.log 2>&1
 
 # Тест: каждые 5 минут (задержка до 1 минуты, чтобы не накладывались)
 #*/5 * * * * /bin/bash -c 'sleep $((1 + RANDOM \% 59))' && /usr/local/bin/python -m hh_applicant_tool apply-similar >> /var/log/cron.log 2>&1

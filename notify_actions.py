@@ -7,6 +7,7 @@
 """
 import asyncio
 import datetime as dt
+import os
 import sys
 
 import httpx
@@ -34,14 +35,24 @@ SYS = (
 )
 
 
-async def tg_send(token, chat_id, text):
+def _user_label():
+    try:
+        name = pgconn.get_setting("user.full_name")
+    except Exception:
+        name = None
+    return name or os.environ.get("HH_DB_SCHEMA", "public")
+
+
+async def tg_send(token, chat_id, text, topic_id=None):
     async with httpx.AsyncClient(timeout=25) as client:
         for i in range(0, len(text), 3800):
             chunk = text[i:i + 3800]
+            data = {"chat_id": chat_id, "text": chunk,
+                    "disable_web_page_preview": True}
+            if topic_id:
+                data["message_thread_id"] = topic_id
             r = await client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                data={"chat_id": chat_id, "text": chunk,
-                      "disable_web_page_preview": True},
+                f"https://api.telegram.org/bot{token}/sendMessage", data=data,
             )
             if r.status_code != 200:
                 print("TG error:", r.status_code, r.text[:200])
@@ -143,14 +154,21 @@ async def main():
     pgconn.add_action_items(new_items)
 
     if tg.get("token") and tg.get("chat_id"):
-        lines = [f"📋 Новые дела из диалогов hh ({len(new_items)}):", ""]
+        lines = [
+            f"👤 {_user_label()}",
+            f"📋 Новые дела из диалогов hh ({len(new_items)}):",
+            "",
+        ]
         for i, it in enumerate(new_items, 1):
             lines.append(
                 f"{i}. {it['vacancy']}\n"
                 f"   → {it['action']}\n"
                 f"   💬 диалог: {it['chat_url']}"
             )
-        await tg_send(tg["token"], tg["chat_id"], "\n\n".join(lines))
+        await tg_send(
+            tg["token"], tg["chat_id"], "\n\n".join(lines),
+            topic_id=tg.get("topic_id"),
+        )
         print("Отправлено в Telegram.")
     else:
         print("Telegram не настроен.")

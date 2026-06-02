@@ -348,7 +348,11 @@ class Operation(BaseOperation):
         self.schedule = args.schedule
         self.search = args.search
         self.search_field = args.search_field
-        self.excluded_terms = self._parse_excluded_terms(args.excluded_terms)
+        # excluded_terms: из аргумента, иначе per-user из settings (apply.excluded_terms)
+        _excl = args.excluded_terms or await tool.storage.settings.get_value(
+            "apply.excluded_terms"
+        )
+        self.excluded_terms = self._parse_excluded_terms(_excl)
         self.sort_point_lat = args.sort_point_lat
         self.sort_point_lng = args.sort_point_lng
         self.top_lat = args.top_lat
@@ -356,7 +360,12 @@ class Operation(BaseOperation):
         self.openai_chat = (
             tool.get_openai_chat(args.first_prompt) if args.use_ai else None
         )
-        self.max_applications_per_day = 100
+        # Дневной лимит откликов — per-user из settings (apply.max_per_day), дефолт 100
+        mpd = await tool.storage.settings.get_value("apply.max_per_day")
+        try:
+            self.max_applications_per_day = int(mpd) if mpd is not None else 100
+        except (TypeError, ValueError):
+            self.max_applications_per_day = 100
         await self._init_daily_counter()
         await self._apply_similar()
 

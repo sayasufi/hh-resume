@@ -18,9 +18,6 @@ from hh_applicant_tool.storage import pgconn
 APPLY = "--apply" in sys.argv
 LIMIT = int(sys.argv[sys.argv.index("--limit") + 1]) if "--limit" in sys.argv else 1
 
-STATE = "/app/config/hh_web_state.json"
-RESUME_ID = "738fdea6ff0e0431e70039ed1f5072744e7848"
-
 SYS_BASE = (
     "Ты помогаешь кандидату пройти тест при отклике на вакансию hh.ru. "
     "Отвечай ОТ ПЕРВОГО ЛИЦА, кратко, правдиво, опираясь на резюме ниже. "
@@ -63,15 +60,26 @@ def creds():
     )
 
 
+def _user_label():
+    try:
+        name = pgconn.get_setting("user.full_name")
+    except Exception:
+        name = None
+    return name or os.environ.get("HH_DB_SCHEMA", "public")
+
+
 def tg_alert(cfg, text):
     import httpx
 
     t = cfg.get("telegram") or {}
     if t.get("token") and t.get("chat_id"):
+        data = {"chat_id": t["chat_id"], "text": f"👤 {_user_label()}\n{text}"}
+        if t.get("topic_id"):
+            data["message_thread_id"] = t["topic_id"]
         try:
             httpx.post(
                 f"https://api.telegram.org/bot{t['token']}/sendMessage",
-                data={"chat_id": t["chat_id"], "text": text}, timeout=20,
+                data=data, timeout=20,
             )
         except Exception:
             pass
@@ -170,9 +178,14 @@ async def main():
     llm = ChatOpenAI(token=oa["token"], model=oa.get("model"), completion_endpoint=oa.get("completion_endpoint"),
                      system_prompt=sysp, temperature=0.3, max_completion_tokens=300)
 
+    resume_id = pgconn.get_setting("apply.resume_id")
+    if not resume_id:
+        print("apply.resume_id не задан для схемы", pgconn.get_schema())
+        return
+
     seen = pgconn.seen_keys("tests")
 
-    r = await api.get(f"/resumes/{RESUME_ID}/similar_vacancies", page=0, per_page=80)
+    r = await api.get(f"/resumes/{resume_id}/similar_vacancies", page=0, per_page=80)
     tvs = [v for v in r.get("items", []) if v.get("has_test") and str(v["id"]) not in seen]
     print(f"test vacancies (new): {len(tvs)}")
     if not tvs:
@@ -227,7 +240,9 @@ async def main():
                     print(f"[{vid}] не смог надёжно заполнить -> пропуск (вручную)")
                     seen.add(str(vid)); done += 1; save_seen(); continue
 
-                await page.screenshot(path=f"/app/config/test_filled_{vid}.png", full_page=True)
+                _shot_dir = f"/tmp/{pgconn.get_schema()}"
+                os.makedirs(_shot_dir, exist_ok=True)
+                await page.screenshot(path=f"{_shot_dir}/test_filled_{vid}.png", full_page=True)
                 if APPLY:
                     btn = await page.query_selector('button[data-qa="vacancy-response-submit-popup"], button[data-qa*="response-submit"]')
                     if btn:

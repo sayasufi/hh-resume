@@ -30,11 +30,10 @@ RUN pip install --no-cache-dir -e '.[playwright,pillow]'
 RUN playwright install-deps chromium && \
   su docker -c "playwright install chromium"
 
-# Fix: падение, если каталог config не существует
+# Каталог config создаётся пустым; конфиг/секреты НЕ бакаются в образ —
+# всё состояние в Postgres, а логи пишутся в bind-mount /app/config.
 RUN mkdir -p /app/config
 
-# Копируем остальное (эти файлы мешают кешированию последующих слоев)
-COPY config /app/config
 COPY crontab /app/crontab
 COPY startup.sh /app/startup.sh
 

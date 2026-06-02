@@ -25,9 +25,9 @@ class Operation(BaseOperation):
     def setup_parser(self, parser: argparse.ArgumentParser) -> None:
         pass
 
-    def run(self, tool: HHApplicantTool) -> None:
+    async def run(self, tool: HHApplicantTool) -> None:
         if tool.api_client.is_access_expired:
-            tool.api_client.refresh_access_token()
+            await tool.api_client.refresh_access_token()
             if not tool.save_token():
                 print("⚠️ Токен не был обновлен!")
                 return 1

@@ -28,17 +28,17 @@ class Operation(BaseOperation):
     def setup_parser(self, parser: argparse.ArgumentParser) -> None:
         pass
 
-    def run(self, tool: HHApplicantTool) -> None:
-        resumes: list[datatypes.Resume] = tool.get_resumes()
+    async def run(self, tool: HHApplicantTool) -> None:
+        resumes: list[datatypes.Resume] = await tool.get_resumes()
         # Там вызов API меняет поля
-        tool.storage.resumes.save_batch(resumes)
+        await tool.storage.resumes.save_batch(resumes)
 
         for resume in resumes:
             if not resume.get("can_publish_or_update"):
                 logger.warning(f"Не могу обновить: {resume['alternate_url']}")
                 continue
             try:
-                r = tool.api_client.post(
+                r = await tool.api_client.post(
                     f"/resumes/{resume['id']}/publish",
                 )
                 assert {} == r

@@ -33,9 +33,9 @@ class Operation(BaseOperation):
     def setup_parser(self, parser: argparse.ArgumentParser) -> None:
         pass
 
-    def run(self, tool: HHApplicantTool) -> None:
+    async def run(self, tool: HHApplicantTool) -> None:
         api_client = tool.api_client
-        result: datatypes.User = api_client.get("me")
+        result: datatypes.User = await api_client.get("me")
         if result.get('auth_type') != 'applicant':
             logger.warning("Вы вошли не как соискатель! Попробуйте авторизоваться вручную!!!")
         full_name = " ".join(
@@ -48,10 +48,10 @@ class Operation(BaseOperation):
                 ],
             )
         ) or 'Анонимный аккаунт'
-        with tool.storage.settings as s:
-            s.set_value("user.full_name", full_name)
-            s.set_value("user.email", result.get("email"))
-            s.set_value("user.phone", result.get("phone"))
+        async with tool.storage.settings as s:
+            await s.set_value("user.full_name", full_name)
+            await s.set_value("user.email", result.get("email"))
+            await s.set_value("user.phone", result.get("phone"))
         counters = result.get("counters", {})
         print(
             f"🆔 {result['id']} {full_name} "

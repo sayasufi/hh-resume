@@ -1,25 +1,24 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import AsyncIterable, Sequence
 from functools import cached_property
 from importlib import import_module
 from itertools import count
 from os import getenv
 from pathlib import Path
 from pkgutil import iter_modules
-from typing import Any, Iterable
+from typing import Any
 
 import psycopg
-import requests
-import urllib3
 
 from . import ai, api, utils
 from .storage import StorageFacade
-from .storage.pgconn import connect as pg_connect
+from .storage.pgconn import aconnect
 from .utils.log import setup_logger
 from .utils.mixins import MegaTool
 
@@ -137,39 +136,6 @@ class HHApplicantTool(MegaTool):
             exist_ok=True,
         )
 
-    def _get_proxies(self) -> dict[str, str]:
-        proxy_url = self.args.proxy_url or self.config.get("proxy_url")
-
-        if proxy_url:
-            return {
-                "http": proxy_url,
-                "https": proxy_url,
-            }
-
-        proxies = {}
-        http_env = getenv("HTTP_PROXY") or getenv("http_proxy")
-        https_env = getenv("HTTPS_PROXY") or getenv("https_proxy") or http_env
-
-        if http_env:
-            proxies["http"] = http_env
-        if https_env:
-            proxies["https"] = https_env
-
-        return proxies
-
-    @cached_property
-    def session(self) -> requests.Session:
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-        session = requests.session()
-        session.verify = False
-
-        if proxies := self._get_proxies():
-            logger.info("Use proxies for requests: %r", proxies)
-            session.proxies = proxies
-
-        return session
-
     @cached_property
     def config_path(self) -> Path:
         return (
@@ -192,13 +158,13 @@ class HHApplicantTool(MegaTool):
     def db_path(self) -> Path:
         return self.config_path / DEFAULT_DATABASE_FILENAME
 
-    @cached_property
-    def db(self) -> psycopg.Connection:
-        return pg_connect()
-
-    @cached_property
-    def storage(self) -> StorageFacade:
-        return StorageFacade(self.db)
+    def _proxy_url(self) -> str | None:
+        return (
+            self.args.proxy_url
+            or self.config.get("proxy_url")
+            or getenv("HTTPS_PROXY")
+            or getenv("HTTP_PROXY")
+        )
 
     @cached_property
     def api_client(self) -> api.client.ApiClient:
@@ -213,52 +179,47 @@ class HHApplicantTool(MegaTool):
             access_expires_at=token.get("access_expires_at"),
             delay=args.api_delay or config.get("api_delay"),
             user_agent=args.user_agent or config.get("user_agent"),
-            session=self.session,
+            proxy=self._proxy_url(),
         )
 
-    def get_me(self) -> api.datatypes.User:
-        return self.api_client.get("/me")
+    async def get_me(self) -> api.datatypes.User:
+        return await self.api_client.get("/me")
 
-    def get_resumes(self) -> list[api.datatypes.Resume]:
-        return self.api_client.get("/resumes/mine")["items"]
+    async def get_resumes(self) -> list[api.datatypes.Resume]:
+        return (await self.api_client.get("/resumes/mine"))["items"]
 
-    def first_resume_id(self) -> str:
-        resume = self.get_resumes()[0]
-        return resume["id"]
+    async def first_resume_id(self) -> str:
+        resumes = await self.get_resumes()
+        return resumes[0]["id"]
 
-    def get_blacklisted(self) -> list[str]:
+    async def get_blacklisted(self) -> list[str]:
         rv = []
         for page in count():
             r: api.datatypes.PaginatedItems[api.datatypes.EmployerShort] = (
-                self.api_client.get("/employers/blacklisted", page=page)
+                await self.api_client.get("/employers/blacklisted", page=page)
             )
             rv += [item["id"] for item in r["items"]]
             if page + 1 >= r["pages"]:
                 break
         return rv
 
-    def get_negotiations(
+    async def get_negotiations(
         self, status: str = "active"
-    ) -> Iterable[api.datatypes.Negotiation]:
+    ) -> AsyncIterable[api.datatypes.Negotiation]:
         for page in count():
-            r: dict[str, Any] = self.api_client.get(
+            r: dict[str, Any] = await self.api_client.get(
                 "/negotiations",
                 page=page,
                 per_page=100,
                 status=status,
             )
-
             items = r.get("items", [])
-
             if not items:
                 break
-
-            yield from items
-
+            for item in items:
+                yield item
             if page + 1 >= r.get("pages", 0):
                 break
-
-    # TODO: добавить еще методов или те удалить?
 
     def save_token(self) -> bool:
         if self.api_client.access_token != self.config.get("token", {}).get(
@@ -279,10 +240,12 @@ class HHApplicantTool(MegaTool):
             max_completion_tokens=c.get("max_completion_tokens", 1000),
             system_prompt=system_prompt,
             completion_endpoint=c.get("completion_endpoint"),
-            session=self.session,
         )
 
     def run(self) -> None | int:
+        return asyncio.run(self._arun())
+
+    async def _arun(self) -> None | int:
         verbosity_level = max(
             logging.DEBUG,
             logging.WARNING - self.args.verbosity * 10,
@@ -294,10 +257,14 @@ class HHApplicantTool(MegaTool):
 
         utils.setup_terminal()
 
+        # Async-инициализация БД и storage (нельзя в cached_property)
+        self._aconn = await aconnect()
+        self.storage = StorageFacade(self._aconn)
+
         try:
             if self.args.run:
                 try:
-                    return self.args.run(self)
+                    return await self.args.run(self)
                 except KeyboardInterrupt:
                     logger.warning("Выполнение прервано пользователем!")
                 except api.errors.CaptchaRequired as ex:
@@ -323,10 +290,17 @@ class HHApplicantTool(MegaTool):
             return 2
         finally:
             try:
-                self._check_system()
+                await self._check_system()
             except Exception:
                 pass
-                # raise
+            try:
+                await self.api_client.aclose()
+            except Exception:
+                pass
+            try:
+                await self._aconn.close()
+            except Exception:
+                pass
 
     def _parse_args(self, argv) -> None:
         self._parser = self._create_parser()

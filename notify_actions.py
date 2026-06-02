@@ -1,28 +1,22 @@
 """
-Сканирует диалоги с работодателями на hh.ru, извлекает "дела" (действия,
-которые требуются от кандидата: тест, интервью, анкета, написать в ТГ, и т.п.)
-и шлёт НОВЫЕ в Telegram + пишет в config/action_items.md.
+Сканирует диалоги с работодателями на hh.ru, извлекает "дела" (тест, интервью,
+анкета, написать в ТГ, и т.п.), шлёт НОВЫЕ в Telegram + пишет в PG (action_items).
+Состояние (config/seen/action_items) — в Postgres (схема из HH_DB_SCHEMA).
 
 Запуск:  python notify_actions.py [--dry]
-  --dry  — только показать, ничего не слать и не сохранять в "seen".
-
-Никаких сообщений работодателям НЕ отправляет (только GET по hh API).
 """
-import sys
-import json
-import time
+import asyncio
 import datetime as dt
+import sys
 
-import requests
+import httpx
 
+from hh_applicant_tool.ai import ChatOpenAI
 from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
-from hh_applicant_tool.ai import ChatOpenAI
+from hh_applicant_tool.storage import pgconn
 
 DRY = "--dry" in sys.argv
-CFG = "/app/config/config.json"
-SEEN_PATH = "/app/config/actions_seen.json"
-MD_PATH = "/app/config/action_items.md"
 
 SYS = (
     "Ты анализируешь ПОСЛЕДНЕЕ сообщение работодателя в чате на hh.ru. "
@@ -40,22 +34,22 @@ SYS = (
 )
 
 
-def tg_send(token, chat_id, text):
-    for i in range(0, len(text), 3800):
-        chunk = text[i:i + 3800]
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True},
-            timeout=25,
-        )
-        if not r.ok:
-            print("TG error:", r.status_code, r.text[:200])
-        time.sleep(0.5)
+async def tg_send(token, chat_id, text):
+    async with httpx.AsyncClient(timeout=25) as client:
+        for i in range(0, len(text), 3800):
+            chunk = text[i:i + 3800]
+            r = await client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data={"chat_id": chat_id, "text": chunk,
+                      "disable_web_page_preview": True},
+            )
+            if r.status_code != 200:
+                print("TG error:", r.status_code, r.text[:200])
+            await asyncio.sleep(0.5)
 
 
-def main():
-    with open(CFG, encoding="utf-8") as f:
-        cfg = json.load(f)
+async def main():
+    cfg = pgconn.app_config()
     tok = cfg["token"]
     oa = cfg["openai"]
     tg = cfg.get("telegram") or {}
@@ -72,61 +66,66 @@ def main():
         system_prompt=SYS, temperature=0.2, max_completion_tokens=160,
     )
 
-    try:
-        with open(SEEN_PATH, encoding="utf-8") as f:
-            seen = set(json.load(f))
-    except Exception:
-        seen = set()
-
+    seen = pgconn.seen_keys("actions")
+    fresh_seen = []
     new_items = []
     page = 0
     scanned = 0
-    while True:
-        r = api.get("/negotiations", page=page, per_page=100, status="active")
-        items = r.get("items", [])
-        if not items:
-            break
-        for n in items:
-            if n.get("state", {}).get("id") == "discard":
-                continue
-            nid = n["id"]
-            v = n.get("vacancy") or {}
-            try:
-                m = api.get(f"/negotiations/{nid}/messages", page=0)
-            except Exception:
-                continue
-            msgs = [x for x in (m.get("items") or []) if x.get("text")]
-            # последнее сообщение ИМЕННО от работодателя (не зависит от того,
-            # ответил ли уже бот после него)
-            emp = [x for x in msgs if x["author"]["participant_type"] == "employer"]
-            if not emp:
-                continue
-            last = emp[-1]
-            key = f"{nid}:{last.get('id')}"
-            if key in seen:
-                continue
-            scanned += 1
-            q = f"Вакансия: {v.get('name','')}\nСообщение работодателя:\n{last['text']}"
-            try:
-                ans = chat.send_message(q).strip()
-            except Exception as e:
-                print("LLM error:", repr(e)[:120])
-                continue
-            seen.add(key)  # помечаем рассмотренным в любом случае
-            if ans.upper().startswith("НЕТ") or len(ans) < 3:
-                continue
-            chat_id = n.get("chat_id") or nid  # ссылка на чат использует chat_id, а не id отклика
-            new_items.append({
-                "vacancy": v.get("name", ""),
-                "chat_url": f"https://hh.ru/chat/{chat_id}",
-                "vacancy_url": v.get("alternate_url", ""),
-                "action": ans,
-                "nid": nid,
-                "ts": dt.datetime.now().isoformat(timespec="seconds"),
-            })
-        if page + 1 >= r.get("pages", 0):
-            break
-        page += 1
+    try:
+        while True:
+            r = await api.get(
+                "/negotiations", page=page, per_page=100, status="active"
+            )
+            items = r.get("items", [])
+            if not items:
+                break
+            for n in items:
+                if n.get("state", {}).get("id") == "discard":
+                    continue
+                nid = n["id"]
+                v = n.get("vacancy") or {}
+                try:
+                    m = await api.get(f"/negotiations/{nid}/messages", page=0)
+                except Exception:
+                    continue
+                msgs = [x for x in (m.get("items") or []) if x.get("text")]
+                emp = [
+                    x for x in msgs
+                    if x["author"]["participant_type"] == "employer"
+                ]
+                if not emp:
+                    continue
+                last = emp[-1]
+                key = f"{nid}:{last.get('id')}"
+                if key in seen:
+                    continue
+                scanned += 1
+                q = (
+                    f"Вакансия: {v.get('name','')}\n"
+                    f"Сообщение работодателя:\n{last['text']}"
+                )
+                try:
+                    ans = (await chat.send_message(q)).strip()
+                except Exception as e:
+                    print("LLM error:", repr(e)[:120])
+                    continue
+                fresh_seen.append(key)
+                if ans.upper().startswith("НЕТ") or len(ans) < 3:
+                    continue
+                chat_id = n.get("chat_id") or nid
+                new_items.append({
+                    "vacancy": v.get("name", ""),
+                    "chat_url": f"https://hh.ru/chat/{chat_id}",
+                    "vacancy_url": v.get("alternate_url", ""),
+                    "action": ans,
+                    "nid": nid,
+                    "chat_id": chat_id,
+                })
+            if page + 1 >= r.get("pages", 0):
+                break
+            page += 1
+    finally:
+        await api.aclose()
 
     print(f"scanned new employer messages: {scanned} | actions found: {len(new_items)}")
     for it in new_items:
@@ -136,20 +135,13 @@ def main():
         print("DRY — ничего не отправлено и не сохранено.")
         return
     if not new_items:
+        if fresh_seen:
+            pgconn.add_seen("actions", fresh_seen)
         print("Новых дел нет.")
         return
 
-    # файл (человекочитаемый)
-    with open(MD_PATH, "a", encoding="utf-8") as f:
-        f.write(f"\n## Дела на {dt.datetime.now():%Y-%m-%d %H:%M}\n")
-        for it in new_items:
-            f.write(
-                f"- [ ] **{it['vacancy']}** — {it['action']}  \n"
-                f"  💬 диалог: {it['chat_url']}  \n"
-                f"  📄 вакансия: {it['vacancy_url']}\n"
-            )
+    pgconn.add_action_items(new_items)
 
-    # telegram
     if tg.get("token") and tg.get("chat_id"):
         lines = [f"📋 Новые дела из диалогов hh ({len(new_items)}):", ""]
         for i, it in enumerate(new_items, 1):
@@ -158,14 +150,13 @@ def main():
                 f"   → {it['action']}\n"
                 f"   💬 диалог: {it['chat_url']}"
             )
-        tg_send(tg["token"], tg["chat_id"], "\n\n".join(lines))
+        await tg_send(tg["token"], tg["chat_id"], "\n\n".join(lines))
         print("Отправлено в Telegram.")
     else:
-        print("Telegram не настроен — только файл.")
+        print("Telegram не настроен.")
 
-    with open(SEEN_PATH, "w", encoding="utf-8") as f:
-        json.dump(sorted(seen), f)
+    pgconn.add_seen("actions", fresh_seen)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

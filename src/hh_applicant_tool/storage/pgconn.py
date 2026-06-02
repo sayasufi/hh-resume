@@ -114,3 +114,82 @@ async def aconnect(ensure: bool = True) -> psycopg.AsyncConnection:
             await cur.execute(TABLES_DDL)
     await conn.commit()
     return conn
+
+
+# --- Sync-хелперы для standalone-скриптов (apply_tests, notify_actions) ---
+
+def app_config() -> dict:
+    """Весь app_config (token/openai/telegram/preferences/...) как dict."""
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT key, value FROM app_config")
+            return {k: v for k, v in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def get_setting(key: str, default=None):
+    """JSON-декодированное значение из settings (как хранит SettingModel)."""
+    import json as _json
+
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM settings WHERE key = %s", (key,))
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return default
+    try:
+        return _json.loads(row[0])
+    except (ValueError, TypeError):
+        return row[0]
+
+
+def seen_keys(kind: str) -> set:
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT key FROM seen_keys WHERE kind = %s", (kind,))
+            return {r[0] for r in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def add_seen(kind: str, keys) -> None:
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            for key in keys:
+                cur.execute(
+                    "INSERT INTO seen_keys(kind, key) VALUES (%s, %s) "
+                    "ON CONFLICT DO NOTHING",
+                    (kind, str(key)),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def add_action_items(items: list[dict]) -> None:
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            for it in items:
+                cur.execute(
+                    "INSERT INTO action_items(nid, chat_id, vacancy, action, "
+                    "chat_url, vacancy_url) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (
+                        it.get("nid"),
+                        it.get("chat_id"),
+                        it.get("vacancy"),
+                        it.get("action"),
+                        it.get("chat_url"),
+                        it.get("vacancy_url"),
+                    ),
+                )
+        conn.commit()
+    finally:
+        conn.close()

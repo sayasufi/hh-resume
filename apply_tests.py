@@ -7,22 +7,18 @@
 import os
 import re
 import sys
-import json
-import sqlite3
 import asyncio
 
-import requests
 from playwright.async_api import async_playwright
 from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.ai import ChatOpenAI
+from hh_applicant_tool.storage import pgconn
 
 APPLY = "--apply" in sys.argv
 LIMIT = int(sys.argv[sys.argv.index("--limit") + 1]) if "--limit" in sys.argv else 1
 
-CFG = "/app/config/config.json"
 STATE = "/app/config/hh_web_state.json"
-SEEN = "/app/config/tests_seen.json"
 RESUME_ID = "738fdea6ff0e0431e70039ed1f5072744e7848"
 
 SYS_BASE = (
@@ -61,18 +57,22 @@ EXTRACT_JS = r"""
 
 
 def creds():
-    c = sqlite3.connect("/app/config/data")
-    g = lambda k: (lambda r: json.loads(r[0]) if r else None)(
-        c.execute("SELECT value FROM settings WHERE key=?", (k,)).fetchone())
-    return g("auth.username"), g("auth.password")
+    return (
+        pgconn.get_setting("auth.username"),
+        pgconn.get_setting("auth.password"),
+    )
 
 
 def tg_alert(cfg, text):
+    import httpx
+
     t = cfg.get("telegram") or {}
     if t.get("token") and t.get("chat_id"):
         try:
-            requests.post(f"https://api.telegram.org/bot{t['token']}/sendMessage",
-                          data={"chat_id": t["chat_id"], "text": text}, timeout=20)
+            httpx.post(
+                f"https://api.telegram.org/bot{t['token']}/sendMessage",
+                data={"chat_id": t["chat_id"], "text": text}, timeout=20,
+            )
         except Exception:
             pass
 
@@ -117,7 +117,9 @@ async def fill_task(page, task, llm, vname):
     """Вернёт (ok, question, answer_repr)."""
     q = task["question"] or "Ответьте на вопрос"
     if task["type"] == "text":
-        a = llm.send_message(f"Вакансия: {vname}\nВопрос: {q}\nОтветь кратко.").strip()
+        a = (await llm.send_message(
+            f"Вакансия: {vname}\nВопрос: {q}\nОтветь кратко."
+        )).strip()
         if bad_answer(a):
             return False, q, a[:80]
         sel = f'textarea[name="{task["textarea"]}"]'
@@ -134,10 +136,10 @@ async def fill_task(page, task, llm, vname):
     if not opts:
         return False, q, "(нет вариантов)"
     listing = "\n".join(f"{i + 1}) {o['label']}" for i, o in enumerate(opts))
-    r = llm.send_message(
+    r = (await llm.send_message(
         f"Вакансия: {vname}\nВопрос: {q}\nВарианты:\n{listing}\n"
         "Выбери ОДИН правдивый вариант (исходя из резюме). Ответь ТОЛЬКО номером варианта."
-    ).strip()
+    )).strip()
     m = re.search(r"\d+", r)
     if not m:
         return False, q, r[:60]
@@ -153,7 +155,7 @@ async def fill_task(page, task, llm, vname):
 
 
 async def main():
-    cfg = json.load(open(CFG, encoding="utf-8"))
+    cfg = pgconn.app_config()
     user, pw = creds()
     tok = cfg["token"]; oa = cfg["openai"]
     api = ApiClient(access_token=tok["access_token"], refresh_token=tok["refresh_token"],
@@ -172,12 +174,9 @@ async def main():
     llm = ChatOpenAI(token=oa["token"], model=oa.get("model"), completion_endpoint=oa.get("completion_endpoint"),
                      system_prompt=sysp, temperature=0.3, max_completion_tokens=300)
 
-    try:
-        seen = set(json.load(open(SEEN)))
-    except Exception:
-        seen = set()
+    seen = pgconn.seen_keys("tests")
 
-    r = api.get(f"/resumes/{RESUME_ID}/similar_vacancies", page=0, per_page=80)
+    r = await api.get(f"/resumes/{RESUME_ID}/similar_vacancies", page=0, per_page=80)
     tvs = [v for v in r.get("items", []) if v.get("has_test") and str(v["id"]) not in seen]
     print(f"test vacancies (new): {len(tvs)}")
     if not tvs:
@@ -201,7 +200,7 @@ async def main():
 
         def save_seen():
             if APPLY:
-                json.dump(sorted(seen), open(SEEN, "w"))
+                pgconn.add_seen("tests", seen)
 
         done = 0
         for v in tvs:

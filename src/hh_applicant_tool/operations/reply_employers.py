@@ -134,18 +134,13 @@ class Operation(BaseOperation):
         # чтобы AI отвечал по фактам, а не выдумывал.
         system_prompt = args.first_prompt
         candidate_name = ""
-        resume_path = self.tool.config_path / "resume.txt"
-        if resume_path.exists():
-            try:
-                resume_text = resume_path.read_text(encoding="utf-8").strip()
-                if resume_text:
-                    candidate_name = resume_text.split("\n", 1)[0].strip()
-                    system_prompt += (
-                        "\n\nРезюме кандидата (опирайся только на эти факты):\n"
-                        + resume_text
-                    )
-            except Exception as ex:
-                logger.warning(f"Не удалось прочитать резюме: {ex}")
+        resume_text = (self.tool.config.get("resume_text") or "").strip()
+        if resume_text:
+            candidate_name = resume_text.split("\n", 1)[0].strip()
+            system_prompt += (
+                "\n\nРезюме кандидата (опирайся только на эти факты):\n"
+                + resume_text
+            )
         salary = (self.tool.config.get("preferences") or {}).get("salary")
         if salary:
             system_prompt += (

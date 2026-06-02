@@ -18,6 +18,7 @@ from hh_applicant_tool.storage.pgconn import TABLES_DDL
 CONFIG_DIR = os.environ.get("MIGRATE_CONFIG_DIR", "/app/config")
 DSN = os.environ["HH_DB_DSN"]
 SCHEMA = os.environ["HH_DB_SCHEMA"]
+USER_NAME = os.environ.get("MIGRATE_USER_NAME", SCHEMA)
 
 
 def main():
@@ -26,13 +27,38 @@ def main():
         cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{SCHEMA}"')
         cur.execute(f'SET search_path TO "{SCHEMA}"')
         cur.execute(TABLES_DDL)
+        # реестр юзеров (один контейнер на всех)
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS public.app_users ("
+            "id serial PRIMARY KEY, name text UNIQUE, schema text UNIQUE NOT NULL, "
+            "active boolean DEFAULT true, created_at timestamptz DEFAULT now())"
+        )
+        cur.execute(
+            "INSERT INTO public.app_users(name, schema) VALUES (%s, %s) "
+            "ON CONFLICT(name) DO UPDATE SET schema = excluded.schema, active = true",
+            (USER_NAME, SCHEMA),
+        )
     conn.commit()
 
-    # config.json -> app_config
+    # config.json -> app_config (+ resume_text из файла, + web_state из файла)
     n_cfg = 0
     cfg_path = os.path.join(CONFIG_DIR, "config.json")
+    extra = {}
+    rp = os.path.join(CONFIG_DIR, "resume.txt")
+    if os.path.exists(rp):
+        extra["resume_text"] = open(rp, encoding="utf-8").read()
+    wp = os.path.join(CONFIG_DIR, "hh_web_state.json")
+    if os.path.exists(wp):
+        try:
+            extra["web_state"] = json.load(open(wp, encoding="utf-8"))
+        except Exception:
+            pass
     if os.path.exists(cfg_path):
         cfg = json.load(open(cfg_path, encoding="utf-8"))
+    else:
+        cfg = {}
+    cfg.update(extra)
+    if cfg:
         with conn.cursor() as cur:
             cur.execute(f'SET search_path TO "{SCHEMA}"')
             for k, v in cfg.items():

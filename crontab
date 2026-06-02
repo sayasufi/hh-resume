@@ -2,34 +2,26 @@
 PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 SHELL=/bin/bash
 
+# Мультиюзер: ОДИН контейнер обслуживает всех активных юзеров из public.app_users.
+# run_all.py проходит по юзерам и запускает команду для каждого со своей PG-схемой.
+
 # При старте системы/контейнера
 @reboot /bin/bash /app/startup.sh >> /var/log/cron.log 2>&1
 
-# Подъем резюме (раз в 4 часа)
-# Символ процента в кронтабе нужно экранировать
-# sleep с рандомной задержкой от 1 до 5 минут нужен во-первых чтобы токен обновиться успел, а во
-# вторых, чтобы антиспам не сработал
-0 */5 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python -m hh_applicant_tool update-resumes >> /var/log/cron.log 2>&1
+# Подъём резюме (раз в 5 часов)
+0 */5 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool update-resumes >> /var/log/cron.log 2>&1
 
-# Рассылаем отклики (настройки берутся из базы данных: resume_id и use_ai)
-0 8-21 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python -m hh_applicant_tool apply-similar >> /var/log/cron.log 2>&1
+# Рассылка откликов (настройки из БД: resume_id и use_ai)
+0 8-21 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool apply-similar >> /var/log/cron.log 2>&1
 
-# Уведомления о "делах" из диалогов (тест/анкета/интервью/написать в ТГ) -> Telegram-группа.
-# Запускаем РАНЬШЕ авто-ответов, чтобы выцепить действие из сообщения работодателя.
-20 8-21 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python /app/notify_actions.py >> /var/log/cron.log 2>&1
+# Уведомления о "делах" из диалогов -> Telegram (раньше авто-ответов)
+20 8-21 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/notify_actions.py >> /var/log/cron.log 2>&1
 
-# Авто-ответы в диалогах с работодателями (AI через локальную LLM, заземление на резюме)
-30 8-21 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python -m hh_applicant_tool reply-employers --use-ai >> /var/log/cron.log 2>&1
+# Авто-ответы в диалогах (AI через локальную LLM)
+30 8-21 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool reply-employers --use-ai >> /var/log/cron.log 2>&1
 
-# Авто-отклик на вакансии с ТЕСТОМ через браузер (текст/radio/checkbox/микс). Каждые 3ч днём, до 10 за прогон.
-# (Дневного лимита у тест-откликов нет — только этот потолок на один запуск.)
-0 9-21/3 * * * /bin/bash -c 'sleep $((RANDOM \% 90))' && /usr/local/bin/python /app/apply_tests.py --apply --limit 10 >> /var/log/cron.log 2>&1
+# Авто-отклик на вакансии с ТЕСТОМ через браузер. Каждые 3ч днём, до 10 за прогон.
+0 9-21/3 * * * /bin/bash -c 'sleep $((RANDOM \% 90))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/apply_tests.py --apply --limit 10 >> /var/log/cron.log 2>&1
 
-# Тест: каждые 5 минут (задержка до 1 минуты, чтобы не накладывались)
-#*/5 * * * * /bin/bash -c 'sleep $((1 + RANDOM \% 59))' && /usr/local/bin/python -m hh_applicant_tool apply-similar >> /var/log/cron.log 2>&1
-
-# Пытаемся обновить токен каждую минуту. В этом нет необходимости, можно закомментировать, так как
-# токен обновляется автоматически при любом запросе
-*/1 * * * * /usr/local/bin/python -m hh_applicant_tool refresh-token
-
-#*/1 * * * * echo "Cron is alive at $(date)" >> /var/log/cron.log 2>&1
+# Обновление токена каждую минуту (для всех юзеров)
+*/1 * * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool refresh-token >> /dev/null 2>&1

@@ -31,9 +31,10 @@ services:
     environment:
       # Это не трогаем
       - CONFIG_DIR=/app/config
-      # Postgres (схема-на-юзера; для Егора — u_egor)
+      # Postgres. Схема выбирается run_all.py per-юзер из public.app_users.
+      # HH_DB_SCHEMA по умолчанию (для прямых ручных команд) = public.
       - HH_DB_DSN=postgresql://hh:hh_local_pw@db:5432/hh
-      - HH_DB_SCHEMA=u_egor
+      - HH_DB_SCHEMA=public
       # Смените или закомментируйте при проблемах
       - TERM=${TERM}
       # Если время на сервере отличается

@@ -129,6 +129,67 @@ def app_config() -> dict:
         conn.close()
 
 
+def set_app_config(key: str, value) -> None:
+    """Записать/обновить ключ в app_config (jsonb) текущей схемы."""
+    import json as _json
+
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO app_config(key, value) VALUES (%s, %s::jsonb) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = now()",
+                (key, _json.dumps(value, ensure_ascii=False)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_users() -> list[tuple[str, str]]:
+    """Активные юзеры из public.app_users -> [(name, schema), ...].
+    Таблица создаётся при отсутствии (идемпотентно)."""
+    conn = psycopg.connect(get_dsn())
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS public.app_users ("
+                "id serial PRIMARY KEY, name text UNIQUE, "
+                "schema text UNIQUE NOT NULL, active boolean DEFAULT true, "
+                "created_at timestamptz DEFAULT now())"
+            )
+            conn.commit()
+            cur.execute(
+                "SELECT name, schema FROM public.app_users "
+                "WHERE active ORDER BY id"
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def register_user(name: str, schema: str) -> None:
+    conn = psycopg.connect(get_dsn())
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS public.app_users ("
+                "id serial PRIMARY KEY, name text UNIQUE, "
+                "schema text UNIQUE NOT NULL, active boolean DEFAULT true, "
+                "created_at timestamptz DEFAULT now())"
+            )
+            cur.execute(
+                "INSERT INTO public.app_users(name, schema) VALUES (%s, %s) "
+                "ON CONFLICT(name) DO UPDATE SET schema = excluded.schema, "
+                "active = true",
+                (name, schema),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_setting(key: str, default=None):
     """JSON-декодированное значение из settings (как хранит SettingModel)."""
     import json as _json

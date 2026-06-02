@@ -160,11 +160,7 @@ async def main():
     tok = cfg["token"]; oa = cfg["openai"]
     api = ApiClient(access_token=tok["access_token"], refresh_token=tok["refresh_token"],
                     access_expires_at=tok["access_expires_at"], user_agent=generate_android_useragent())
-    resume = ""
-    try:
-        resume = open("/app/config/resume.txt", encoding="utf-8").read().strip()
-    except Exception:
-        pass
+    resume = (cfg.get("resume_text") or "").strip()
     salary = (cfg.get("preferences") or {}).get("salary")
     sysp = SYS_BASE
     if salary:
@@ -185,7 +181,7 @@ async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         ctx = await browser.new_context(
-            storage_state=STATE if os.path.exists(STATE) else None,
+            storage_state=cfg.get("web_state") or None,
             viewport={"width": 1280, "height": 900}, locale="ru-RU",
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
         page = await ctx.new_page()
@@ -196,7 +192,7 @@ async def main():
             if not await web_login(page, user, pw):
                 tg_alert(cfg, "⚠️ apply_tests: не удалось залогиниться в веб hh (возможно OTP).")
                 await browser.close(); return
-            await ctx.storage_state(path=STATE)
+            pgconn.set_app_config("web_state", await ctx.storage_state())
 
         def save_seen():
             if APPLY:

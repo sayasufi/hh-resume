@@ -470,15 +470,13 @@ class Operation(BaseOperation):
             logger.warning(f"Не удалось получить полное резюме через API: {ex}. Используется fallback из файла.")
             full_resume = {}
         
-        # Пытаемся загрузить резюме из файла как fallback
-        resume_file_path = self.tool.config_path / "resume.txt"
-        resume_file_content = None
-        if resume_file_path.exists():
-            try:
-                resume_file_content = resume_file_path.read_text(encoding="utf-8")
-                logger.debug(f"Загружено резюме из файла: {resume_file_path} ({len(resume_file_content)} символов)")
-            except Exception as ex:
-                logger.warning(f"Не удалось прочитать файл резюме {resume_file_path}: {ex}")
+        # Резюме-текст из PG-конфига (раньше был файл resume.txt) как доп. контекст
+        resume_file_content = self.tool.config.get("resume_text") or None
+        if resume_file_content:
+            logger.debug(
+                "Загружено резюме из PG (%d символов)",
+                len(resume_file_content),
+            )
         
         placeholders = {
             "first_name": user.get("first_name") or "",

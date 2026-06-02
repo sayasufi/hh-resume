@@ -117,11 +117,11 @@ class Operation(BaseOperation):
             default="Сформулируй ответ на ПОСЛЕДНЕЕ сообщение работодателя в этой переписке.",
         )
 
-    def run(self, tool: HHApplicantTool) -> None:
+    async def run(self, tool: HHApplicantTool) -> None:
         args: Namespace = tool.args
         self.tool = tool
         self.api_client = tool.api_client
-        self.resume_id = tool.first_resume_id()
+        self.resume_id = await tool.first_resume_id()
         self.reply_message = args.reply_message or tool.config.get(
             "reply_message"
         )
@@ -168,12 +168,12 @@ class Operation(BaseOperation):
         self.period = args.period
 
         logger.debug(f"{self.reply_message = }")
-        self.reply_employers()
+        await self.reply_employers()
 
-    def reply_employers(self):
-        blacklist = set(self.tool.get_blacklisted())
-        me: datatypes.User = self.tool.get_me()
-        resumes = self.tool.get_resumes()
+    async def reply_employers(self):
+        blacklist = set(await self.tool.get_blacklisted())
+        me: datatypes.User = await self.tool.get_me()
+        resumes = await self.tool.get_resumes()
         resumes = (
             list(filter(lambda x: x["id"] == self.resume_id, resumes))
             if self.resume_id
@@ -184,9 +184,11 @@ class Operation(BaseOperation):
                 lambda resume: resume["status"]["id"] == "published", resumes
             )
         )
-        self._reply_chats(user=me, resumes=resumes, blacklist=blacklist)
+        await self._reply_chats(
+            user=me, resumes=resumes, blacklist=blacklist
+        )
 
-    def _reply_chats(
+    async def _reply_chats(
         self,
         user: datatypes.User,
         resumes: list[datatypes.Resume],
@@ -201,7 +203,7 @@ class Operation(BaseOperation):
             "phone": user.get("phone") or "",
         }
 
-        for negotiation in self.tool.get_negotiations():
+        async for negotiation in self.tool.get_negotiations():
             try:
                 # try:
                 #     self.tool.storage.negotiations.save(negotiation)
@@ -258,7 +260,7 @@ class Operation(BaseOperation):
                 while True:
                     messages_res: datatypes.PaginatedItems[
                         datatypes.Message
-                    ] = self.api_client.get(
+                    ] = await self.api_client.get(
                         f"/negotiations/{nid}/messages", page=page
                     )
                     if not messages_res["items"]:
@@ -311,7 +313,7 @@ class Operation(BaseOperation):
                                 + "\n".join(message_history[-10:])
                                 + f"\n\nИнструкция: {self.pre_prompt}"
                             )
-                            send_message = self.openai_chat.send_message(
+                            send_message = await self.openai_chat.send_message(
                                 ai_query
                             )
                             logger.debug(f"AI message: {send_message}")
@@ -356,7 +358,7 @@ class Operation(BaseOperation):
                             continue
 
                         if send_message.startswith("/ban"):
-                            self.api_client.put(
+                            await self.api_client.put(
                                 f"/employers/blacklisted/{employer['id']}"
                             )
                             blacklist.add(employer["id"])
@@ -367,7 +369,7 @@ class Operation(BaseOperation):
                             continue
                         elif send_message.startswith("/cancel"):
                             _, decline_msg = send_message.split("/cancel", 1)
-                            self.api_client.delete(
+                            await self.api_client.delete(
                                 f"/negotiations/active/{nid}",
                                 with_decline_message=decline_msg.strip(),
                             )
@@ -383,7 +385,7 @@ class Operation(BaseOperation):
                         )
                         continue
 
-                    self.api_client.post(
+                    await self.api_client.post(
                         f"/negotiations/{nid}/messages",
                         message=send_message,
                         delay=random.uniform(1, 3),

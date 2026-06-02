@@ -6,7 +6,7 @@ import random
 import re
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING, AsyncIterator, Iterator
 
 from ..ai.base import AIError
 from ..api import BadResponse, Redirect, datatypes
@@ -269,7 +269,7 @@ class Operation(BaseOperation):
             help="Исключить вакансии, если название или snippet содержит любую из подстрок (через запятую, например, junior, bitrix, дружный коллектив). Это принудительный фильтр для результатов поиска",
         )
 
-    def run(
+    async def run(
         self,
         tool: HHApplicantTool,
     ) -> None:
@@ -298,9 +298,9 @@ class Operation(BaseOperation):
         
         # Загружаем сохраненные настройки, если аргументы не указаны
         if not args.resume_id:
-            args.resume_id = tool.storage.settings.get_value("apply.resume_id") or None
+            args.resume_id = await tool.storage.settings.get_value("apply.resume_id") or None
         if args.use_ai is None:
-            use_ai_value = tool.storage.settings.get_value("apply.use_ai")
+            use_ai_value = await tool.storage.settings.get_value("apply.use_ai")
             if use_ai_value is not None:
                 # Может быть bool или str
                 if isinstance(use_ai_value, bool):
@@ -308,7 +308,7 @@ class Operation(BaseOperation):
                 else:
                     args.use_ai = str(use_ai_value).lower() in ("true", "1", "yes")
         if not args.force_message:
-            force_value = tool.storage.settings.get_value("apply.force_message")
+            force_value = await tool.storage.settings.get_value("apply.force_message")
             if force_value is not None:
                 if isinstance(force_value, bool):
                     args.force_message = force_value
@@ -357,19 +357,19 @@ class Operation(BaseOperation):
             tool.get_openai_chat(args.first_prompt) if args.use_ai else None
         )
         self.max_applications_per_day = 100
-        self._init_daily_counter()
-        self._apply_similar()
+        await self._init_daily_counter()
+        await self._apply_similar()
 
-    def _init_daily_counter(self) -> None:
+    async def _init_daily_counter(self) -> None:
         """Инициализирует счетчик откликов за день."""
         today = date.today().isoformat()
-        pause_until = self.tool.storage.settings.get_value(
+        pause_until = await self.tool.storage.settings.get_value(
             "_applications_pause_until", ""
         )
         if pause_until:
             # Если еще действует пауза - останавливаем рассылку
             if pause_until > today:
-                count_str = self.tool.storage.settings.get_value("_applications_count", "0")
+                count_str = await self.tool.storage.settings.get_value("_applications_count", "0")
                 self.applications_count = int(count_str) if count_str.isdigit() else 0
                 self.daily_limit_reached = True
                 logger.info(
@@ -378,32 +378,32 @@ class Operation(BaseOperation):
                 )
                 return
             # Пауза истекла - очищаем флаг
-            self.tool.storage.settings.set_value("_applications_pause_until", "")
-        last_date = self.tool.storage.settings.get_value("_applications_date", "")
-        
+            await self.tool.storage.settings.set_value("_applications_pause_until", "")
+        last_date = await self.tool.storage.settings.get_value("_applications_date", "")
+
         if last_date != today:
             # Новая дата - сбрасываем счетчик
-            self.tool.storage.settings.set_value("_applications_date", today)
-            self.tool.storage.settings.set_value("_applications_count", "0")
+            await self.tool.storage.settings.set_value("_applications_date", today)
+            await self.tool.storage.settings.set_value("_applications_count", "0")
             self.applications_count = 0
         else:
             # Та же дата - загружаем счетчик из базы
-            count_str = self.tool.storage.settings.get_value("_applications_count", "0")
+            count_str = await self.tool.storage.settings.get_value("_applications_count", "0")
             self.applications_count = int(count_str) if count_str.isdigit() else 0
 
         self.daily_limit_reached = (
             self.applications_count >= self.max_applications_per_day
         )
 
-    def _pause_until_next_day(self) -> None:
+    async def _pause_until_next_day(self) -> None:
         pause_until = (date.today() + timedelta(days=1)).isoformat()
-        self.tool.storage.settings.set_value(
+        await self.tool.storage.settings.set_value(
             "_applications_pause_until", pause_until
         )
         self.daily_limit_reached = True
         logger.info("Рассылка остановлена до %s из-за лимита откликов.", pause_until)
 
-    def _apply_similar(self) -> None:
+    async def _apply_similar(self) -> None:
         if self.daily_limit_reached:
             logger.info(
                 "Лимит откликов за день достигнут (%s/%s). "
@@ -417,9 +417,9 @@ class Operation(BaseOperation):
             )
             return
 
-        resumes: list[datatypes.Resume] = self.tool.get_resumes()
+        resumes: list[datatypes.Resume] = await self.tool.get_resumes()
         try:
-            self.tool.storage.resumes.save_batch(resumes)
+            await self.tool.storage.resumes.save_batch(resumes)
         except RepositoryError as ex:
             logger.exception(ex)
         resumes = (
@@ -435,11 +435,11 @@ class Operation(BaseOperation):
             logger.warning("У вас нет опубликованных резюме")
             return
 
-        me: datatypes.User = self.tool.get_me()
+        me: datatypes.User = await self.tool.get_me()
         seen_employers = set()
 
         for resume in resumes:
-            self._apply_resume(
+            await self._apply_resume(
                 resume=resume,
                 user=me,
                 seen_employers=seen_employers,
@@ -454,7 +454,7 @@ class Operation(BaseOperation):
 
         print("📝 Отклики на вакансии разосланы!")
 
-    def _apply_resume(
+    async def _apply_resume(
         self,
         resume: datatypes.Resume,
         user: datatypes.User,
@@ -465,7 +465,7 @@ class Operation(BaseOperation):
 
         # Получаем полное резюме с опытом, навыками и образованием
         try:
-            full_resume = self.api_client.get(f"/resumes/{resume['id']}")
+            full_resume = await self.api_client.get(f"/resumes/{resume['id']}")
         except Exception as ex:
             logger.warning(f"Не удалось получить полное резюме через API: {ex}. Используется fallback из файла.")
             full_resume = {}
@@ -495,8 +495,8 @@ class Operation(BaseOperation):
 
         do_apply = True
 
-        for vacancy in self._get_similar_vacancies(resume_id=resume["id"]):
-            
+        async for vacancy in self._get_similar_vacancies(resume_id=resume["id"]):
+
             try:
                 employer = vacancy.get("employer", {})
                 
@@ -505,7 +505,7 @@ class Operation(BaseOperation):
                 vacancy_requirements = ""
                 vacancy_responsibilities = ""
                 try:
-                    full_vacancy = self.api_client.get(f"/vacancies/{vacancy['id']}")
+                    full_vacancy = await self.api_client.get(f"/vacancies/{vacancy['id']}")
                     if full_vacancy.get("description"):
                         # Очищаем HTML теги из описания
                         desc = full_vacancy["description"]
@@ -545,7 +545,7 @@ class Operation(BaseOperation):
                 storage = self.tool.storage
 
                 try:
-                    storage.vacancies.save(vacancy)
+                    await storage.vacancies.save(vacancy)
                 except RepositoryError as ex:
                     logger.debug(ex)
 
@@ -557,18 +557,18 @@ class Operation(BaseOperation):
 
                     try:
                         # logger.debug(vacancy)
-                        storage.vacancy_contacts.save(vacancy)
+                        await storage.vacancy_contacts.save(vacancy)
                     except RepositoryError as ex:
                         logger.exception(ex)
 
                     employer_id = employer.get("id")
                     if employer_id and employer_id not in seen_employers:
                         employer_profile: datatypes.Employer = (
-                            self.api_client.get(f"/employers/{employer_id}")
+                            await self.api_client.get(f"/employers/{employer_id}")
                         )
 
                         try:
-                            storage.employers.save(employer_profile)
+                            await storage.employers.save(employer_profile)
                         except RepositoryError as ex:
                             logger.exception(ex)
 
@@ -744,7 +744,7 @@ class Operation(BaseOperation):
                         logger.debug("Full name in prompt: %s", full_name)
                         logger.debug("prompt length: %d chars", len(msg))
                         try:
-                            msg = self.openai_chat.send_message(msg)
+                            msg = await self.openai_chat.send_message(msg)
                         except AIError as ex:
                             logger.warning(
                                 f"Ошибка при генерации письма через AI: {ex}. "
@@ -772,7 +772,7 @@ class Operation(BaseOperation):
                             len(params.get("message", "")),
                             params.get("message", "")[:100],
                         )
-                        res = self.api_client.post(
+                        res = await self.api_client.post(
                             "/negotiations",
                             params,
                             delay=random.uniform(10, 15),
@@ -780,7 +780,7 @@ class Operation(BaseOperation):
                         assert res == {}
                         self.applications_count += 1
                         # Сохраняем счетчик в базу данных
-                        self.tool.storage.settings.set_value("_applications_count", str(self.applications_count))
+                        await self.tool.storage.settings.set_value("_applications_count", str(self.applications_count))
                         logger.debug(
                             "Откликнулись на %s с резюме %s (отклик #%d за сегодня)",
                             vacancy["alternate_url"],
@@ -804,7 +804,7 @@ class Operation(BaseOperation):
                 logger.info("Достигли лимита на отклики для резюме: %s", resume["alternate_url"])
                 print("⚠️ Достигли лимита рассылки для резюме", resume["alternate_url"])
                 do_apply = False
-                self._pause_until_next_day()
+                await self._pause_until_next_day()
                 break
             except ApiError as ex:
                 logger.warning(ex)
@@ -880,13 +880,15 @@ class Operation(BaseOperation):
 
         return params
 
-    def _get_similar_vacancies(self, resume_id: str) -> Iterator[SearchVacancy]:
+    async def _get_similar_vacancies(
+        self, resume_id: str
+    ) -> AsyncIterator[SearchVacancy]:
         for page in range(self.total_pages):
             logger.debug(
                 f"Загружаем подходящие вакансии со страницы: {page + 1}"
             )
             params = self._get_search_params(page)
-            res: PaginatedItems[SearchVacancy] = self.api_client.get(
+            res: PaginatedItems[SearchVacancy] = await self.api_client.get(
                 f"/resumes/{resume_id}/similar_vacancies",
                 params,
             )
@@ -896,7 +898,8 @@ class Operation(BaseOperation):
             if not res["items"]:
                 return
 
-            yield from res["items"]
+            for item in res["items"]:
+                yield item
 
             if page >= res["pages"] - 1:
                 return

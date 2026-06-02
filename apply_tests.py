@@ -200,12 +200,20 @@ async def main():
         page = await ctx.new_page()
         await page.goto("https://hh.ru/applicant/resumes", timeout=40000, wait_until="domcontentloaded")
         await page.wait_for_timeout(1500)
-        if "login" in page.url.lower() or "account" in page.url.lower():
-            print("сессия невалидна -> логин")
+        # Логинимся, если нет сохранённой веб-сессии ИЛИ страница ушла на login/signup/account
+        need_login = (
+            not cfg.get("web_state")
+            or any(x in page.url.lower() for x in ("login", "signup", "account", "auth"))
+        )
+        if need_login:
+            print("веб-сессия отсутствует/невалидна -> логин")
             if not await web_login(page, user, pw):
-                tg_alert(cfg, "⚠️ apply_tests: не удалось залогиниться в веб hh (возможно OTP).")
+                tg_alert(cfg, "⚠️ apply_tests: не удалось залогиниться в веб hh (возможно капча/OTP).")
                 await browser.close(); return
             pgconn.set_app_config("web_state", await ctx.storage_state())
+            # после логина вернёмся на резюме, чтобы убедиться
+            await page.goto("https://hh.ru/applicant/resumes", timeout=40000, wait_until="domcontentloaded")
+            await page.wait_for_timeout(1000)
 
         def save_seen():
             if APPLY:

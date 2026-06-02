@@ -30,10 +30,10 @@ class Operation(BaseOperation):
     def setup_parser(self, parser: argparse.ArgumentParser) -> None:
         pass
 
-    def run(self, tool: HHApplicantTool) -> None:
-        resumes: PaginatedItems[datatypes.Resume] = tool.get_resumes()
+    async def run(self, tool: HHApplicantTool) -> None:
+        resumes: PaginatedItems[datatypes.Resume] = await tool.get_resumes()
         logger.debug(resumes)
-        tool.storage.resumes.save_batch(resumes)
+        await tool.storage.resumes.save_batch(resumes)
 
         t = PrettyTable(
             field_names=["ID", "Название", "Статус"], align="l", valign="t"

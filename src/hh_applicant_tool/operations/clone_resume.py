@@ -32,9 +32,9 @@ class Operation(BaseOperation):
             help="Необязательный идентификатор резюме. Если не указать, то будет клонировано дефолтное (первое)",
         )
 
-    def run(self, tool: HHApplicantTool) -> None:
-        resumes: list[datatypes.Resume] = tool.get_resumes()
-        tool.storage.resumes.save_batch(resumes)
+    async def run(self, tool: HHApplicantTool) -> None:
+        resumes: list[datatypes.Resume] = await tool.get_resumes()
+        await tool.storage.resumes.save_batch(resumes)
         args = tool.args
         api_client = tool.api_client
         resume = (
@@ -107,7 +107,9 @@ class Operation(BaseOperation):
                 # "vacancy_id": 1,
             }
 
-            result = api_client.post("/resume_profile", payload, as_json=True)
+            result = await api_client.post(
+                "/resume_profile", payload, as_json=True
+            )
             logger.debug(result)
         except ApiError as ex:
             logger.error(f"Произошла ошибка при клонировании резюме: {ex}")

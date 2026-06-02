@@ -101,14 +101,12 @@ class Operation(BaseOperation):
             help="Использовать sixel protocol для вывода капчи в терминал.",
         )
 
-    def run(self, tool: HHApplicantTool) -> None:
+    async def run(self, tool: HHApplicantTool) -> None:
         self._args = tool.args
         try:
-            asyncio.run(self._main(tool))
+            await self._main(tool)
         except (KeyboardInterrupt, asyncio.TimeoutError):
-            # _executor.shutdown(wait=False, cancel_futures=True)
             logger.warning("Что-то пошло не так")
-            # os._exit(1)
             return 1
 
     async def _main(self, tool: HHApplicantTool) -> None:
@@ -119,7 +117,7 @@ class Operation(BaseOperation):
         if self.is_automated:
             username = (
                 args.username
-                or storage.settings.get_value("auth.username")
+                or await storage.settings.get_value("auth.username")
                 or (await ainput("👤 Введите email или телефон: "))
             ).strip()
 
@@ -208,7 +206,7 @@ class Operation(BaseOperation):
                     await page.fill(self.SELECT_LOGIN_INPUT, username)
                     logger.debug("Логин введен")
 
-                    password = args.password or storage.settings.get_value(
+                    password = args.password or await storage.settings.get_value(
                         "auth.password"
                     )
                     if password:
@@ -225,23 +223,22 @@ class Operation(BaseOperation):
                 page.remove_listener("request", handle_request)
 
                 logger.debug("Код получен, пробуем получить токен...")
-                token = await asyncio.to_thread(
-                    api_client.oauth_client.authenticate,
-                    auth_code,
-                )
+                token = await api_client.oauth_client.authenticate(auth_code)
                 api_client.handle_access_token(token)
 
                 print("🔓 Авторизация прошла успешно!")
 
                 # Сохраняем логин и пароль
                 if self.is_automated:
-                    storage.settings.set_value("auth.username", username)
+                    await storage.settings.set_value("auth.username", username)
                     if args.password:
-                        storage.settings.set_value(
+                        await storage.settings.set_value(
                             "auth.password", args.password
                         )
 
-                storage.settings.set_value("auth.last_login", datetime.now())
+                await storage.settings.set_value(
+                    "auth.last_login", datetime.now()
+                )
 
                 # storage.settings.set_value(
                 #     "auth.access_token", token["access_token"]

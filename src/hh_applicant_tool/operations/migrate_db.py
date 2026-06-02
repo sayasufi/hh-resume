@@ -30,9 +30,9 @@ class Operation(BaseOperation):
     def setup_parser(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("name", nargs="?", help="Имя миграции")
 
-    def run(self, tool: HHApplicantTool) -> None:
+    async def run(self, tool: HHApplicantTool) -> None:
         def apply(name: str) -> None:
-            apply_migration(tool.db, name)
+            apply_migration(tool.storage.settings.conn, name)
             print(SUCKASS)
 
         try:

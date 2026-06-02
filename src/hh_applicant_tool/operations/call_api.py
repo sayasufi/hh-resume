@@ -43,7 +43,7 @@ class Operation(BaseOperation):
         # Добавляем аргумент для JSON тела
         parser.add_argument("-d", "--data", help="JSON строка тела запроса")
 
-    def run(self, tool: HHApplicantTool) -> None:
+    async def run(self, tool: HHApplicantTool) -> None:
         args = tool.args
         api_client = tool.api_client
 
@@ -67,7 +67,7 @@ class Operation(BaseOperation):
 
         try:
             # Передаем json_data как именованный аргумент json
-            result = api_client.request(
+            result = await api_client.request(
                 args.method,
                 args.endpoint,
                 params=params,

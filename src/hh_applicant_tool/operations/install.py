@@ -25,7 +25,7 @@ class Operation(BaseOperation):
     def setup_parser(self, parser: argparse.ArgumentParser) -> None:
         pass
 
-    def run(self, applicant_tool: HHApplicantTool) -> None:
+    async def run(self, applicant_tool: HHApplicantTool) -> None:
         orig_argv = sys.argv
         sys.argv = ["playwright", "install", "chromium"]
         try:

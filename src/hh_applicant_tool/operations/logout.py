@@ -28,8 +28,8 @@ class Operation(BaseOperation):
     def setup_parser(self, parser: argparse.ArgumentParser) -> None:
         pass
 
-    def run(self, tool: HHApplicantTool) -> None:
+    async def run(self, tool: HHApplicantTool) -> None:
         try:
-            tool.api_client.delete("/oauth/token")
+            await tool.api_client.delete("/oauth/token")
         except ApiError as ex:
             logger.error(f"Ошибка при выходе из профиля: {ex}")

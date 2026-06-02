@@ -48,14 +48,14 @@ class Operation(BaseOperation):
             help="Тестовый запуск без реального удаления",
         )
 
-    def run(self, tool: HHApplicantTool) -> None:
+    async def run(self, tool: HHApplicantTool) -> None:
         self.tool = tool
         self.args: Namespace = tool.args
-        self.clear()
+        await self.clear()
 
-    def clear(self) -> None:
-        blacklisted = set(self.tool.get_blacklisted())
-        for negotiation in self.tool.get_negotiations():
+    async def clear(self) -> None:
+        blacklisted = set(await self.tool.get_blacklisted())
+        async for negotiation in self.tool.get_negotiations():
             vacancy = negotiation["vacancy"]
 
             # Если работодателя блокируют, то он превращается в null
@@ -79,7 +79,7 @@ class Operation(BaseOperation):
                 continue
             try:
                 if not self.args.dry_run:
-                    self.tool.api_client.delete(
+                    await self.tool.api_client.delete(
                         f"/negotiations/active/{negotiation['id']}",
                         with_decline_message=True,
                     )
@@ -100,7 +100,7 @@ class Operation(BaseOperation):
                     and employer_id not in blacklisted
                 ):
                     if not self.args.dry_run:
-                        self.tool.api_client.put(
+                        await self.tool.api_client.put(
                             f"/employers/blacklisted/{employer_id}"
                         )
                         blacklisted.add(employer_id)

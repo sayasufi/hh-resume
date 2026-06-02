@@ -33,7 +33,7 @@ class Operation(BaseOperation):
             help="Следить за файлом (режим follow, аналог less +F)",
         )
 
-    def run(self, tool: HHApplicantTool) -> None:
+    async def run(self, tool: HHApplicantTool) -> None:
         log_path = tool.log_file
 
         if not os.path.exists(log_path):

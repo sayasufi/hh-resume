@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 import csv
 import logging
-import sqlite3
 import sys
 from typing import TYPE_CHECKING
 
+import psycopg
 from prettytable import PrettyTable
 
 from ..main import BaseNamespace, BaseOperation
@@ -48,30 +48,29 @@ class Operation(BaseOperation):
             help="Файл для сохранения",
         )
 
-    def run(self, tool: HHApplicantTool) -> None:
-        def execute(sql_query: str) -> None:
+    async def run(self, tool: HHApplicantTool) -> None:
+        conn = tool.storage.settings.conn
+
+        async def execute(sql_query: str) -> None:
             sql_query = sql_query.strip()
             if not sql_query:
                 return
             try:
-                cursor = tool.db.cursor()
-                cursor.execute(sql_query)
-
+                cursor = await conn.execute(sql_query)
                 if cursor.description:
                     columns = [d[0] for d in cursor.description]
+                    rows = await cursor.fetchall()
+                    await conn.commit()
 
                     if tool.args.csv or tool.args.output:
-                        # Если -o не задан, используем sys.stdout
                         output = tool.args.output or sys.stdout
                         writer = csv.writer(output)
                         writer.writerow(columns)
-                        writer.writerows(cursor.fetchall())
-
+                        writer.writerows(rows)
                         if tool.args.output:
                             print(f"✅  Exported to {tool.args.output.name}")
                         return
 
-                    rows = cursor.fetchmany(MAX_RESULTS + 1)
                     if not rows:
                         print("No results found.")
                         return
@@ -80,40 +79,33 @@ class Operation(BaseOperation):
                     table.field_names = columns
                     for row in rows[:MAX_RESULTS]:
                         table.add_row(row)
-
                     print(table)
                     if len(rows) > MAX_RESULTS:
                         print(
                             f"⚠️  Warning: Showing only first {MAX_RESULTS} results."
                         )
                 else:
-                    tool.db.commit()
-
+                    await conn.commit()
                     if cursor.rowcount > 0:
                         print(f"Rows affected: {cursor.rowcount}")
-
-            except sqlite3.Error as ex:
+            except psycopg.Error as ex:
+                await conn.rollback()
                 print(f"❌  SQL Error: {ex}")
-                return 1
 
         if initial_sql := tool.args.sql:
-            return execute(initial_sql)
+            return await execute(initial_sql)
 
         if not sys.stdin.isatty():
-            return execute(sys.stdin.read())
+            return await execute(sys.stdin.read())
 
         print("SQL Console (q or ^D to exit)")
         try:
             while True:
                 try:
                     user_input = input("query> ").strip()
-                    if user_input.lower() in (
-                        "exit",
-                        "quit",
-                        "q",
-                    ):
+                    if user_input.lower() in ("exit", "quit", "q"):
                         break
-                    execute(user_input)
+                    await execute(user_input)
                     print()
                 except KeyboardInterrupt:
                     print("^C")

@@ -24,7 +24,11 @@ class Operation(BaseOperation):
     def setup_parser(self, parser: argparse.ArgumentParser) -> None:
         pass
 
-    def run(self, applicant_tool: HHApplicantTool) -> None:
-        session = applicant_tool.session
-        assert session.proxies, "Прокси не заданы"
-        print(session.get("https://icanhazip.com").text)
+    async def run(self, applicant_tool: HHApplicantTool) -> None:
+        import httpx
+
+        proxy = applicant_tool._proxy_url()
+        assert proxy, "Прокси не заданы"
+        async with httpx.AsyncClient(proxy=proxy, timeout=15) as client:
+            r = await client.get("https://icanhazip.com")
+            print(r.text)

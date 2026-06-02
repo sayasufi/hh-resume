@@ -56,23 +56,23 @@ class Operation(BaseOperation):
             default=MISSING,
         )
 
-    def run(self, tool: HHApplicantTool) -> None:
+    async def run(self, tool: HHApplicantTool) -> None:
         args: Namespace = tool.args
         settings = tool.storage.settings
 
         if args.delete:
             if args.key is not MISSING:
                 # Delete value
-                settings.delete_value(args.key)
+                await settings.delete_value(args.key)
                 print(f"🗑️ Настройка '{args.key}' удалена")
             else:
-                settings.clear()
+                await settings.clear()
         elif args.key is not MISSING and args.value is not MISSING:
-            settings.set_value(args.key, args.value)
+            await settings.set_value(args.key, args.value)
             print(f"✅ Установлено значение для '{args.key}'")
         elif args.key is not MISSING:
             # Get value
-            value = settings.get_value(args.key, MISSING)
+            value = await settings.get_value(args.key, MISSING)
             if value is not MISSING:
                 # print(type(value).__name__, value)
                 print(value)
@@ -80,9 +80,8 @@ class Operation(BaseOperation):
                 print(f"⚠️ Настройка '{args.key}' не найдена")
         else:
             # List all settings
-            settings = settings.find()
             t = PrettyTable(field_names=["Ключ", "Тип", "Значение"], align="l")
-            for setting in settings:
+            async for setting in settings.find():
                 if setting.key.startswith("_"):
                     continue
                 t.add_row(

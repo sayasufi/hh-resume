@@ -406,4 +406,5 @@ async def main():
     print("done:", done)
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

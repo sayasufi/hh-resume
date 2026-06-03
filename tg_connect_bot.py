@@ -8,6 +8,7 @@ aiogram — бот-сторона; Telethon — user-сессия (qr_login). 2F
 import asyncio
 import io
 import json
+import re
 import time
 
 import psycopg
@@ -40,6 +41,13 @@ class Connect(StatesGroup):
     password = State()
 
 
+class AddAcc(StatesGroup):
+    nick = State()
+    login = State()
+    password = State()
+    salary = State()
+
+
 START_TEXT = (
     "👋 Привет! Я бот-помощник по поиску работы на hh.ru.\n\n"
     "Что я делаю сам:\n"
@@ -52,8 +60,9 @@ START_TEXT = (
 )
 HELP_TEXT = (
     "❓ Команды:\n"
+    "/addaccount — добавить новый hh-аккаунт (логин/пароль hh, один раз)\n"
     "/connect — подключить твой Telegram (скан QR) для авто-интервью\n"
-    "/status — статус: аккаунт, отклики, приглашения, токен\n"
+    "/status — статус: аккаунт, отклики, токен\n"
     "/start — это меню\n\n"
     "Важное (интервью, контакты от работодателей) приходит автоматически "
     "приоритизированным дайджестом 🔴🟡🟢."
@@ -62,6 +71,7 @@ HELP_TEXT = (
 
 def _kb():
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить hh-аккаунт", callback_data="addacc")],
         [InlineKeyboardButton(text="🔗 Подключить Telegram", callback_data="connect")],
         [InlineKeyboardButton(text="📊 Статус", callback_data="status"),
          InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
@@ -280,6 +290,109 @@ async def got_password(message: Message, state: FSMContext):
     await _finish(message, client)
 
 
+@dp.message(Command("addaccount"))
+async def cmd_addaccount(message: Message, state: FSMContext):
+    if message.chat.type != "private":
+        return
+    await state.set_state(AddAcc.nick)
+    await message.answer(
+        "➕ Новый hh-аккаунт.\nПридумай короткий логин-ник "
+        "(латиница/цифры/_, напр. ivan):"
+    )
+
+
+@dp.message(AddAcc.nick)
+async def acc_nick(message: Message, state: FSMContext):
+    nick = (message.text or "").strip().lower()
+    if not re.match(r"^[a-z0-9_]{2,20}$", nick):
+        await message.answer("Ник: латиница/цифры/_ , 2–20 символов. Повтори:")
+        return
+    schema = "u_" + nick
+    if schema in [s for _n, s in pgconn.list_users()]:
+        await message.answer("Такой ник уже занят. Введи другой:")
+        return
+    await state.update_data(nick=nick, schema=schema)
+    await state.set_state(AddAcc.login)
+    await message.answer("Логин hh (email или телефон):")
+
+
+@dp.message(AddAcc.login)
+async def acc_login(message: Message, state: FSMContext):
+    await state.update_data(login=(message.text or "").strip())
+    await state.set_state(AddAcc.password)
+    await message.answer("Пароль hh (удалю сообщение сразу):")
+
+
+@dp.message(AddAcc.password)
+async def acc_password(message: Message, state: FSMContext):
+    pw = (message.text or "").strip()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    await state.update_data(password=pw)
+    await state.set_state(AddAcc.salary)
+    await message.answer("Желаемая зарплата (напр. 200 000–300 000 ₽):")
+
+
+@dp.message(AddAcc.salary)
+async def acc_salary(message: Message, state: FSMContext):
+    d = await state.get_data()
+    salary = (message.text or "").strip()
+    await state.clear()
+    await message.answer("⏳ Авторизую hh через браузер… ~минуту, подожди.")
+    import onboard
+    try:
+        token, web_state, me, resumes = await onboard.authorize_hh(
+            d["login"], d["password"]
+        )
+    except Exception as e:
+        await message.answer(
+            f"❌ Не удалось авторизовать hh: {e}\n"
+            "Проверь логин/пароль и повтори /addaccount."
+        )
+        return
+    pub = [r for r in resumes
+           if (r.get("status") or {}).get("id") == "published"] or resumes
+    if not pub:
+        await message.answer("❌ У аккаунта нет резюме на hh. Создай и повтори.")
+        return
+    resume_id = pub[0]["id"]
+    tg = pgconn.app_config().get("telegram") or {}
+    topic_id = None
+    try:
+        ft = await message.bot.create_forum_topic(tg["chat_id"], d["nick"])
+        topic_id = ft.message_thread_id
+    except Exception as e:
+        print("create_forum_topic:", repr(e)[:80])
+    try:
+        full = await onboard.fetch_resume_full(token, resume_id)
+        resume_text = onboard.build_resume_text(me, full)
+        name = onboard.setup_account(
+            d["nick"], d["schema"], d["login"], d["password"], token, web_state,
+            me, resume_id, resume_text, salary, topic_id,
+            tg.get("token"), tg.get("chat_id"),
+        )
+    except Exception as e:
+        await message.answer(f"❌ Авторизация ок, но настройка не удалась: {e}")
+        return
+    await message.answer(
+        f"✅ Аккаунт «{d['nick']}» ({name}) добавлен — работает и API, и браузер.\n"
+        f"Резюме: {pub[0].get('title','')}. Отклики пойдут по расписанию.\n\n"
+        "Теперь /connect — привязать твой Telegram (авто-интервью)."
+    )
+
+
+@dp.callback_query(F.data == "addacc")
+async def cb_addacc(cq: CallbackQuery, state: FSMContext):
+    await cq.answer()
+    await state.set_state(AddAcc.nick)
+    await cq.message.answer(
+        "➕ Новый hh-аккаунт.\nПридумай короткий логин-ник "
+        "(латиница/цифры/_, напр. ivan):"
+    )
+
+
 @dp.callback_query(F.data == "connect")
 async def cb_connect(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
@@ -310,6 +423,7 @@ async def main():
     bot = Bot(token)
     await bot.set_my_commands([
         BotCommand(command="start", description="О боте и быстрые действия"),
+        BotCommand(command="addaccount", description="Добавить новый hh-аккаунт"),
         BotCommand(command="connect", description="Подключить Telegram (QR)"),
         BotCommand(command="status", description="Статус: отклики, приглашения, токен"),
         BotCommand(command="help", description="Помощь"),

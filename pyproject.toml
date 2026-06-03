@@ -18,7 +18,8 @@ requests = {extras = ["socks"], version = "^2.32.3"}
 httpx = {extras = ["socks"], version = "^0.27"}
 psycopg = {extras = ["binary"], version = "^3.2"}
 prettytable = "^3.6.0"
-# Telegram user-сессия (ГигаРекрутер и пр.) + шифрование сессий + QR
+# Telegram: aiogram — бот-сторона (/connect, дайджест); telethon — user-сессия (QR)
+aiogram = "^3.13"
 telethon = "^1.43"
 qrcode = "^7.4"
 cryptography = "^44.0"

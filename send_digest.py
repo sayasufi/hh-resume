@@ -11,7 +11,7 @@ import asyncio
 import os
 import sys
 
-import httpx
+from aiogram import Bot
 
 from hh_applicant_tool.storage import pgconn
 
@@ -83,23 +83,20 @@ def build_message(rows: list[tuple]) -> str:
 
 
 async def tg_send(token: str, chat_id, text: str, topic_id=None) -> bool:
+    bot = Bot(token)
     ok = True
-    async with httpx.AsyncClient(timeout=25) as client:
+    try:
         for i in range(0, len(text), 3800):
-            data = {
-                "chat_id": chat_id,
-                "text": text[i:i + 3800],
-                "disable_web_page_preview": True,
-            }
-            if topic_id:
-                data["message_thread_id"] = topic_id
-            r = await client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage", data=data
-            )
-            if r.status_code != 200:
-                print("TG error:", r.status_code, r.text[:200])
+            try:
+                await bot.send_message(
+                    chat_id, text[i:i + 3800], message_thread_id=topic_id
+                )
+            except Exception as e:
+                print("TG error:", repr(e)[:160])
                 ok = False
             await asyncio.sleep(0.4)
+    finally:
+        await bot.session.close()
     return ok
 
 

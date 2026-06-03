@@ -1,25 +1,23 @@
-"""Слушающий бот: команда /connect В ЛИЧКЕ -> QR-вход Telethon -> сохранение
-user-сессии Telegram кандидата. Только ЛС, ничего не постится в топики/группу.
+"""Бот привязки Telegram-аккаунта кандидата (aiogram 3.x). Команда /connect В ЛС:
+QR-вход через Telethon -> сохранение зашифрованной user-сессии в схему юзера,
+найденную по совпадению номера телефона Telegram с номером hh-профиля.
 
-Сопоставление Telegram<->hh — АВТОМАТИЧЕСКИ по номеру телефона: после входа
-берём номер Telegram-аккаунта и ищем hh-аккаунт (схему) с таким же номером в
-профиле (app_config.hh_phone, кладёт monitor.py из hh /me). Совпало -> сессия
-(ЗАШИФРОВАННАЯ) сохраняется в схему этого юзера: u_xxx.app_config.tg_user_session.
-Не совпало -> сессию не храним, просто сообщаем (и разлогиниваем устройство).
+aiogram отвечает за бот-сторону (polling, хендлеры, FSM, отправка). Telethon —
+за user-сессию (qr_login). 2FA (облачный пароль) обрабатывается через FSM.
 
-api_id/api_hash — общий публичный ключ (Telegram Desktop): идентификатор ПРОГРАММЫ,
-не пользователя; кандидат логинится своим аккаунтом сканом QR.
-
-Запуск (процесс): HH_DB_SCHEMA=u_egor python tg_connect_bot.py  (токен бота один
-на всех; берётся из telegram-конфига).
+Запуск (процесс, держится watchdog/startup): HH_DB_SCHEMA=u_egor python tg_connect_bot.py
 """
 import asyncio
 import io
 import json
 
-import httpx
 import psycopg
 import qrcode
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import BufferedInputFile, Message
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import StringSession
@@ -29,9 +27,12 @@ from hh_applicant_tool.storage import pgconn
 API_ID = 2040
 API_HASH = "b18441a1ff607e10a989891a5462e627"
 
+dp = Dispatcher()
+_pending: dict[int, TelegramClient] = {}  # chat_id -> клиент на шаге 2FA
 
-def bot_token():
-    return (pgconn.app_config().get("telegram") or {}).get("token")
+
+class Connect(StatesGroup):
+    password = State()
 
 
 def _png(data: str) -> bytes:
@@ -40,16 +41,8 @@ def _png(data: str) -> bytes:
     return buf.getvalue()
 
 
-async def api(token, method, files=None, **kw):
-    async with httpx.AsyncClient(timeout=60) as c:
-        r = await c.post(
-            f"https://api.telegram.org/bot{token}/{method}", data=kw, files=files
-        )
-        return r.json()
-
-
 def resolve_schema_by_phone(tg_phone):
-    """Найти схему юзера, чей hh-номер совпадает с номером Telegram-аккаунта."""
+    """Схема юзера, чей hh-номер совпадает с номером Telegram-аккаунта."""
     norm = pgconn._norm_phone(tg_phone)
     if not norm:
         return None
@@ -84,101 +77,118 @@ def save_session(schema, enc_sess):
         conn.close()
 
 
-async def do_connect(token, chat_id):
+async def _finish(message: Message, client: TelegramClient):
+    """Логин завершён: матч по телефону -> сохранить зашифрованную сессию."""
+    me = await client.get_me()
+    schema = resolve_schema_by_phone(me.phone)
+    if not schema:
+        try:
+            await client.log_out()
+        finally:
+            await client.disconnect()
+        await message.answer(
+            f"⚠️ Номер +{me.phone} не совпал ни с одним hh-аккаунтом в боте. "
+            "Подключайся с того Telegram, чей номер = номер в твоём hh-профиле."
+        )
+        return
+    save_session(schema, pgconn.enc_session(client.session.save()))
+    await client.disconnect()
+    await message.answer(
+        f"✅ Telegram подключён к hh-аккаунту «{schema}». Сессия зашифрована. Готово."
+    )
+    print(f"linked: +{me.phone} -> {schema}")
+
+
+@dp.message(Command("connect"))
+async def cmd_connect(message: Message, state: FSMContext):
+    if message.chat.type != "private":
+        return
+    await state.clear()
+    await message.answer("Генерирую QR-код…")
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
-    mid = None
-    try:
-        qr = await client.qr_login()
-        linked = False
-        for _ in range(6):
-            res = await api(
-                token, "sendPhoto", chat_id=str(chat_id),
-                caption="🔗 Подключение Telegram\n\nTelegram → Настройки → "
-                        "Устройства → «Подключить устройство» → сканируй QR.",
-                files={"photo": ("qr.png", _png(qr.url), "image/png")},
-            )
-            new_mid = (res.get("result") or {}).get("message_id")
-            if mid:
-                await api(token, "deleteMessage", chat_id=str(chat_id),
-                          message_id=str(mid))
-            mid = new_mid
+    qr = await client.qr_login()
+    qr_msg = None
+    cap = ("🔗 Подключение Telegram\n\nTelegram → Настройки → Устройства → "
+           "«Подключить устройство» → сканируй QR.")
+    for _ in range(6):
+        if qr_msg:
             try:
-                await qr.wait(timeout=50)
-                linked = True
-                break
-            except SessionPasswordNeededError:
-                await api(token, "sendMessage", chat_id=str(chat_id),
-                          text="⚠️ Включён облачный пароль (2FA). Сними его "
-                               "временно (Настройки→Конфиденциальность→Облачный "
-                               "пароль) и повтори /connect.")
-                return
-            except asyncio.TimeoutError:
-                await qr.recreate()
-                continue
-        if mid:
-            await api(token, "deleteMessage", chat_id=str(chat_id),
-                      message_id=str(mid))
-        if not linked:
-            await api(token, "sendMessage", chat_id=str(chat_id),
-                      text="⌛ QR истёк, никто не отсканировал. Повтори /connect.")
-            return
-
-        me = await client.get_me()
-        schema = resolve_schema_by_phone(me.phone)
-        if not schema:
-            # сессию не сохраняем и разлогиниваем устройство (гигиена)
-            try:
-                await client.log_out()
+                await qr_msg.delete()
             except Exception:
                 pass
-            await api(token, "sendMessage", chat_id=str(chat_id),
-                      text=f"⚠️ Номер +{me.phone} не совпал ни с одним hh-аккаунтом "
-                           "в боте. Подключайся с того Telegram, чей номер = номер "
-                           "в твоём hh-профиле.")
+        qr_msg = await message.answer_photo(
+            BufferedInputFile(_png(qr.url), "qr.png"), caption=cap
+        )
+        try:
+            await qr.wait(timeout=50)
+        except SessionPasswordNeededError:
+            if qr_msg:
+                try:
+                    await qr_msg.delete()
+                except Exception:
+                    pass
+            _pending[message.chat.id] = client
+            await state.set_state(Connect.password)
+            await message.answer(
+                "🔐 На аккаунте включён облачный пароль (2FA). Пришли его одним "
+                "сообщением — я удалю его сразу после ввода."
+            )
             return
-        save_session(schema, pgconn.enc_session(client.session.save()))
-        await api(token, "sendMessage", chat_id=str(chat_id),
-                  text=f"✅ Telegram подключён к hh-аккаунту «{schema}». "
-                       "Сессия зашифрована. Готово.")
-        print(f"linked: +{me.phone} -> {schema}")
-    finally:
+        except asyncio.TimeoutError:
+            await qr.recreate()
+            continue
+        # успех
+        if qr_msg:
+            try:
+                await qr_msg.delete()
+            except Exception:
+                pass
+        await _finish(message, client)
+        return
+    if qr_msg:
+        try:
+            await qr_msg.delete()
+        except Exception:
+            pass
+    await client.disconnect()
+    await message.answer("⌛ QR истёк, никто не отсканировал. Повтори /connect.")
+
+
+@dp.message(Connect.password)
+async def got_password(message: Message, state: FSMContext):
+    pw = (message.text or "").strip()
+    try:
+        await message.delete()  # пароль из чата убираем
+    except Exception:
+        pass
+    client = _pending.pop(message.chat.id, None)
+    await state.clear()
+    if not client:
+        await message.answer("Сессия истекла, повтори /connect.")
+        return
+    try:
+        await client.sign_in(password=pw)
+    except Exception as e:
         await client.disconnect()
+        await message.answer(
+            f"❌ Пароль не подошёл ({type(e).__name__}). Повтори /connect."
+        )
+        return
+    await _finish(message, client)
 
 
 async def main():
-    token = bot_token()
+    token = (pgconn.app_config().get("telegram") or {}).get("token")
     if not token:
         print("tg_connect_bot: нет telegram-токена")
         return
-    print("tg_connect_bot: слушаю /connect в ЛС…")
-    offset = 0
-    busy = set()
-    while True:
-        try:
-            res = await api(token, "getUpdates", offset=offset, timeout=25)
-        except Exception:
-            await asyncio.sleep(2)
-            continue
-        for u in res.get("result", []):
-            offset = u["update_id"] + 1
-            msg = u.get("message") or {}
-            chat = msg.get("chat") or {}
-            text = (msg.get("text") or "").strip().lower()
-            if chat.get("type") != "private":
-                continue
-            if not text.startswith("/connect"):
-                continue
-            cid = chat["id"]
-            if cid in busy:
-                continue
-            busy.add(cid)
-            try:
-                await api(token, "sendMessage", chat_id=str(cid),
-                          text="Генерирую QR-код…")
-                await do_connect(token, cid)
-            finally:
-                busy.discard(cid)
+    bot = Bot(token)
+    print("tg_connect_bot (aiogram): слушаю /connect в ЛС…")
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
 
 
 if __name__ == "__main__":

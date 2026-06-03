@@ -235,6 +235,7 @@ async def main():
                 pgconn.add_seen("tests", seen)
 
         done = 0
+        transient_streak = 0  # подряд идущие блипы LLM/сети
         for v in tvs:
             if done >= LIMIT:
                 break
@@ -261,10 +262,17 @@ async def main():
                     if st != "ok":
                         break
                 if "transient" in statuses:
-                    # LLM/сеть временно недоступны — НЕ жжём вакансию, прерываем прогон
-                    print(f"[{vid}] временный сбой (LLM/сеть) -> НЕ помечаю seen, прогон прерван")
-                    tg_alert(cfg, "⚠️ apply_tests: LLM/сеть недоступны, прогон прерван (вакансии не сожжены).")
-                    break
+                    # Один блип LLM/сети — пропускаем ЭТУ вакансию БЕЗ seen (вернётся
+                    # в след. заход) и идём дальше, не рушим весь прогон. Прерываем
+                    # только при серии блипов подряд (LLM реально недоступна).
+                    transient_streak += 1
+                    print(f"[{vid}] временный сбой (LLM/сеть) #{transient_streak} -> пропуск без seen")
+                    if transient_streak >= 3:
+                        print("3 временных сбоя подряд -> LLM/сеть недоступны, прогон прерван")
+                        tg_alert(cfg, "⚠️ apply_tests: LLM/сеть недоступны, прогон прерван (вакансии не сожжены).")
+                        break
+                    continue
+                transient_streak = 0  # дошли без блипа — сбрасываем счётчик
                 if "manual" in statuses:
                     print(f"[{vid}] форму нельзя авто-заполнить -> пропуск (вручную)")
                     seen.add(str(vid)); done += 1; save_seen(); continue
@@ -281,8 +289,10 @@ async def main():
                     else:
                         print("  кнопка отправки не найдена -> НЕ помечаю seen")
                 else:
+                    # DRY: ничего не отправляем и НЕ помечаем seen (save_seen и так
+                    # no-op без APPLY); done++ только чтобы --limit работал в dry.
                     print("  DRY: не отправлено")
-                    seen.add(str(vid)); done += 1; save_seen()
+                    done += 1
             except Exception as e:
                 # неожиданная ошибка — НЕ жжём вакансию, попробуем в след. раз
                 print(f"[{vid}] неожиданная ошибка: {repr(e)[:120]} -> НЕ помечаю seen")

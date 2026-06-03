@@ -24,8 +24,7 @@ from telethon.sessions import StringSession
 
 from hh_applicant_tool.storage import pgconn
 
-API_ID = 2040
-API_HASH = "b18441a1ff607e10a989891a5462e627"
+API_ID, API_HASH = pgconn.tg_api()  # из /app/config/.tg_api (своё приложение)
 
 dp = Dispatcher()
 _pending: dict[int, TelegramClient] = {}  # chat_id -> клиент на шаге 2FA

@@ -393,6 +393,25 @@ def _session_key() -> bytes:
         return key
 
 
+def tg_api() -> tuple[int, str]:
+    """(api_id, api_hash) для Telethon. Источник: файл <CONFIG_DIR>/.tg_api (json
+    {"api_id":..., "api_hash":...}) -> env HH_TG_API_ID/HH_TG_API_HASH -> публичный
+    дефолт (Telegram Desktop). Своё приложение чище по ToS, чем общий ключ."""
+    import json as _json
+
+    path = os.path.join(os.environ.get("CONFIG_DIR", "/app/config"), ".tg_api")
+    try:
+        with open(path) as f:
+            d = _json.load(f)
+            return int(d["api_id"]), str(d["api_hash"])
+    except Exception:
+        pass
+    aid = os.environ.get("HH_TG_API_ID")
+    if aid:
+        return int(aid), os.environ.get("HH_TG_API_HASH", "")
+    return 2040, "b18441a1ff607e10a989891a5462e627"
+
+
 def enc_session(s: str) -> str:
     from cryptography.fernet import Fernet
 

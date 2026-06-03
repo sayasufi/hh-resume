@@ -10,94 +10,123 @@
 <body>
   <div id="app">
     <header id="head">
-      <div id="hname">Загрузка…</div>
-      <div id="hstatus" class="hint"></div>
+      <div id="avatar">·</div>
+      <div class="head-info">
+        <div id="hname">Загрузка…</div>
+        <div id="hstatus" class="pill"></div>
+      </div>
     </header>
 
     <main>
+      <!-- ПРОФИЛЬ -->
       <section id="tab-profile" class="tab active">
-        <div class="card"><span class="k">Имя</span><span class="v" id="p-name">—</span></div>
-        <div class="card"><span class="k">hh ID</span><span class="v" id="p-id">—</span></div>
-        <div class="card"><span class="k">Резюме</span><span class="v" id="p-resume">—</span></div>
-        <div class="card"><span class="k">Желаемая зарплата</span><span class="v" id="p-salary">—</span></div>
-        <div class="card"><span class="k">Статус</span><span class="v" id="p-status">—</span></div>
+        <div class="rows">
+          <div class="row"><span class="k">Имя</span><span class="v" id="p-name">—</span></div>
+          <div class="row"><span class="k">hh ID</span><span class="v" id="p-id">—</span></div>
+          <div class="row"><span class="k">Резюме</span><span class="v" id="p-resume">—</span></div>
+          <div class="row"><span class="k">Желаемая зарплата</span><span class="v" id="p-salary">—</span></div>
+          <div class="row"><span class="k">Статус</span><span class="v" id="p-status">—</span></div>
+        </div>
       </section>
 
+      <!-- СТАТИСТИКА -->
       <section id="tab-stats" class="tab">
         <div class="grid">
-          <div class="stat"><div class="num" id="s-apps">—</div><div class="lbl">Откликов всего</div></div>
-          <div class="stat"><div class="num" id="s-today">—</div><div class="lbl">Откликов сегодня</div></div>
-          <div class="stat"><div class="num" id="s-views">—</div><div class="lbl">Просмотров резюме</div></div>
-          <div class="stat"><div class="num" id="s-inv">—</div><div class="lbl">Приглашений</div></div>
-          <div class="stat"><div class="num" id="s-intv">—</div><div class="lbl">Интервью</div></div>
+          <div class="stat a"><div class="num" id="s-apps">—</div><div class="lbl">Откликов всего</div></div>
+          <div class="stat b"><div class="num" id="s-today">—</div><div class="lbl">Сегодня</div></div>
+          <div class="stat c"><div class="num" id="s-views">—</div><div class="lbl">Просмотров резюме</div></div>
+          <div class="stat d"><div class="num" id="s-inv">—</div><div class="lbl">Приглашений</div></div>
+          <div class="stat e"><div class="num" id="s-intv">—</div><div class="lbl">Интервью</div></div>
         </div>
         <div class="sec-title">Воронка</div>
-        <div id="funnel"></div>
+        <div id="funnel" class="surface"></div>
         <div class="sec-title">Динамика откликов</div>
-        <div id="trend"></div>
+        <div id="trend" class="surface"></div>
       </section>
 
+      <!-- ОТКЛИКИ -->
       <section id="tab-dialogs" class="tab">
-        <div class="dlg-bar">
-          <span class="hint">Откликов: <b id="dlg-count">—</b></span>
-          <select id="dlg-sort">
-            <option value="date">Сначала новые</option>
-            <option value="status">По статусу</option>
-          </select>
+        <div class="chips" id="dlg-filter">
+          <button class="chip active" data-f="all">Все</button>
+          <button class="chip" data-f="invitation">🟢 Приглашения</button>
+          <button class="chip" data-f="response">💬 Ответы</button>
+          <button class="chip" data-f="discard">🔴 Отказы</button>
+        </div>
+        <div class="subbar">
+          <span class="hint"><b id="dlg-count">—</b> откликов</span>
+          <div class="seg" id="dlg-sort">
+            <button class="active" data-s="date">Новые</button>
+            <button data-s="status">Статус</button>
+          </div>
         </div>
         <div id="dialogs"></div>
       </section>
 
+      <!-- ФУНКЦИИ -->
       <section id="tab-feat" class="tab">
         <div class="sec-title">Профиль откликов</div>
-        <div class="cfgrow"><span>Желаемая зарплата, ₽</span>
-          <input type="number" id="cfg-salary" inputmode="numeric" placeholder="напр. 250000"></div>
-        <div class="cfgrow"><span>Активное резюме</span>
-          <select id="cfg-resume"></select></div>
+        <div class="rows">
+          <label class="row tap"><span class="k">Желаемая зарплата, ₽</span>
+            <input type="number" id="cfg-salary" inputmode="numeric" placeholder="250000"></label>
+          <button class="row tap" id="resume-row"><span class="k">Активное резюме</span>
+            <span class="v pick" id="resume-val">—<i>›</i></span></button>
+        </div>
 
         <div class="sec-title">Обычные отклики</div>
         <div class="featgroup">
           <label class="toggle"><span><b>Авто-отклики</b><small>на подходящие вакансии</small></span>
             <input type="checkbox" data-feat="apply"><i></i></label>
-          <div class="cfgrow sub"><span>Лимит в день</span>
-            <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></div>
+          <label class="row sub"><span class="k">Лимит в день</span>
+            <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></label>
         </div>
 
         <div class="sec-title">Отклики с тестами</div>
         <div class="featgroup">
-          <label class="toggle"><span><b>Авто-тесты</b><small>отклик + прохождение теста через браузер</small></span>
+          <label class="toggle"><span><b>Авто-тесты</b><small>отклик + тест через браузер</small></span>
             <input type="checkbox" data-feat="tests"><i></i></label>
-          <div class="cfgrow sub"><span>Лимит в день</span>
-            <input type="number" id="cfg-tlimit" inputmode="numeric" min="0" max="100"></div>
+          <label class="row sub"><span class="k">Лимит в день</span>
+            <input type="number" id="cfg-tlimit" inputmode="numeric" min="0" max="100"></label>
         </div>
 
         <div class="sec-title">Прочее</div>
-        <label class="toggle"><span><b>Ответы работодателям</b><small>авто-ответы на сообщения</small></span>
-          <input type="checkbox" data-feat="reply"><i></i></label>
-        <label class="toggle"><span><b>Активность + поднятие</b><small>просмотр вакансий, авто-bump</small></span>
-          <input type="checkbox" data-feat="browse"><i></i></label>
-        <label class="toggle"><span><b>ГигаРекрутер + уведомления</b><small>авто-интервью, дайджест</small></span>
-          <input type="checkbox" data-feat="giga"><i></i></label>
+        <div class="featgroup">
+          <label class="toggle"><span><b>Ответы работодателям</b><small>авто-ответы на сообщения</small></span>
+            <input type="checkbox" data-feat="reply"><i></i></label>
+          <label class="toggle"><span><b>Активность + поднятие</b><small>просмотр вакансий, авто-bump</small></span>
+            <input type="checkbox" data-feat="browse"><i></i></label>
+          <label class="toggle"><span><b>ГигаРекрутер + уведомления</b><small>авто-интервью, дайджест</small></span>
+            <input type="checkbox" data-feat="giga"><i></i></label>
+        </div>
       </section>
     </main>
 
     <nav id="tabs">
-      <button class="active" data-tab="profile">👤<span>Профиль</span></button>
-      <button data-tab="stats">📊<span>Статистика</span></button>
-      <button data-tab="dialogs">📋<span>Отклики</span></button>
-      <button data-tab="feat">⚙️<span>Функции</span></button>
+      <button class="active" data-tab="profile"><span class="ic">👤</span><span>Профиль</span></button>
+      <button data-tab="stats"><span class="ic">📊</span><span>Статистика</span></button>
+      <button data-tab="dialogs"><span class="ic">📋</span><span>Отклики</span></button>
+      <button data-tab="feat"><span class="ic">⚙️</span><span>Функции</span></button>
     </nav>
   </div>
 
-  <div id="modal" class="hidden">
-    <div class="modal-card">
-      <div class="modal-head">
-        <button id="m-close">✕</button>
-        <div class="modal-title" id="m-title">—</div>
-        <div class="modal-emp hint" id="m-emp"></div>
+  <!-- модалка переписки -->
+  <div id="modal" class="sheet-wrap hidden">
+    <div class="sheet">
+      <div class="sheet-grip"></div>
+      <div class="sheet-head">
+        <div class="sheet-title" id="m-title">—</div>
+        <div class="hint" id="m-emp"></div>
       </div>
-      <div id="m-body"></div>
-      <a id="m-hh" class="modal-hh hidden" target="_blank">Открыть на hh.ru ↗</a>
+      <div id="m-body" class="sheet-body"></div>
+      <a id="m-hh" class="sheet-action hidden" target="_blank">Открыть на hh.ru ↗</a>
+    </div>
+  </div>
+
+  <!-- пикер (резюме) -->
+  <div id="picker" class="sheet-wrap hidden">
+    <div class="sheet">
+      <div class="sheet-grip"></div>
+      <div class="sheet-head"><div class="sheet-title" id="pk-title">Выбор</div></div>
+      <div id="pk-body" class="sheet-body"></div>
     </div>
   </div>
 

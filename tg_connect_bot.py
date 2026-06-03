@@ -122,6 +122,24 @@ def _kb():
     ])
 
 
+def _kb_linked():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Открыть кабинет",
+                              web_app=WebAppInfo(url=WEBAPP_URL))],
+        [InlineKeyboardButton(text="📊 Статус", callback_data="status"),
+         InlineKeyboardButton(text="🧩 ГигаРекрутер", callback_data="connect")],
+        [InlineKeyboardButton(text="➕ Ещё аккаунт", callback_data="addacc"),
+         InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
+    ])
+
+
+START_LINKED = (
+    "👋 С возвращением, <b>{name}</b>!\n\n"
+    "Твой профиль привязан и я работаю. Открывай кабинет — там вся "
+    "статистика и управление функциями."
+)
+
+
 def _png(data: str) -> bytes:
     buf = io.BytesIO()
     qrcode.make(data).save(buf, format="PNG")
@@ -292,7 +310,13 @@ async def cmd_start(message: Message, state: FSMContext):
     if message.chat.type != "private":
         return
     await state.clear()
-    await message.answer(START_TEXT, reply_markup=_kb(), parse_mode="HTML")
+    account = _account_by("tg_user_id", message.from_user.id)
+    if account:  # уже привязан -> персональное меню без «Привязать»
+        name = pgconn.get_setting("user.full_name", None, account=account) or account
+        await message.answer(START_LINKED.format(name=name),
+                             reply_markup=_kb_linked(), parse_mode="HTML")
+    else:
+        await message.answer(START_TEXT, reply_markup=_kb(), parse_mode="HTML")
 
 
 @dp.message(Command("help"))

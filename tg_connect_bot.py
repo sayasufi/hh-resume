@@ -42,7 +42,6 @@ class Connect(StatesGroup):
 
 
 class AddAcc(StatesGroup):
-    nick = State()
     login = State()
     password = State()
     salary = State()
@@ -294,26 +293,8 @@ async def got_password(message: Message, state: FSMContext):
 async def cmd_addaccount(message: Message, state: FSMContext):
     if message.chat.type != "private":
         return
-    await state.set_state(AddAcc.nick)
-    await message.answer(
-        "➕ Новый hh-аккаунт.\nПридумай короткий логин-ник "
-        "(латиница/цифры/_, напр. ivan):"
-    )
-
-
-@dp.message(AddAcc.nick)
-async def acc_nick(message: Message, state: FSMContext):
-    nick = (message.text or "").strip().lower()
-    if not re.match(r"^[a-z0-9_]{2,20}$", nick):
-        await message.answer("Ник: латиница/цифры/_ , 2–20 символов. Повтори:")
-        return
-    schema = "u_" + nick
-    if schema in [s for _n, s in pgconn.list_users()]:
-        await message.answer("Такой ник уже занят. Введи другой:")
-        return
-    await state.update_data(nick=nick, schema=schema)
     await state.set_state(AddAcc.login)
-    await message.answer("Логин hh (email или телефон):")
+    await message.answer("➕ Новый hh-аккаунт.\nЛогин hh (email или телефон):")
 
 
 @dp.message(AddAcc.login)
@@ -358,18 +339,27 @@ async def acc_salary(message: Message, state: FSMContext):
         await message.answer("❌ У аккаунта нет резюме на hh. Создай и повтори.")
         return
     resume_id = pub[0]["id"]
+    # идентичность — из hh-профиля (id/телефон + имя), без ника
+    acc_id = str(me.get("id") or pgconn._norm_phone(me.get("phone")) or "")
+    if not acc_id:
+        await message.answer("❌ Не удалось определить идентификатор hh-аккаунта.")
+        return
+    schema = "u_" + re.sub(r"\W", "", acc_id)
+    full_name = " ".join(
+        x for x in [me.get("last_name"), me.get("first_name")] if x
+    ) or d["login"]
     tg = pgconn.app_config().get("telegram") or {}
     topic_id = None
     try:
-        ft = await message.bot.create_forum_topic(tg["chat_id"], d["nick"])
+        ft = await message.bot.create_forum_topic(tg["chat_id"], full_name[:40] or "new")
         topic_id = ft.message_thread_id
     except Exception as e:
         print("create_forum_topic:", repr(e)[:80])
     try:
         full = await onboard.fetch_resume_full(token, resume_id)
         resume_text = onboard.build_resume_text(me, full)
-        name = onboard.setup_account(
-            d["nick"], d["schema"], d["login"], d["password"], token, web_state,
+        onboard.setup_account(
+            full_name, schema, d["login"], d["password"], token, web_state,
             me, resume_id, resume_text, salary, topic_id,
             tg.get("token"), tg.get("chat_id"),
         )
@@ -377,7 +367,7 @@ async def acc_salary(message: Message, state: FSMContext):
         await message.answer(f"❌ Авторизация ок, но настройка не удалась: {e}")
         return
     await message.answer(
-        f"✅ Аккаунт «{d['nick']}» ({name}) добавлен — работает и API, и браузер.\n"
+        f"✅ Аккаунт {full_name} добавлен — работает и API, и браузер.\n"
         f"Резюме: {pub[0].get('title','')}. Отклики пойдут по расписанию.\n\n"
         "Теперь /connect — привязать твой Telegram (авто-интервью)."
     )
@@ -386,11 +376,8 @@ async def acc_salary(message: Message, state: FSMContext):
 @dp.callback_query(F.data == "addacc")
 async def cb_addacc(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
-    await state.set_state(AddAcc.nick)
-    await cq.message.answer(
-        "➕ Новый hh-аккаунт.\nПридумай короткий логин-ник "
-        "(латиница/цифры/_, напр. ivan):"
-    )
+    await state.set_state(AddAcc.login)
+    await cq.message.answer("➕ Новый hh-аккаунт.\nЛогин hh (email или телефон):")
 
 
 @dp.callback_query(F.data == "connect")

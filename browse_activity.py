@@ -1,13 +1,12 @@
-"""Человекоподобная активность на hh: периодический просмотр релевантных вакансий.
+"""Человекоподобная активность на hh: умный просмотр релевантных вакансий.
 
-Зачем: главный плюс — кандидат попадает в список «кто смотрел вакансию» у
-работодателя (может подтолкнуть открыть резюме); плюс аккаунт выглядит живым/
-онлайн. Честно: эффект слабый (аккаунт и так активен откликами+поднятием резюме),
-но безопасный. НЕ откликается и не пишет — только GET-просмотр.
+Зачем: попасть в список «кто смотрел вакансию» у работодателя (может подтолкнуть
+открыть резюме) + аккаунт выглядит живым. Честно: эффект слабый (аккаунт и так
+активен), но безопасный. НЕ откликается и не пишет — только GET-просмотр.
 
-Человекоподобность: случайное число вакансий за сессию и случайные паузы «чтения»,
-случайный порядок, иногда заход в свои резюме. Запускается несколько раз в день в
-разное время (cron + случайный sleep).
+Человекоподобность: смотрит в основном сверху списка (релевантные), ниже — реже;
+разная глубина чтения (чаще беглый взгляд, иногда вдумчиво); иногда листает 2-ю
+страницу; иногда открывает страницу работодателя; иногда заходит в свои отклики.
 
 Запуск: python browse_activity.py [--dry]   (обычно через run_all)
 """
@@ -20,6 +19,14 @@ from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
 
 DRY = "--dry" in sys.argv
+
+
+async def _dwell():
+    """Пауза «чтения»: чаще беглый взгляд, иногда вдумчивое чтение."""
+    if random.random() < 0.3:
+        await asyncio.sleep(random.uniform(15, 40))
+    else:
+        await asyncio.sleep(random.uniform(3, 10))
 
 
 async def main():
@@ -38,28 +45,46 @@ async def main():
     )
     resume_id = pgconn.get_setting("apply.resume_id")
     viewed = 0
+    employers = 0
     try:
-        # «открыли приложение»
-        await api.get("/me")
+        await api.get("/me")  # «открыли приложение»
 
-        # подобрали релевантные вакансии под резюме
-        vac_ids = []
+        # Соберём вакансии (иногда листаем 2-ю страницу, как живой скролл).
+        collected = []  # (vacancy_id, employer_id)
         if resume_id:
-            try:
-                r = await api.get(
-                    f"/resumes/{resume_id}/similar_vacancies",
-                    page=0, per_page=100,
-                )
-                vac_ids = [
-                    v["id"] for v in r.get("items", [])
-                    if not v.get("archived")
-                ]
-            except Exception as e:
-                print("browse: не получил вакансии:", repr(e)[:60])
+            pages = 2 if random.random() < 0.4 else 1
+            for page in range(pages):
+                try:
+                    r = await api.get(
+                        f"/resumes/{resume_id}/similar_vacancies",
+                        page=page, per_page=50,
+                    )
+                except Exception as e:
+                    print("browse: не получил вакансии:", repr(e)[:60])
+                    break
+                items = r.get("items", [])
+                if not items:
+                    break
+                for v in items:
+                    if v.get("archived"):
+                        continue
+                    collected.append(
+                        (v["id"], (v.get("employer") or {}).get("id"))
+                    )
+                if not DRY and page + 1 < pages:
+                    await asyncio.sleep(random.uniform(2, 6))  # «проскроллил»
 
-        random.shuffle(vac_ids)
-        target = random.randint(5, 15)  # сколько «прочитать» за сессию
-        for vid in vac_ids[:target]:
+        # Человек смотрит в основном верхние (релевантные), ниже — всё реже.
+        budget = random.randint(4, 14)
+        plan = []
+        for i, item in enumerate(collected):
+            if random.random() < max(0.2, 1.0 - i * 0.04):
+                plan.append(item)
+            if len(plan) >= budget:
+                break
+
+        seen_emp = set()
+        for vid, emp in plan:
             if DRY:
                 print(f"DRY: смотрел бы вакансию {vid}")
                 viewed += 1
@@ -69,19 +94,33 @@ async def main():
                 viewed += 1
             except Exception:
                 pass
-            # человекоподобная пауза «чтения»
-            await asyncio.sleep(random.uniform(3, 14))
+            await _dwell()
+            # иногда заглянуть на страницу работодателя (проверить компанию)
+            if emp and emp not in seen_emp and random.random() < 0.25:
+                try:
+                    await api.get(f"/employers/{emp}")
+                    seen_emp.add(emp)
+                    employers += 1
+                    await asyncio.sleep(random.uniform(2, 8))
+                except Exception:
+                    pass
 
-        # иногда заглянуть в свои резюме (как живой человек проверяет отклик)
-        if not DRY and random.random() < 0.5:
-            try:
-                await api.get("/resumes/mine")
-            except Exception:
-                pass
+        # иногда проверить свои резюме/отклики (как живой кандидат)
+        if not DRY:
+            if random.random() < 0.5:
+                try:
+                    await api.get("/resumes/mine")
+                except Exception:
+                    pass
+            if random.random() < 0.4:
+                try:
+                    await api.get("/negotiations", per_page=20)
+                except Exception:
+                    pass
     finally:
         await api.aclose()
 
-    print(f"browse: просмотрено вакансий {viewed} (цель {target if vac_ids else 0})")
+    print(f"browse: вакансий {viewed}, работодателей {employers}")
 
 
 if __name__ == "__main__":

@@ -50,6 +50,13 @@ class AddAcc(StatesGroup):
 
 _login_sessions: dict = {}  # chat_id -> onboard.LoginSession (живой браузер)
 
+ADDACC_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="📱 Телефон + код", callback_data="addm:phone:code"),
+     InlineKeyboardButton(text="📱 Телефон + пароль", callback_data="addm:phone:password")],
+    [InlineKeyboardButton(text="📧 Почта + код", callback_data="addm:email:code"),
+     InlineKeyboardButton(text="📧 Почта + пароль", callback_data="addm:email:password")],
+])
+
 
 async def _drop_login(chat_id: int) -> None:
     sess = _login_sessions.pop(chat_id, None)
@@ -326,33 +333,49 @@ async def cmd_addaccount(message: Message, state: FSMContext):
     if message.chat.type != "private":
         return
     await _drop_login(message.chat.id)
+    await state.clear()
+    await message.answer("➕ Новый hh-аккаунт. Выбери способ входа:",
+                         reply_markup=ADDACC_KB)
+
+
+@dp.callback_query(F.data.startswith("addm:"))
+async def cb_addmethod(cq: CallbackQuery, state: FSMContext):
+    await cq.answer()
+    try:
+        _, medium, mode = cq.data.split(":")
+    except ValueError:
+        return
+    await _drop_login(cq.message.chat.id)
     await state.set_state(AddAcc.login)
-    await message.answer(
-        "➕ Новый hh-аккаунт.\nЛогин hh — email или телефон (напр. +79991234567):"
-    )
+    await state.update_data(medium=medium, mode=mode, password="")
+    hint = "телефон (напр. +79991234567)" if medium == "phone" else "email"
+    await cq.message.answer(f"Логин hh — {hint}:")
 
 
 @dp.message(AddAcc.login)
 async def acc_login(message: Message, state: FSMContext):
     import onboard
     login = (message.text or "").strip()
-    await state.update_data(login=login, password="")
-    if "@" in login:  # email -> спросим пароль
+    d = await state.get_data()
+    medium, mode = d.get("medium", "phone"), d.get("mode", "code")
+    await state.update_data(login=login)
+    if mode == "password":           # спросим пароль, вход — на следующем шаге
         await state.set_state(AddAcc.password)
         await message.answer("Пароль hh (удалю сообщение сразу):")
         return
-    # телефон -> сразу открываем браузер и отправляем код по SMS
-    await message.answer("⏳ Открываю hh и отправляю код по SMS… ~минуту.")
+    # mode == code -> сразу открываем браузер и просим hh выслать код
+    await message.answer("⏳ Открываю hh и запрашиваю код… ~минуту.")
     sess = onboard.LoginSession()
     _login_sessions[message.chat.id] = sess
     try:
-        st = await sess.start(login, "")
+        st = await sess.start(login, "", medium, "code")
     except Exception as e:
         await _addacc_fail(message, state, e)
         return
     if st == "need_code":
         await state.set_state(AddAcc.code)
-        await message.answer("📲 Введи код из SMS:")
+        dest = "SMS" if medium == "phone" else "почту"
+        await message.answer(f"📲 Введи код (hh выслал на {dest}):")
     else:
         await state.set_state(AddAcc.salary)
         await message.answer("Желаемая зарплата (напр. 200 000–300 000 ₽):")
@@ -367,12 +390,13 @@ async def acc_password(message: Message, state: FSMContext):
     except Exception:
         pass
     d = await state.get_data()
+    medium = d.get("medium", "email")
     await state.update_data(password=pw)
     await message.answer("⏳ Авторизую hh через браузер… ~минуту, подожди.")
     sess = onboard.LoginSession()
     _login_sessions[message.chat.id] = sess
     try:
-        st = await sess.start(d["login"], pw)
+        st = await sess.start(d["login"], pw, medium, "password")
     except Exception as e:
         await _addacc_fail(message, state, e)
         return
@@ -470,10 +494,9 @@ async def acc_salary(message: Message, state: FSMContext):
 async def cb_addacc(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
     await _drop_login(cq.message.chat.id)
-    await state.set_state(AddAcc.login)
-    await cq.message.answer(
-        "➕ Новый hh-аккаунт.\nЛогин hh — email или телефон (напр. +79991234567):"
-    )
+    await state.clear()
+    await cq.message.answer("➕ Новый hh-аккаунт. Выбери способ входа:",
+                            reply_markup=ADDACC_KB)
 
 
 @dp.callback_query(F.data == "connect")

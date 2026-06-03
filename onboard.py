@@ -54,7 +54,8 @@ class LoginSession:
         self.page = None
         self.oauth = None
         self.login = ""
-        self.is_phone = False
+        self.medium = "phone"   # 'phone' | 'email'
+        self.mode = "code"      # 'code'  | 'password'
         self.web_state = None
 
     async def _shot(self):
@@ -127,16 +128,40 @@ class LoginSession:
                 await sb.click()
                 await self.page.wait_for_timeout(2500)
 
-    async def _enter_email(self, email, password) -> None:
-        r = await self.page.query_selector('input[data-qa="credential-type-EMAIL"]')
+    async def _select_tab(self, medium) -> None:
+        qa = ("credential-type-PHONE" if medium == "phone"
+              else "credential-type-EMAIL")
+        r = await self.page.query_selector(f'input[data-qa="{qa}"]')
         if r:
             await r.click(force=True)
             await self.page.wait_for_timeout(700)
-        if not await self._fill(
-            ['input[data-qa="applicant-login-input-email"]', 'input[name="username"]'],
-            email,
-        ):
-            raise OnboardError("не нашёл поле email на странице hh", await self._shot())
+
+    async def _enter_login(self, login, medium) -> None:
+        if medium == "phone":
+            digits = re.sub(r"\D", "", login)
+            if len(digits) == 11 and digits[0] in "78":
+                digits = digits[1:]
+            nat = await self.page.query_selector(
+                'input[data-qa="magritte-phone-input-national-number-input"]'
+            )
+            if not nat:
+                raise OnboardError(
+                    "не нашёл поле телефона на странице hh", await self._shot()
+                )
+            await nat.click()
+            await nat.fill(digits)
+        else:
+            if not await self._fill(
+                ['input[data-qa="applicant-login-input-email"]',
+                 'input[name="username"]'],
+                login,
+            ):
+                raise OnboardError(
+                    "не нашёл поле email на странице hh", await self._shot()
+                )
+        await self.page.wait_for_timeout(500)
+
+    async def _enter_password(self, password) -> None:
         exp = await self.page.query_selector('button[data-qa="expand-login-by-password"]')
         if exp:
             try:
@@ -150,28 +175,11 @@ class LoginSession:
             password,
         ):
             raise OnboardError(
-                "не нашёл поле пароля — hh мог сразу запросить вход по коду.",
+                "не нашёл поле пароля — hh, видимо, требует вход по КОДУ. "
+                "Выбери вариант «по коду».",
                 await self._shot(),
             )
         await self._click_submit()
-
-    async def _enter_phone(self, phone) -> None:
-        r = await self.page.query_selector('input[data-qa="credential-type-PHONE"]')
-        if r:
-            await r.click(force=True)
-            await self.page.wait_for_timeout(700)
-        digits = re.sub(r"\D", "", phone)
-        if len(digits) == 11 and digits[0] in "78":
-            digits = digits[1:]
-        nat = await self.page.query_selector(
-            'input[data-qa="magritte-phone-input-national-number-input"]'
-        )
-        if not nat:
-            raise OnboardError("не нашёл поле телефона на странице hh", await self._shot())
-        await nat.click()
-        await nat.fill(digits)
-        await self.page.wait_for_timeout(500)
-        await self._click_submit()  # «Дальше» -> отправляет код по SMS
 
     def _on_login(self) -> bool:
         """Мы всё ещё на странице логина hh? (по PATH, не по подстроке — иначе
@@ -203,10 +211,11 @@ class LoginSession:
             "неверный логин/пароль — hh не пустил дальше.", await self._shot()
         )
 
-    async def start(self, login, password) -> str:
+    async def start(self, login, password="", medium="phone", mode="code") -> str:
         login = (login or "").strip()
         self.login = login
-        self.is_phone = "@" not in login
+        self.medium = medium
+        self.mode = mode
         self._cm = async_playwright()
         self.p = await self._cm.__aenter__()
         self.browser = await self.p.chromium.launch(headless=True)
@@ -214,11 +223,14 @@ class LoginSession:
         self.page = await self.ctx.new_page()
         self.oauth = OAuthClient(user_agent=generate_android_useragent())
         await self._advance_to_credentials()
-        if self.is_phone:
-            await self._enter_phone(login)
+        await self._select_tab(medium)
+        await self._enter_login(login, medium)
+        if mode == "password":
+            await self._enter_password(password)
         else:
-            await self._enter_email(login, password)
-        await self._settle()
+            # «Дальше» -> код по SMS (телефон) / на почту (email)
+            await self._click_submit()
+        await self._settle(for_code=False)
         return await self._state()
 
     async def submit_code(self, code) -> str:

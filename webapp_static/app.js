@@ -77,7 +77,7 @@ function bindToggles(feat) {
     bindToggles(feat);
   } catch (e) {
     if (String(e.message) === "not_linked") {
-      err("Сначала привяжи Telegram: в боте набери /connect");
+      err("Сначала привяжи профиль: в боте набери /link и поделись номером");
     } else {
       err("Ошибка загрузки: " + e.message);
     }

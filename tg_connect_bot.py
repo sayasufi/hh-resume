@@ -23,8 +23,11 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     MenuButtonWebApp,
     Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
     WebAppInfo,
 )
 
@@ -293,6 +296,49 @@ async def cmd_connect(message: Message, state: FSMContext):
     await start_connect(message, state)
 
 
+# ── лёгкая привязка для Mini App (по номеру телефона, без Telethon-сессии) ──
+# Telethon /connect (полный доступ к TG) нужен ТОЛЬКО для ГигаРекрутера. Чтобы
+# открыть профиль/статистику, достаточно сопоставить TG↔hh по телефону.
+
+@dp.message(Command("link"))
+async def cmd_link(message: Message):
+    if message.chat.type != "private":
+        return
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📱 Поделиться номером", request_contact=True)]],
+        resize_keyboard=True, one_time_keyboard=True,
+    )
+    await message.answer(
+        "Чтобы открыть личный профиль, привяжем твой Telegram к hh-аккаунту по "
+        "номеру телефона. Нажми кнопку ниже 👇", reply_markup=kb,
+    )
+
+
+@dp.message(F.contact)
+async def on_contact(message: Message):
+    if message.chat.type != "private":
+        return
+    c = message.contact
+    # только свой контакт (защита от пересланного чужого)
+    if c.user_id and c.user_id != message.from_user.id:
+        await message.answer("Это чужой контакт. Поделись СВОИМ номером.",
+                             reply_markup=ReplyKeyboardRemove())
+        return
+    account = _account_by("hh_phone", c.phone_number)
+    if not account:
+        await message.answer(
+            "❌ Не нашёл hh-аккаунт с таким номером. Убедись, что номер совпадает "
+            "с тем, что в hh, или добавь аккаунт через /addaccount.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+    pgconn.set_app_config("tg_user_id", message.from_user.id, account=account)
+    await message.answer(
+        "✅ Привязано! Открывай профиль кнопкой «📊 Профиль» (слева от поля ввода).",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
 @dp.message(Command("status"))
 async def cmd_status(message: Message):
     if message.chat.type != "private":
@@ -496,8 +542,9 @@ async def main():
     bot = Bot(token)
     await bot.set_my_commands([
         BotCommand(command="start", description="О боте и быстрые действия"),
+        BotCommand(command="link", description="Привязать профиль (по номеру)"),
         BotCommand(command="addaccount", description="Добавить новый hh-аккаунт"),
-        BotCommand(command="connect", description="Подключить Telegram (QR)"),
+        BotCommand(command="connect", description="Подключить Telegram для ГигаРекрутера (QR)"),
         BotCommand(command="status", description="Статус: отклики, приглашения, токен"),
         BotCommand(command="help", description="Помощь"),
     ])

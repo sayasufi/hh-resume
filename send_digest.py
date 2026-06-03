@@ -64,16 +64,21 @@ def mark_sent(ids: list[int]) -> None:
 
 def build_message(rows: list[tuple]) -> str:
     who = _user_label()
-    lines = [f"👤 {who} · уведомлений: {len(rows)}"]
+    lines = [f"👤 {who}  ·  уведомлений: {len(rows)}"]
     last_prio = None
+    n = 0
     for _id, prio, text, link in rows:
         if prio != last_prio:
             emoji, title = BLOCKS.get(prio, ("•", "ПРОЧЕЕ"))
-            lines.append(f"\n{emoji} {title}")
+            lines.append("")           # пустая строка перед блоком
+            lines.append(f"{emoji} {title}")
             last_prio = prio
-        lines.append(f"• {text}")
+            n = 0
+        n += 1
+        lines.append("")               # пустая строка между пунктами
+        lines.append(f"{n}. {text}")
         if link:
-            lines.append(f"  {link}")
+            lines.append(f"   🔗 {link}")
     return "\n".join(lines)
 
 

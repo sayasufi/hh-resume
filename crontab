@@ -39,7 +39,9 @@ SHELL=/bin/bash
 # Watchdog слушателя /connect (привязка Telegram кандидата по QR в ЛС). Раз в
 # минуту: если процесс не запущен — поднять. HH_DB_SCHEMA=u_egor только ради
 # чтения общего telegram-токена; сам матчинг идёт по всем юзерам.
-* * * * * /bin/bash -c 'pgrep -f tg_connect_bot.py >/dev/null || HH_DB_SCHEMA=u_egor setsid /usr/local/bin/python -u /app/tg_connect_bot.py >> /var/log/cron.log 2>&1 < /dev/null &'
+# pgrep-паттерн [t]g... не матчит собственную команду watchdog'а; запуск — в
+# run_listener.sh (чтобы «tg_connect_bot.py» не попадало в строку watchdog'а).
+* * * * * /bin/bash -c 'pgrep -f "[t]g_connect_bot.py" >/dev/null || /bin/bash /app/run_listener.sh'
 
 # Ежедневный heartbeat/мониторинг (токен, vLLM, активность) -> очередь уведомлений.
 # Dead-man-switch: не пришла сводка утром = что-то сломалось. 08:00 МСК (старт дня).

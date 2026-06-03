@@ -44,7 +44,34 @@ class Connect(StatesGroup):
 class AddAcc(StatesGroup):
     login = State()
     password = State()
+    code = State()
     salary = State()
+
+
+_login_sessions: dict = {}  # chat_id -> onboard.LoginSession (живой браузер)
+
+
+async def _drop_login(chat_id: int) -> None:
+    sess = _login_sessions.pop(chat_id, None)
+    if sess is not None:
+        await sess.close()
+
+
+async def _addacc_fail(message, state, exc) -> None:
+    """Сообщить о неудаче онбординга + прислать скриншот экрана hh (диагностика)."""
+    await state.clear()
+    await _drop_login(message.chat.id)
+    shot = getattr(exc, "screenshot", None)
+    cap = f"❌ Не удалось добавить аккаунт: {exc}\nПовтори /addaccount."
+    if shot:
+        try:
+            await message.answer_photo(
+                BufferedInputFile(shot, "hh_login.png"), caption=cap[:1000]
+            )
+            return
+        except Exception:
+            pass
+    await message.answer(cap)
 
 
 START_TEXT = (
@@ -298,46 +325,107 @@ async def got_password(message: Message, state: FSMContext):
 async def cmd_addaccount(message: Message, state: FSMContext):
     if message.chat.type != "private":
         return
+    await _drop_login(message.chat.id)
     await state.set_state(AddAcc.login)
-    await message.answer("➕ Новый hh-аккаунт.\nЛогин hh (email или телефон):")
+    await message.answer(
+        "➕ Новый hh-аккаунт.\nЛогин hh — email или телефон (напр. +79991234567):"
+    )
 
 
 @dp.message(AddAcc.login)
 async def acc_login(message: Message, state: FSMContext):
-    await state.update_data(login=(message.text or "").strip())
-    await state.set_state(AddAcc.password)
-    await message.answer("Пароль hh (удалю сообщение сразу):")
+    import onboard
+    login = (message.text or "").strip()
+    await state.update_data(login=login, password="")
+    if "@" in login:  # email -> спросим пароль
+        await state.set_state(AddAcc.password)
+        await message.answer("Пароль hh (удалю сообщение сразу):")
+        return
+    # телефон -> сразу открываем браузер и отправляем код по SMS
+    await message.answer("⏳ Открываю hh и отправляю код по SMS… ~минуту.")
+    sess = onboard.LoginSession()
+    _login_sessions[message.chat.id] = sess
+    try:
+        st = await sess.start(login, "")
+    except Exception as e:
+        await _addacc_fail(message, state, e)
+        return
+    if st == "need_code":
+        await state.set_state(AddAcc.code)
+        await message.answer("📲 Введи код из SMS:")
+    else:
+        await state.set_state(AddAcc.salary)
+        await message.answer("Желаемая зарплата (напр. 200 000–300 000 ₽):")
 
 
 @dp.message(AddAcc.password)
 async def acc_password(message: Message, state: FSMContext):
+    import onboard
     pw = (message.text or "").strip()
     try:
         await message.delete()
     except Exception:
         pass
+    d = await state.get_data()
     await state.update_data(password=pw)
+    await message.answer("⏳ Авторизую hh через браузер… ~минуту, подожди.")
+    sess = onboard.LoginSession()
+    _login_sessions[message.chat.id] = sess
+    try:
+        st = await sess.start(d["login"], pw)
+    except Exception as e:
+        await _addacc_fail(message, state, e)
+        return
+    if st == "need_code":
+        await state.set_state(AddAcc.code)
+        await message.answer(
+            "📩 hh запросил код подтверждения. Введи код (SMS / почта / приложение):"
+        )
+    else:
+        await state.set_state(AddAcc.salary)
+        await message.answer("Желаемая зарплата (напр. 200 000–300 000 ₽):")
+
+
+@dp.message(AddAcc.code)
+async def acc_code(message: Message, state: FSMContext):
+    code = (message.text or "").strip()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    sess = _login_sessions.get(message.chat.id)
+    if sess is None:
+        await state.clear()
+        await message.answer("Сессия истекла. Повтори /addaccount.")
+        return
+    await message.answer("⏳ Проверяю код…")
+    try:
+        await sess.submit_code(code)
+    except Exception as e:
+        await _addacc_fail(message, state, e)
+        return
     await state.set_state(AddAcc.salary)
     await message.answer("Желаемая зарплата (напр. 200 000–300 000 ₽):")
 
 
 @dp.message(AddAcc.salary)
 async def acc_salary(message: Message, state: FSMContext):
+    import onboard
     d = await state.get_data()
     salary = (message.text or "").strip()
-    await state.clear()
-    await message.answer("⏳ Авторизую hh через браузер… ~минуту, подожди.")
-    import onboard
-    try:
-        token, web_state, me, resumes = await onboard.authorize_hh(
-            d["login"], d["password"]
-        )
-    except Exception as e:
-        await message.answer(
-            f"❌ Не удалось авторизовать hh: {e}\n"
-            "Проверь логин/пароль и повтори /addaccount."
-        )
+    sess = _login_sessions.get(message.chat.id)
+    if sess is None:
+        await state.clear()
+        await message.answer("Сессия истекла. Повтори /addaccount.")
         return
+    await state.clear()
+    await message.answer("⏳ Завершаю авторизацию hh…")
+    try:
+        token, web_state, me, resumes = await sess.finalize()
+    except Exception as e:
+        await _addacc_fail(message, state, e)
+        return
+    await _drop_login(message.chat.id)  # данные получены — браузер больше не нужен
     pub = [r for r in resumes
            if (r.get("status") or {}).get("id") == "published"] or resumes
     if not pub:
@@ -381,8 +469,11 @@ async def acc_salary(message: Message, state: FSMContext):
 @dp.callback_query(F.data == "addacc")
 async def cb_addacc(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
+    await _drop_login(cq.message.chat.id)
     await state.set_state(AddAcc.login)
-    await cq.message.answer("➕ Новый hh-аккаунт.\nЛогин hh (email или телефон):")
+    await cq.message.answer(
+        "➕ Новый hh-аккаунт.\nЛогин hh — email или телефон (напр. +79991234567):"
+    )
 
 
 @dp.callback_query(F.data == "connect")

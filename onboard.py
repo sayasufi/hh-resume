@@ -107,6 +107,25 @@ class LoginSession:
                 except Exception:
                     continue
 
+    async def _click_consent(self) -> None:
+        """Нажать «Продолжить» на экране согласия OAuth (НЕ «другой профиль»)."""
+        for sel in ('button[data-qa="oauth-authorize-submit"]',
+                    'button[data-qa="submit-button"]',
+                    'button[type="submit"]'):
+            el = await self._q(sel)
+            if el:
+                try:
+                    await el.click(timeout=4000)
+                except Exception:
+                    pass  # клик инициирует редирект на hhandroid:// — это ок
+                return
+        try:
+            await self.page.get_by_role(
+                "button", name=re.compile("Продолжить", re.I)
+            ).click(timeout=4000)
+        except Exception:
+            pass
+
     async def _code_input(self):
         for sel in ('input[data-qa="otp-code-input"]',
                     'input[data-qa="account-login-by-code-input"]',
@@ -306,12 +325,22 @@ class LoginSession:
                     fut.set_result(c)
 
         self.page.on("request", on_req)
-        await self.page.goto(self.oauth.authorize_url, wait_until="load", timeout=30000)
         try:
-            code = await asyncio.wait_for(fut, timeout=25)
+            await self.page.goto(self.oauth.authorize_url, wait_until="load",
+                                 timeout=30000)
+        except Exception:
+            pass  # редирект на hhandroid:// может оборвать загрузку — это ок
+        # экран согласия hh («Продолжить») — подтверждаем доступ приложения
+        for _ in range(4):
+            if fut.done():
+                break
+            await self.page.wait_for_timeout(1000)
+            await self._click_consent()
+        try:
+            code = await asyncio.wait_for(fut, timeout=20)
         except asyncio.TimeoutError:
             raise OnboardError(
-                "не удалось получить OAuth-код (нужна доп. авторизация приложения).",
+                "не удалось подтвердить доступ приложения на hh (экран «Продолжить»).",
                 await self._shot(),
             )
         token = await self.oauth.authenticate(code)

@@ -64,19 +64,42 @@ class LoginSession:
         except Exception:
             return None
 
+    async def _q(self, sel):
+        """query_selector, устойчивый к навигации (context destroyed -> None)."""
+        try:
+            return await self.page.query_selector(sel)
+        except Exception:
+            return None
+
+    async def _qall(self, sel):
+        try:
+            return await self.page.query_selector_all(sel)
+        except Exception:
+            return []
+
+    async def _wait_dom(self, ms: int = 8000) -> None:
+        """Дождаться окончания навигации (молча, если её нет/таймаут)."""
+        try:
+            await self.page.wait_for_load_state("domcontentloaded", timeout=ms)
+        except Exception:
+            pass
+
     async def _fill(self, sels, val) -> bool:
         for sel in sels:
-            el = await self.page.query_selector(sel)
+            el = await self._q(sel)
             if el:
-                await el.fill(val)
-                return True
+                try:
+                    await el.fill(val)
+                    return True
+                except Exception:
+                    continue
         return False
 
     async def _click_submit(self) -> None:
         for sel in ('button[data-qa="submit-button"]',
                     'button[data-qa="account-login-submit"]',
                     'button[type="submit"]'):
-            el = await self.page.query_selector(sel)
+            el = await self._q(sel)
             if el:
                 try:
                     await el.click()
@@ -91,11 +114,11 @@ class LoginSession:
                     'input[autocomplete="one-time-code"]',
                     'input[inputmode="numeric"]',
                     'input[name*="code" i]'):
-            el = await self.page.query_selector(sel)
+            el = await self._q(sel)
             if el:
                 return el
         # фолбэк: первое видимое текстовое поле (не username/password)
-        for el in await self.page.query_selector_all("input"):
+        for el in await self._qall("input"):
             try:
                 t = (await el.get_attribute("type")) or "text"
                 if t in ("hidden", "checkbox", "radio", "password"):
@@ -110,7 +133,7 @@ class LoginSession:
         return None
 
     async def _has_captcha(self) -> bool:
-        return bool(await self.page.query_selector(
+        return bool(await self._q(
             'input[data-qa="account-captcha-input"], '
             'img[data-qa="account-captcha-picture"]'
         ))
@@ -122,18 +145,30 @@ class LoginSession:
         # экран 1: карточки соискатель/работодатель -> «Войти» (submit-button)
         cred = ('input[data-qa="credential-type-PHONE"], '
                 'input[data-qa="credential-type-EMAIL"]')
-        if not await self.page.query_selector(cred):
-            sb = await self.page.query_selector('button[data-qa="submit-button"]')
+        if not await self._q(cred):
+            sb = await self._q('button[data-qa="submit-button"]')
             if sb:
-                await sb.click()
-                await self.page.wait_for_timeout(2500)
+                try:
+                    await sb.click()
+                except Exception:
+                    pass
+                await self._wait_dom()
+                await self.page.wait_for_timeout(1500)
+        # дождаться, пока появятся вкладки credential (после навигации)
+        for _ in range(12):
+            if await self._q(cred):
+                break
+            await self.page.wait_for_timeout(500)
 
     async def _select_tab(self, medium) -> None:
         qa = ("credential-type-PHONE" if medium == "phone"
               else "credential-type-EMAIL")
-        r = await self.page.query_selector(f'input[data-qa="{qa}"]')
+        r = await self._q(f'input[data-qa="{qa}"]')
         if r:
-            await r.click(force=True)
+            try:
+                await r.click(force=True)
+            except Exception:
+                pass
             await self.page.wait_for_timeout(700)
 
     async def _enter_login(self, login, medium) -> None:
@@ -141,14 +176,17 @@ class LoginSession:
             digits = re.sub(r"\D", "", login)
             if len(digits) == 11 and digits[0] in "78":
                 digits = digits[1:]
-            nat = await self.page.query_selector(
+            nat = await self._q(
                 'input[data-qa="magritte-phone-input-national-number-input"]'
             )
             if not nat:
                 raise OnboardError(
                     "не нашёл поле телефона на странице hh", await self._shot()
                 )
-            await nat.click()
+            try:
+                await nat.click()
+            except Exception:
+                pass
             await nat.fill(digits)
         else:
             if not await self._fill(
@@ -162,7 +200,7 @@ class LoginSession:
         await self.page.wait_for_timeout(500)
 
     async def _enter_password(self, password) -> None:
-        exp = await self.page.query_selector('button[data-qa="expand-login-by-password"]')
+        exp = await self._q('button[data-qa="expand-login-by-password"]')
         if exp:
             try:
                 await exp.click()
@@ -230,6 +268,7 @@ class LoginSession:
         else:
             # «Дальше» -> код по SMS (телефон) / на почту (email)
             await self._click_submit()
+        await self._wait_dom()
         await self._settle(for_code=False)
         return await self._state()
 

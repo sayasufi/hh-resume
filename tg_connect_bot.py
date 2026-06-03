@@ -23,8 +23,12 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    MenuButtonWebApp,
     Message,
+    WebAppInfo,
 )
+
+WEBAPP_URL = "https://tgbot-afisha.ru"
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import StringSession
@@ -497,6 +501,14 @@ async def main():
         BotCommand(command="status", description="Статус: отклики, приглашения, токен"),
         BotCommand(command="help", description="Помощь"),
     ])
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="📊 Профиль", web_app=WebAppInfo(url=WEBAPP_URL)
+            )
+        )
+    except Exception as e:
+        print("set_chat_menu_button:", repr(e)[:80])
     print("tg_connect_bot (aiogram): меню установлено, слушаю команды…")
     try:
         await dp.start_polling(bot)

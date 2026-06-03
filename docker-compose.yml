@@ -27,6 +27,9 @@ services:
       - .:/app
       # Пробрасываем таймзону хоста
       - /etc/localtime:/etc/localtime:ro
+    # Mini App бэкенд (uvicorn) — только на localhost хоста; наружу через nginx+TLS
+    ports:
+      - "127.0.0.1:60080:60080"
     restart: unless-stopped
     environment:
       # Это не трогаем

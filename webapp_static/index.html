@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>hh · Профиль</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="head">
+      <div id="hname">Загрузка…</div>
+      <div id="hstatus" class="hint"></div>
+    </header>
+
+    <main>
+      <section id="tab-profile" class="tab active">
+        <div class="card"><span class="k">Имя</span><span class="v" id="p-name">—</span></div>
+        <div class="card"><span class="k">hh ID</span><span class="v" id="p-id">—</span></div>
+        <div class="card"><span class="k">Резюме</span><span class="v" id="p-resume">—</span></div>
+        <div class="card"><span class="k">Желаемая зарплата</span><span class="v" id="p-salary">—</span></div>
+        <div class="card"><span class="k">Статус</span><span class="v" id="p-status">—</span></div>
+      </section>
+
+      <section id="tab-stats" class="tab">
+        <div class="grid">
+          <div class="stat"><div class="num" id="s-apps">—</div><div class="lbl">Откликов всего</div></div>
+          <div class="stat"><div class="num" id="s-today">—</div><div class="lbl">Откликов сегодня</div></div>
+          <div class="stat"><div class="num" id="s-views">—</div><div class="lbl">Просмотров резюме</div></div>
+          <div class="stat"><div class="num" id="s-resp">—</div><div class="lbl">Ответов</div></div>
+          <div class="stat"><div class="num" id="s-inv">—</div><div class="lbl">Приглашений</div></div>
+          <div class="stat"><div class="num" id="s-intv">—</div><div class="lbl">Интервью</div></div>
+        </div>
+        <div class="funnel-title">Воронка</div>
+        <div id="funnel"></div>
+      </section>
+
+      <section id="tab-feat" class="tab">
+        <div class="hint feat-hint">Включай и выключай функции. Применяется сразу.</div>
+        <label class="toggle"><span><b>Отклики</b><small>авто-отклики + тесты</small></span>
+          <input type="checkbox" data-feat="apply"><i></i></label>
+        <label class="toggle"><span><b>Ответы работодателям</b><small>авто-ответы на сообщения</small></span>
+          <input type="checkbox" data-feat="reply"><i></i></label>
+        <label class="toggle"><span><b>Активность + поднятие</b><small>просмотр вакансий, авто-bump резюме</small></span>
+          <input type="checkbox" data-feat="browse"><i></i></label>
+        <label class="toggle"><span><b>ГигаРекрутер + уведомления</b><small>авто-интервью, дайджест в TG</small></span>
+          <input type="checkbox" data-feat="giga"><i></i></label>
+      </section>
+    </main>
+
+    <nav id="tabs">
+      <button class="active" data-tab="profile">👤 Профиль</button>
+      <button data-tab="stats">📊 Статистика</button>
+      <button data-tab="feat">⚙️ Функции</button>
+    </nav>
+  </div>
+  <div id="err" class="hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

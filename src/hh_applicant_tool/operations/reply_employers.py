@@ -157,6 +157,10 @@ class Operation(BaseOperation):
         )
 
     async def run(self, tool: HHApplicantTool) -> None:
+        from ..storage import pgconn
+        if not pgconn.feature_enabled("reply"):
+            print("feat.reply выключен в Mini App — пропуск reply-employers")
+            return
         args: Namespace = tool.args
         self.tool = tool
         self.api_client = tool.api_client

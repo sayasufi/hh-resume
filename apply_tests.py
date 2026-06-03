@@ -255,6 +255,9 @@ async def fill_task(page, task, llm, vname):
 
 
 async def main():
+    if not pgconn.feature_enabled("apply"):
+        print("feat.apply выключен в Mini App — пропуск apply_tests")
+        return
     cfg = pgconn.app_config()
     user, pw = creds()
     tok = cfg["token"]; oa = cfg["openai"]

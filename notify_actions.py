@@ -46,6 +46,9 @@ PRIO = {
 
 
 async def main():
+    if not pgconn.feature_enabled("giga"):
+        print("feat.giga выключен в Mini App — пропуск notify_actions")
+        return
     cfg = pgconn.app_config()
     tok = cfg["token"]
     oa = cfg["openai"]

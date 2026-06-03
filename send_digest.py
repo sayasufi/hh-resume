@@ -101,6 +101,9 @@ async def tg_send(token: str, chat_id, text: str, topic_id=None) -> bool:
 
 
 async def main() -> None:
+    if not pgconn.feature_enabled("giga"):
+        print("feat.giga выключен в Mini App — дайджест пропущен")
+        return
     rows = fetch_unsent()
     if not rows:
         print("дайджест: нет новых уведомлений")

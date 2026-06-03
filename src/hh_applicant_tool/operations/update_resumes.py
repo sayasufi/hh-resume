@@ -29,6 +29,10 @@ class Operation(BaseOperation):
         pass
 
     async def run(self, tool: HHApplicantTool) -> None:
+        from ..storage import pgconn
+        if not pgconn.feature_enabled("browse"):
+            print("feat.browse выключен в Mini App — пропуск update-resumes")
+            return
         resumes: list[datatypes.Resume] = await tool.get_resumes()
         # Там вызов API меняет поля
         await tool.storage.resumes.save_batch(resumes)

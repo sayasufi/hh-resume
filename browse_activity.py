@@ -30,6 +30,9 @@ async def _dwell():
 
 
 async def main():
+    if not pgconn.feature_enabled("browse"):
+        print("feat.browse выключен в Mini App — пропуск browse_activity")
+        return
     cfg = pgconn.app_config()
     tok = cfg.get("token") or {}
     if not tok.get("access_token"):

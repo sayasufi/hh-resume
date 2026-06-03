@@ -273,6 +273,11 @@ class Operation(BaseOperation):
         self,
         tool: HHApplicantTool,
     ) -> None:
+        # Тумблер Mini App: отклики можно выключить
+        from ..storage import pgconn
+        if not pgconn.feature_enabled("apply"):
+            print("feat.apply выключен в Mini App — пропуск apply-similar")
+            return
         # Проверяем, что процесс запущен в Docker контейнере
         import os
         from pathlib import Path

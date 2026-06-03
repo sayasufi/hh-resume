@@ -234,9 +234,9 @@ def register_user(name: str, account: str) -> None:
         conn.close()
 
 
-def get_setting(key: str, default=None):
+def get_setting(key: str, default=None, account: str | None = None):
     import json as _json
-    acc = get_account()
+    acc = account or get_account()
     conn = connect()
     try:
         with conn.cursor() as cur:
@@ -252,6 +252,28 @@ def get_setting(key: str, default=None):
         return _json.loads(row[0])
     except (ValueError, TypeError):
         return row[0]
+
+
+def set_setting(key: str, value, account: str | None = None) -> None:
+    """Запись settings (значение json-кодируется, как читает get_setting)."""
+    import json as _json
+    acc = account or get_account()
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO settings(account, key, value) VALUES (%s, %s, %s) "
+                "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value",
+                (acc, key, _json.dumps(value, ensure_ascii=False)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def feature_enabled(feat: str, account: str | None = None) -> bool:
+    """Тумблер функции из Mini App. Ключ settings `feat.<feat>`, по умолчанию ВКЛ."""
+    return bool(get_setting(f"feat.{feat}", True, account=account))
 
 
 def seen_keys(kind: str) -> set:

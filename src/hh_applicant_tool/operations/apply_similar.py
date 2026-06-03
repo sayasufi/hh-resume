@@ -749,6 +749,12 @@ class Operation(BaseOperation):
                         msg += f"\nНазвание моего резюме: {message_placeholders['resume_title']}\n"
                         if full_name:
                             msg += f"Мое полное имя: {full_name}\n"
+                        # Город — из hh-резюме (area.name), уже есть в self._full_resume
+                        # (без доп. запроса). Чтобы письмо не привязывало кандидата к
+                        # городу вуза из resume_text (напр. Волгоград вместо Москвы).
+                        _city = (self._full_resume.get("area") or {}).get("name")
+                        if _city:
+                            msg += f"Мой город: {_city}\n"
                         if experience_text:
                             msg += f"\n{experience_text}\n"
                         if skills_text:

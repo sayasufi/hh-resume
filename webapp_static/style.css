@@ -64,3 +64,33 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
 
 #err { position: fixed; left: 14px; right: 14px; bottom: 70px; background: #e0394a;
   color: #fff; padding: 12px 16px; border-radius: 12px; font-size: 14px; text-align: center; }
+
+.sec-title { margin: 22px 4px 10px; font-weight: 700; font-size: 16px; }
+
+/* тренд-график */
+#trend .chart { width: 100%; height: 110px; }
+#trend .chart path { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+#trend .chart circle { fill: var(--accent); }
+.chart-x { display: flex; justify-content: space-between; color: var(--hint);
+  font-size: 11px; padding: 2px 2px 0; }
+
+/* отклики/диалоги */
+.dlg { background: var(--card); border-radius: 14px; padding: 12px 14px; margin-bottom: 9px; }
+.dlg-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.dlg-st { font-size: 13px; font-weight: 600; }
+.dlg-date { color: var(--hint); font-size: 12px; }
+.dlg-title { font-weight: 600; font-size: 15px; }
+.dlg-emp { color: var(--hint); font-size: 13px; margin-top: 2px; }
+
+/* редактируемые настройки */
+.cfg { margin-bottom: 6px; }
+.cfgrow { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  background: var(--card); border-radius: 14px; padding: 11px 15px; margin-bottom: 9px; }
+.cfgrow span { font-size: 14px; }
+.cfgrow input, .cfgrow select { background: transparent; border: none; color: var(--text);
+  font-size: 15px; font-weight: 600; text-align: right; max-width: 55%; outline: none;
+  font-family: inherit; }
+.cfgrow input.busy, .cfgrow select.busy { opacity: .5; }
+
+#tabs button { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 18px; }
+#tabs button span { font-size: 11px; }

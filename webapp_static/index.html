@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>hh · Профиль</title>
+  <title>hh · Кабинет</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -32,27 +32,46 @@
           <div class="stat"><div class="num" id="s-inv">—</div><div class="lbl">Приглашений</div></div>
           <div class="stat"><div class="num" id="s-intv">—</div><div class="lbl">Интервью</div></div>
         </div>
-        <div class="funnel-title">Воронка</div>
+        <div class="sec-title">Воронка</div>
         <div id="funnel"></div>
+        <div class="sec-title">Динамика откликов</div>
+        <div id="trend"></div>
+      </section>
+
+      <section id="tab-dialogs" class="tab">
+        <div class="hint feat-hint">Куда откликнулись и что ответили работодатели.</div>
+        <div id="dialogs"></div>
       </section>
 
       <section id="tab-feat" class="tab">
-        <div class="hint feat-hint">Включай и выключай функции. Применяется сразу.</div>
+        <div class="sec-title">Настройки</div>
+        <div class="cfg">
+          <label class="cfgrow"><span>Желаемая зарплата, ₽</span>
+            <input type="number" id="cfg-salary" inputmode="numeric" placeholder="напр. 250000"></label>
+          <label class="cfgrow"><span>Лимит откликов в день</span>
+            <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></label>
+          <label class="cfgrow"><span>Активное резюме</span>
+            <select id="cfg-resume"></select></label>
+        </div>
+
+        <div class="sec-title">Функции</div>
+        <div class="hint feat-hint">Включай и выключай. Применяется сразу.</div>
         <label class="toggle"><span><b>Отклики</b><small>авто-отклики + тесты</small></span>
           <input type="checkbox" data-feat="apply"><i></i></label>
         <label class="toggle"><span><b>Ответы работодателям</b><small>авто-ответы на сообщения</small></span>
           <input type="checkbox" data-feat="reply"><i></i></label>
-        <label class="toggle"><span><b>Активность + поднятие</b><small>просмотр вакансий, авто-bump резюме</small></span>
+        <label class="toggle"><span><b>Активность + поднятие</b><small>просмотр вакансий, авто-bump</small></span>
           <input type="checkbox" data-feat="browse"><i></i></label>
-        <label class="toggle"><span><b>ГигаРекрутер + уведомления</b><small>авто-интервью, дайджест в TG</small></span>
+        <label class="toggle"><span><b>ГигаРекрутер + уведомления</b><small>авто-интервью, дайджест</small></span>
           <input type="checkbox" data-feat="giga"><i></i></label>
       </section>
     </main>
 
     <nav id="tabs">
-      <button class="active" data-tab="profile">👤 Профиль</button>
-      <button data-tab="stats">📊 Статистика</button>
-      <button data-tab="feat">⚙️ Функции</button>
+      <button class="active" data-tab="profile">👤<span>Профиль</span></button>
+      <button data-tab="stats">📊<span>Статистика</span></button>
+      <button data-tab="dialogs">📋<span>Отклики</span></button>
+      <button data-tab="feat">⚙️<span>Функции</span></button>
     </nav>
   </div>
   <div id="err" class="hidden"></div>

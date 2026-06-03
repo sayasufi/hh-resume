@@ -18,7 +18,7 @@ import psycopg
 
 from . import ai, api, utils
 from .storage import StorageFacade
-from .storage.pgconn import aconnect
+from .storage.pgconn import aconnect, locked_token_refresh
 from .utils.log import setup_logger
 from .utils.mixins import MegaTool
 
@@ -180,6 +180,7 @@ class HHApplicantTool(MegaTool):
             delay=args.api_delay or config.get("api_delay"),
             user_agent=args.user_agent or config.get("user_agent"),
             proxy=self._proxy_url(),
+            refresh_hook=locked_token_refresh,
         )
 
     async def get_me(self) -> api.datatypes.User:

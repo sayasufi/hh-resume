@@ -70,6 +70,7 @@ async def main():
         refresh_token=tok["refresh_token"],
         access_expires_at=tok["access_expires_at"],
         user_agent=generate_android_useragent(),
+        refresh_hook=pgconn.locked_token_refresh,
     )
     chat = ChatOpenAI(
         token=oa["token"], model=oa.get("model"),

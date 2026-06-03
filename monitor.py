@@ -76,6 +76,7 @@ async def main():
             refresh_token=tok.get("refresh_token"),
             access_expires_at=exp,
             user_agent=generate_android_useragent(),
+            refresh_hook=pgconn.locked_token_refresh,
         )
         try:
             me = await api.get("/me")

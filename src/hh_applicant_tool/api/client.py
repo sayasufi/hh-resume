@@ -204,6 +204,9 @@ class ApiClient(BaseClient):
     client_id: str | None = None
     client_secret: str | None = None
     base_url: str = HH_API_URL
+    # Координатор обновления токена (pgconn.locked_token_refresh) — под advisory-lock.
+    # Если задан, refresh_access_token делегирует ему (защита от гонки + сохранение в PG).
+    refresh_hook: Any = None
 
     @property
     def is_access_expired(self) -> bool:
@@ -256,6 +259,11 @@ class ApiClient(BaseClient):
     async def refresh_access_token(self) -> None:
         if not self.refresh_token:
             raise ValueError("Refresh token required.")
+        # Если задан координатор — обновляем под advisory-lock с перечитыванием
+        # токена из PG (защита от гонки одновременных refresh).
+        if self.refresh_hook is not None:
+            await self.refresh_hook(self)
+            return
         token = await self.oauth_client.refresh_access_token(self.refresh_token)
         self.handle_access_token(token)
 

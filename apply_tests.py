@@ -177,7 +177,8 @@ async def main():
     user, pw = creds()
     tok = cfg["token"]; oa = cfg["openai"]
     api = ApiClient(access_token=tok["access_token"], refresh_token=tok["refresh_token"],
-                    access_expires_at=tok["access_expires_at"], user_agent=generate_android_useragent())
+                    access_expires_at=tok["access_expires_at"], user_agent=generate_android_useragent(),
+                    refresh_hook=pgconn.locked_token_refresh)
     resume = (cfg.get("resume_text") or "").strip()
     salary = (cfg.get("preferences") or {}).get("salary")
     sysp = SYS_BASE

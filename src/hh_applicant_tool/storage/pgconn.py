@@ -105,6 +105,55 @@ def connect(ensure: bool = False) -> psycopg.Connection:
     return conn
 
 
+async def locked_token_refresh(api_client) -> bool:
+    """Обновление OAuth-токена под advisory-lock (защита от гонки одновременных
+    refresh: cron-refresh каждую минуту vs 403-refresh внутри долгой команды).
+
+    HH ротирует refresh_token (часто одноразовый) — два параллельных refresh с
+    одним и тем же refresh_token разлогинят юзера. Здесь: берём
+    pg_advisory_xact_lock на схему; перечитываем токен из PG — если другой
+    процесс уже обновил (валиден) — принимаем его БЕЗ повторного refresh; иначе
+    обновляем через HH и сохраняем. Всё в одной транзакции (lock снимается на
+    commit). Возвращает True при успехе."""
+    import json as _json
+    import time as _time
+
+    schema = get_schema()
+    conn = await psycopg.AsyncConnection.connect(get_dsn())
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute(f'SET search_path TO "{schema}"')
+            # сериализуем refresh по юзеру (блокирует конкурентов до commit)
+            await cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))", (schema + ":token",)
+            )
+            await cur.execute(
+                "SELECT value FROM app_config WHERE key = 'token'"
+            )
+            row = await cur.fetchone()
+            pg_tok = row[0] if row else None
+            # кто-то уже обновил, пока мы ждали лок — принимаем его токен
+            if pg_tok and pg_tok.get("access_expires_at", 0) > _time.time() + 30:
+                api_client.handle_access_token(pg_tok)
+                await conn.commit()
+                return True
+            # всё ещё истёк — реально обновляем через HH под локом
+            new = await api_client.oauth_client.refresh_access_token(
+                api_client.refresh_token
+            )
+            api_client.handle_access_token(new)
+            await cur.execute(
+                "INSERT INTO app_config(key, value) VALUES ('token', %s::jsonb) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = now()",
+                (_json.dumps(new, ensure_ascii=False),),
+            )
+            await conn.commit()
+            return True
+    finally:
+        await conn.close()
+
+
 async def aconnect(ensure: bool = False) -> psycopg.AsyncConnection:
     """Async-соединение (для storage) с search_path на схему юзера.
     ensure=False по умолчанию — DDL провижинится отдельно (см. connect)."""

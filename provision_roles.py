@@ -15,6 +15,7 @@
 import secrets
 
 import psycopg
+from psycopg import sql
 
 from hh_applicant_tool.storage.pgconn import (
     TABLES_DDL,
@@ -60,12 +61,18 @@ def main() -> None:
                         (pw, schema),
                     )
 
-                # 3) login-роль (создать или обновить пароль)
+                # 3) login-роль (создать или обновить пароль). CREATE/ALTER ROLE —
+                #    utility-стейтменты, НЕ принимают bind-параметры → инлайним
+                #    пароль безопасно через sql.Literal (экранирование psycopg).
+                verb = "ALTER"
                 cur.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (role,))
-                if cur.fetchone():
-                    cur.execute(f"ALTER ROLE {qr} LOGIN PASSWORD %s", (pw,))
-                else:
-                    cur.execute(f"CREATE ROLE {qr} LOGIN PASSWORD %s", (pw,))
+                if not cur.fetchone():
+                    verb = "CREATE"
+                cur.execute(
+                    sql.SQL("{} ROLE {} LOGIN PASSWORD {}").format(
+                        sql.SQL(verb), sql.Identifier(role), sql.Literal(pw)
+                    )
+                )
 
                 # 4) гранты ТОЛЬКО на свою схему (без CREATE → не плодит таблицы;
                 #    к чужим u_*-схемам и к public.app_users доступа нет по умолчанию)

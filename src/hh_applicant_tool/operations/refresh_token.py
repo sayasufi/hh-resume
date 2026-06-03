@@ -27,10 +27,11 @@ class Operation(BaseOperation):
 
     async def run(self, tool: HHApplicantTool) -> None:
         if tool.api_client.is_access_expired:
+            # refresh_access_token идёт через locked_token_refresh (advisory-lock):
+            # он сам сохраняет токен в PG под локом. save_token — фолбэк для пути
+            # без хука; его False здесь означает «уже сохранено», а не ошибку (#7).
             await tool.api_client.refresh_access_token()
-            if not tool.save_token():
-                print("⚠️ Токен не был обновлен!")
-                return 1
+            tool.save_token()
             print("✅ Токен успешно обновлен.")
         else:
             # logger.debug("Токен валиден, игнорируем обновление.")

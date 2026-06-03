@@ -507,38 +507,20 @@ class Operation(BaseOperation):
             try:
                 employer = vacancy.get("employer", {})
                 
-                # Получаем полное описание вакансии для более точной генерации письма
+                # Реквизиты из snippet — они уже есть в выдаче поиска, без доп.
+                # запроса. Полное описание (GET /vacancies/{id}) тянем ЛЕНИВО, ниже
+                # внутри блока AI-письма — только для вакансий, прошедших ВСЕ фильтры
+                # и реально требующих письма (#21). Раньше этот запрос делался для
+                # каждой вакансии, в т.ч. пропущенной (has_test/archived/relations/…).
                 vacancy_description = ""
                 vacancy_requirements = ""
                 vacancy_responsibilities = ""
-                try:
-                    full_vacancy = await self.api_client.get(f"/vacancies/{vacancy['id']}")
-                    if full_vacancy.get("description"):
-                        # Очищаем HTML теги из описания
-                        desc = full_vacancy["description"]
-                        # Удаляем HTML теги
-                        desc = re.sub(r'<[^>]+>', '', desc)
-                        # Заменяем HTML entities
-                        desc = desc.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
-                        # Ограничиваем длину
-                        vacancy_description = desc[:2000] + "..." if len(desc) > 2000 else desc
-                    
-                    # Также используем snippet если есть
-                    if vacancy.get("snippet"):
-                        snippet = vacancy["snippet"]
-                        if snippet.get("requirement"):
-                            vacancy_requirements = snippet["requirement"][:500]
-                        if snippet.get("responsibility"):
-                            vacancy_responsibilities = snippet["responsibility"][:500]
-                except Exception as ex:
-                    logger.debug(f"Не удалось получить полное описание вакансии {vacancy.get('id')}: {ex}")
-                    # Используем только snippet если полная вакансия недоступна
-                    if vacancy.get("snippet"):
-                        snippet = vacancy["snippet"]
-                        if snippet.get("requirement"):
-                            vacancy_requirements = snippet["requirement"][:500]
-                        if snippet.get("responsibility"):
-                            vacancy_responsibilities = snippet["responsibility"][:500]
+                if vacancy.get("snippet"):
+                    snippet = vacancy["snippet"]
+                    if snippet.get("requirement"):
+                        vacancy_requirements = snippet["requirement"][:500]
+                    if snippet.get("responsibility"):
+                        vacancy_responsibilities = snippet["responsibility"][:500]
 
                 message_placeholders = {
                     "vacancy_name": vacancy.get("name", ""),
@@ -643,6 +625,34 @@ class Operation(BaseOperation):
                     "response_letter_required"
                 ):
                     if self.openai_chat:
+                        # Ленивая загрузка полного описания вакансии (#21): только
+                        # здесь оно реально нужно — для качественного AI-письма.
+                        try:
+                            full_vacancy = await self.api_client.get(
+                                f"/vacancies/{vacancy['id']}"
+                            )
+                            if full_vacancy.get("description"):
+                                desc = re.sub(
+                                    r"<[^>]+>", "", full_vacancy["description"]
+                                )
+                                desc = (
+                                    desc.replace("&nbsp;", " ")
+                                    .replace("&amp;", "&")
+                                    .replace("&lt;", "<")
+                                    .replace("&gt;", ">")
+                                )
+                                message_placeholders["vacancy_description"] = (
+                                    desc[:2000] + "..."
+                                    if len(desc) > 2000
+                                    else desc
+                                )
+                        except Exception as ex:
+                            logger.debug(
+                                "Не удалось получить полное описание вакансии %s: %s",
+                                vacancy.get("id"),
+                                ex,
+                            )
+
                         # Формируем полное имя пользователя (Фамилия Имя Отчество)
                         full_name_parts = []
                         if message_placeholders.get("last_name"):

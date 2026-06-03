@@ -207,6 +207,9 @@ class ApiClient(BaseClient):
     # Координатор обновления токена (pgconn.locked_token_refresh) — под advisory-lock.
     # Если задан, refresh_access_token делегирует ему (защита от гонки + сохранение в PG).
     refresh_hook: Any = None
+    # Выставляется хуком, когда токен уже записан в PG под локом — тогда внешнему
+    # save_token повторная запись не нужна (см. #7: убираем вторую транзакцию).
+    _token_persisted: bool = False
 
     @property
     def is_access_expired(self) -> bool:
@@ -225,7 +228,14 @@ class ApiClient(BaseClient):
         headers = super()._default_headers()
         if not self.access_token:
             return headers
-        assert self.access_token.startswith("USER")
+        # Раньше был assert (#22): он ронял процесс и отключается под `python -O`.
+        # Мягкая проверка — HH-токены начинаются с 'USER'; иначе просто предупреждаем,
+        # но запрос всё равно уходит (пусть HH сам вернёт 403, если токен битый).
+        if not self.access_token.startswith("USER"):
+            logger.warning(
+                "access_token не начинается с 'USER' (len=%d) — возможно повреждён",
+                len(self.access_token),
+            )
         return headers | {"authorization": f"Bearer {self.access_token}"}
 
     async def request(

@@ -223,6 +223,11 @@ class HHApplicantTool(MegaTool):
                 break
 
     def save_token(self) -> bool:
+        # Токен уже записан в PG под advisory-lock (locked_token_refresh) —
+        # вторая транзакция не нужна (#7). Сохраняем только для пути без хука
+        # (например, initial authorize), где _token_persisted остался False.
+        if getattr(self.api_client, "_token_persisted", False):
+            return False
         if self.api_client.access_token != self.config.get("token", {}).get(
             "access_token"
         ):

@@ -136,6 +136,8 @@ async def locked_token_refresh(api_client) -> bool:
             if pg_tok and pg_tok.get("access_expires_at", 0) > _time.time() + 30:
                 api_client.handle_access_token(pg_tok)
                 await conn.commit()
+                # PG уже содержит актуальный токен — save_token не нужен (#7)
+                api_client._token_persisted = True
                 return True
             # всё ещё истёк — реально обновляем через HH под локом
             new = await api_client.oauth_client.refresh_access_token(
@@ -149,6 +151,8 @@ async def locked_token_refresh(api_client) -> bool:
                 (_json.dumps(new, ensure_ascii=False),),
             )
             await conn.commit()
+            # токен записан в PG под локом — внешний save_token избыточен (#7)
+            api_client._token_persisted = True
             return True
     finally:
         await conn.close()

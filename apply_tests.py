@@ -122,14 +122,21 @@ async def web_login(page, user, pw):
 
 
 async def fill_task(page, task, llm, vname):
-    """Вернёт (ok, question, answer_repr)."""
+    """Вернёт (status, question, repr). status:
+    'ok' — заполнено; 'manual' — форму авто-заполнить нельзя (помечаем seen);
+    'transient' — временный сбой LLM/сети (НЕ помечаем seen, повторим)."""
+    from hh_applicant_tool.ai.openai import OpenAIError
+
     q = task["question"] or "Ответьте на вопрос"
     if task["type"] == "text":
-        a = (await llm.send_message(
-            f"Вакансия: {vname}\nВопрос: {q}\nОтветь кратко."
-        )).strip()
+        try:
+            a = (await llm.send_message(
+                f"Вакансия: {vname}\nВопрос: {q}\nОтветь кратко."
+            )).strip()
+        except OpenAIError as e:
+            return "transient", q, f"LLM error: {repr(e)[:60]}"
         if bad_answer(a):
-            return False, q, a[:80]
+            return "transient", q, f"LLM ответ ненадёжен: {a[:60]}"
         sel = f'textarea[name="{task["textarea"]}"]'
         try:
             el = await page.query_selector(sel)
@@ -137,29 +144,32 @@ async def fill_task(page, task, llm, vname):
                 await el.scroll_into_view_if_needed(timeout=4000)
             await page.fill(sel, a, timeout=8000)
         except Exception as e:
-            return False, q, f"fill fail: {repr(e)[:50]}"
-        return True, q, a
+            return "manual", q, f"fill fail: {repr(e)[:50]}"
+        return "ok", q, a
     # radio / checkbox
     opts = task["options"]
     if not opts:
-        return False, q, "(нет вариантов)"
+        return "manual", q, "(нет вариантов)"
     listing = "\n".join(f"{i + 1}) {o['label']}" for i, o in enumerate(opts))
-    r = (await llm.send_message(
-        f"Вакансия: {vname}\nВопрос: {q}\nВарианты:\n{listing}\n"
-        "Выбери ОДИН правдивый вариант (исходя из резюме). Ответь ТОЛЬКО номером варианта."
-    )).strip()
+    try:
+        r = (await llm.send_message(
+            f"Вакансия: {vname}\nВопрос: {q}\nВарианты:\n{listing}\n"
+            "Выбери ОДИН правдивый вариант (исходя из резюме). Ответь ТОЛЬКО номером варианта."
+        )).strip()
+    except OpenAIError as e:
+        return "transient", q, f"LLM error: {repr(e)[:60]}"
     m = re.search(r"\d+", r)
     if not m:
-        return False, q, r[:60]
+        return "transient", q, f"LLM не дал номер: {r[:40]}"
     idx = int(m.group()) - 1
     if idx < 0 or idx >= len(opts):
-        return False, q, f"номер вне диапазона: {r[:30]}"
+        return "manual", q, f"номер вне диапазона: {r[:30]}"
     o = opts[idx]
     try:
         await page.click(f'input[name="{o["name"]}"][value="{o["value"]}"]', force=True, timeout=6000)
     except Exception as e:
-        return False, q, f"click fail: {repr(e)[:50]}"
-    return True, q, o["label"]
+        return "manual", q, f"click fail: {repr(e)[:50]}"
+    return "ok", q, o["label"]
 
 
 async def main():
@@ -181,11 +191,15 @@ async def main():
     resume_id = pgconn.get_setting("apply.resume_id")
     if not resume_id:
         print("apply.resume_id не задан для схемы", pgconn.get_schema())
+        await api.aclose()
         return
 
     seen = pgconn.seen_keys("tests")
 
-    r = await api.get(f"/resumes/{resume_id}/similar_vacancies", page=0, per_page=80)
+    try:
+        r = await api.get(f"/resumes/{resume_id}/similar_vacancies", page=0, per_page=80)
+    finally:
+        await api.aclose()  # api больше не нужен — дальше только браузер
     tvs = [v for v in r.get("items", []) if v.get("has_test") and str(v["id"]) not in seen]
     print(f"test vacancies (new): {len(tvs)}")
     if not tvs:
@@ -234,18 +248,24 @@ async def main():
                 data = await page.evaluate(EXTRACT_JS)
                 tasks = data["tasks"]
                 if not tasks:
-                    print(f"[{vid}] задачи не распознаны -> пропуск")
+                    print(f"[{vid}] задачи не распознаны -> пропуск (вручную)")
                     seen.add(str(vid)); done += 1; save_seen(); continue
 
                 print(f"\n=== [{vid}] {vname} | задач: {len(tasks)} ===")
-                ok_all = True
+                statuses = []
                 for t in tasks:
-                    ok, q, a = await fill_task(page, t, llm, vname)
-                    print(f"  [{'OK' if ok else 'FAIL'}/{t['type']}] Q: {q[:70]}\n          A: {a}")
-                    if not ok:
-                        ok_all = False; break
-                if not ok_all:
-                    print(f"[{vid}] не смог надёжно заполнить -> пропуск (вручную)")
+                    st, q, a = await fill_task(page, t, llm, vname)
+                    print(f"  [{st}/{t['type']}] Q: {q[:70]}\n          A: {a}")
+                    statuses.append(st)
+                    if st != "ok":
+                        break
+                if "transient" in statuses:
+                    # LLM/сеть временно недоступны — НЕ жжём вакансию, прерываем прогон
+                    print(f"[{vid}] временный сбой (LLM/сеть) -> НЕ помечаю seen, прогон прерван")
+                    tg_alert(cfg, "⚠️ apply_tests: LLM/сеть недоступны, прогон прерван (вакансии не сожжены).")
+                    break
+                if "manual" in statuses:
+                    print(f"[{vid}] форму нельзя авто-заполнить -> пропуск (вручную)")
                     seen.add(str(vid)); done += 1; save_seen(); continue
 
                 _shot_dir = f"/tmp/{pgconn.get_schema()}"
@@ -256,14 +276,15 @@ async def main():
                     if btn:
                         await btn.click(); await page.wait_for_timeout(4000)
                         print(f"  -> ОТПРАВЛЕНО ({page.url})")
+                        seen.add(str(vid)); done += 1; save_seen()
                     else:
-                        print("  кнопка отправки не найдена")
+                        print("  кнопка отправки не найдена -> НЕ помечаю seen")
                 else:
                     print("  DRY: не отправлено")
-                seen.add(str(vid)); done += 1; save_seen()
+                    seen.add(str(vid)); done += 1; save_seen()
             except Exception as e:
-                print(f"[{vid}] ошибка: {repr(e)[:120]} -> пропуск")
-                seen.add(str(vid)); done += 1; save_seen()
+                # неожиданная ошибка — НЕ жжём вакансию, попробуем в след. раз
+                print(f"[{vid}] неожиданная ошибка: {repr(e)[:120]} -> НЕ помечаю seen")
                 continue
 
         await browser.close()

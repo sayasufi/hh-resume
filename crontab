@@ -25,3 +25,7 @@ SHELL=/bin/bash
 
 # Обновление токена каждую минуту (для всех юзеров)
 */1 * * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool refresh-token >> /dev/null 2>&1
+
+# Ежедневный heartbeat/мониторинг (токен, vLLM, активность) -> Telegram-топик юзера.
+# Dead-man-switch: не пришла сводка утром = что-то сломалось.
+0 6 * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/monitor.py >> /var/log/cron.log 2>&1

@@ -74,8 +74,12 @@ class ChatOpenAI:
                 proxy=self.proxy, timeout=self.timeout
             ) as client:
                 model = await self._resolve_model(client)
-                if model:
-                    payload["model"] = model
+                if not model:
+                    raise OpenAIError(
+                        "LLM недоступна: не удалось определить модель "
+                        "(vLLM пуст/недоступен)"
+                    )
+                payload["model"] = model
                 response = await client.post(
                     self.completion_endpoint,
                     json=payload,

@@ -35,7 +35,11 @@ class Config(dict):
         conn = connect()
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT key, value FROM app_config")
+                # web_state (~650KB Playwright storage_state) не нужен утилите —
+                # его читает только apply_tests через pgconn.app_config(). Не тянем.
+                cur.execute(
+                    "SELECT key, value FROM app_config WHERE key <> 'web_state'"
+                )
                 with self._lock:
                     for key, value in cur.fetchall():
                         self[key] = value

@@ -69,9 +69,9 @@ DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY['employers','vacancy_contacts','vacancies','negotiations','resumes']
   LOOP
+    -- CREATE OR REPLACE (PG14+) вместо DROP+CREATE: без ACCESS EXCLUSIVE churn
     EXECUTE format(
-      'DROP TRIGGER IF EXISTS trg_%1$s_updated ON %1$s;
-       CREATE TRIGGER trg_%1$s_updated BEFORE UPDATE ON %1$s
+      'CREATE OR REPLACE TRIGGER trg_%1$s_updated BEFORE UPDATE ON %1$s
        FOR EACH ROW EXECUTE FUNCTION set_updated_at();', t);
   END LOOP;
 END $do$;
@@ -89,9 +89,11 @@ def get_dsn() -> str:
     return dsn
 
 
-def connect(ensure: bool = True) -> psycopg.Connection:
+def connect(ensure: bool = False) -> psycopg.Connection:
     """Sync-соединение (для Config) с search_path на схему юзера.
-    ensure=True — создать схему/таблицы при отсутствии (идемпотентно)."""
+    ensure=True — создать схему/таблицы (DDL). По умолчанию ensure=False:
+    схема провижинится один раз (startup/register_user), а горячий путь
+    (get_setting/Config.load/save) НЕ гоняет DDL на каждый коннект."""
     schema = get_schema()
     conn = psycopg.connect(get_dsn())
     with conn.cursor() as cur:
@@ -103,8 +105,9 @@ def connect(ensure: bool = True) -> psycopg.Connection:
     return conn
 
 
-async def aconnect(ensure: bool = True) -> psycopg.AsyncConnection:
-    """Async-соединение (для storage) с search_path на схему юзера."""
+async def aconnect(ensure: bool = False) -> psycopg.AsyncConnection:
+    """Async-соединение (для storage) с search_path на схему юзера.
+    ensure=False по умолчанию — DDL провижинится отдельно (см. connect)."""
     schema = get_schema()
     conn = await psycopg.AsyncConnection.connect(get_dsn())
     async with conn.cursor() as cur:

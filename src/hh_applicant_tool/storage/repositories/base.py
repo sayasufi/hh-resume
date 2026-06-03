@@ -99,9 +99,15 @@ class BaseRepository:
 
     @wrap_db_errors
     async def get(self, pk: Any) -> BaseModel | None:
-        async for item in self.find(**{f"{self.pkey}": pk}):
-            return item
-        return None
+        # Прямой запрос по PK без ORDER BY (одна строка) — без лишней сортировки
+        sql = f"SELECT * FROM {self.table_name} WHERE {self.pkey} = %s LIMIT 1"
+        cur = await self.conn.execute(sql, (pk,))
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        cols = [c[0] for c in cur.description]
+        data = {col: value for col, value in zip(cols, row)}  # noqa: B905
+        return self.model.from_db(data)
 
     @wrap_db_errors
     async def count_total(self) -> int:

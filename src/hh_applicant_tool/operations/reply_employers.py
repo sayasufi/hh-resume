@@ -220,7 +220,7 @@ class Operation(BaseOperation):
                 # Пропуск откликов, которые не обновлялись более N дней (при просмотре они обновляются вроде)
                 if (
                     self.period
-                    and (datetime().now(updated_at.tzinfo) - updated_at).days
+                    and (datetime.now(updated_at.tzinfo) - updated_at).days
                     > self.period
                 ):
                     continue

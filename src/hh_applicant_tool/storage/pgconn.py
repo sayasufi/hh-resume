@@ -97,7 +97,10 @@ def connect(ensure: bool = False) -> psycopg.Connection:
     schema = get_schema()
     conn = psycopg.connect(get_dsn())
     with conn.cursor() as cur:
-        cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        # CREATE SCHEMA — только при ensure (провижин админом). Tenant-роли (#18)
+        # имеют лишь USAGE на свою схему, без CREATE: горячий путь не создаёт схему.
+        if ensure:
+            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
         cur.execute(f'SET search_path TO "{schema}"')
         if ensure:
             cur.execute(TABLES_DDL)
@@ -164,7 +167,8 @@ async def aconnect(ensure: bool = False) -> psycopg.AsyncConnection:
     schema = get_schema()
     conn = await psycopg.AsyncConnection.connect(get_dsn())
     async with conn.cursor() as cur:
-        await cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        if ensure:
+            await cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
         await cur.execute(f'SET search_path TO "{schema}"')
         if ensure:
             await cur.execute(TABLES_DDL)
@@ -203,18 +207,27 @@ def set_app_config(key: str, value) -> None:
         conn.close()
 
 
+def _ensure_app_users(cur) -> None:
+    """Идемпотентно создаёт public.app_users и колонку db_password (#18).
+    db_password — пароль tenant-роли (login-роль на схему); читать может только
+    admin-роль hh (tenant-ролям SELECT на app_users не выдаётся)."""
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS public.app_users ("
+        "id serial PRIMARY KEY, name text UNIQUE, "
+        "schema text UNIQUE NOT NULL, active boolean DEFAULT true, "
+        "created_at timestamptz DEFAULT now())"
+    )
+    cur.execute(
+        "ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS db_password text"
+    )
+
+
 def list_users() -> list[tuple[str, str]]:
-    """Активные юзеры из public.app_users -> [(name, schema), ...].
-    Таблица создаётся при отсутствии (идемпотентно)."""
+    """Активные юзеры из public.app_users -> [(name, schema), ...]."""
     conn = psycopg.connect(get_dsn())
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "CREATE TABLE IF NOT EXISTS public.app_users ("
-                "id serial PRIMARY KEY, name text UNIQUE, "
-                "schema text UNIQUE NOT NULL, active boolean DEFAULT true, "
-                "created_at timestamptz DEFAULT now())"
-            )
+            _ensure_app_users(cur)
             conn.commit()
             cur.execute(
                 "SELECT name, schema FROM public.app_users "
@@ -225,16 +238,39 @@ def list_users() -> list[tuple[str, str]]:
         conn.close()
 
 
+def list_users_full() -> list[tuple[str, str, str | None]]:
+    """Активные юзеры -> [(name, schema, db_password), ...] для run_all (#18).
+    db_password=None → run_all использует admin-DSN (фолбэк/откат)."""
+    conn = psycopg.connect(get_dsn())
+    try:
+        with conn.cursor() as cur:
+            _ensure_app_users(cur)
+            conn.commit()
+            cur.execute(
+                "SELECT name, schema, db_password FROM public.app_users "
+                "WHERE active ORDER BY id"
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def tenant_dsn(admin_dsn: str, role: str, password: str) -> str:
+    """DSN tenant-роли: берём host/port/dbname из admin-DSN, меняем user+password.
+    Имя роли = имя схемы (u_egor/u_lexa)."""
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    d = conninfo_to_dict(admin_dsn)
+    d["user"] = role
+    d["password"] = password
+    return make_conninfo(**d)
+
+
 def register_user(name: str, schema: str) -> None:
     conn = psycopg.connect(get_dsn())
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "CREATE TABLE IF NOT EXISTS public.app_users ("
-                "id serial PRIMARY KEY, name text UNIQUE, "
-                "schema text UNIQUE NOT NULL, active boolean DEFAULT true, "
-                "created_at timestamptz DEFAULT now())"
-            )
+            _ensure_app_users(cur)
             cur.execute(
                 "INSERT INTO public.app_users(name, schema) VALUES (%s, %s) "
                 "ON CONFLICT(name) DO UPDATE SET schema = excluded.schema, "

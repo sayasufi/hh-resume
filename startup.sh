@@ -1,9 +1,10 @@
 #!/bin/bash
 echo "[$(date)] Running startup tasks..."
 
-# Провижин схемы каждого юзера ОДИН раз (таблицы/индексы/триггеры),
-# чтобы горячий путь не гонял DDL на каждый коннект.
-/usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -c "import hh_applicant_tool.storage.pgconn as p; p.connect(ensure=True).close()"
+# Провижин схем/таблиц + per-tenant ролей и грантов (#18) ОДИН раз. Запускается
+# ПОД admin-ролью (hh) напрямую, НЕ через run_all (tenant-роли не имеют CREATE).
+# Идемпотентно: схемы/роли/пароли создаются один раз и переиспользуются.
+/usr/local/bin/python /app/provision_roles.py
 
 # Мультиюзер: run_all проходит по всем активным юзерам из public.app_users.
 # Настройки apply-similar (resume_id, use_ai) берутся из БД (PG settings).

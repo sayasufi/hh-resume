@@ -145,6 +145,48 @@ async def fill_textarea(page, sel, value) -> bool:
         return False
 
 
+LETTER_SYS = (
+    "Ты пишешь короткое сопроводительное письмо на русском от первого лица для "
+    "отклика на вакансию на hh.ru. 3–5 предложений, по делу, без воды, клише и "
+    "плейсхолдеров; не упоминай, что ты ИИ. Опирайся только на факты резюме. Без "
+    "темы и заголовка — выводи только текст письма."
+)
+
+
+async def fill_cover_letter(page, letter_llm, vname):
+    """Если на форме отклика есть тогл сопроводительного — раскрыть и заполнить
+    коротким AI-письмом. Best-effort: ошибки НЕ блокируют отправку теста."""
+    try:
+        tog = await page.query_selector(
+            "[data-qa=vacancy-response-letter-toggle]"
+        )
+        if not tog:
+            return False  # на этой форме поля письма нет
+        try:
+            await tog.click(force=True)
+            await page.wait_for_timeout(1200)
+        except Exception:
+            pass
+        try:
+            letter = (await letter_llm.send_message(
+                f"Вакансия: {vname}. Напиши сопроводительное письмо."
+            )).strip()
+        except Exception:
+            letter = ""
+        if len(letter) < 20:  # LLM недоступна/плохой ответ -> короткий шаблон
+            letter = (
+                f"Здравствуйте! Заинтересовала ваша вакансия «{vname}». "
+                "Мой опыт хорошо ложится на задачи, буду рад обсудить детали."
+            )
+        return await fill_textarea(
+            page,
+            'textarea[data-qa="vacancy-response-popup-form-letter-input"]',
+            letter,
+        )
+    except Exception:
+        return False
+
+
 async def fill_task(page, task, llm, vname):
     """Вернёт (status, question, repr). status:
     'ok' — заполнено; 'manual' — форму авто-заполнить нельзя (помечаем seen);
@@ -248,6 +290,11 @@ async def main():
         sysp += "\n\nРезюме:\n" + resume
     llm = ChatOpenAI(token=oa["token"], model=oa.get("model"), completion_endpoint=oa.get("completion_endpoint"),
                      system_prompt=sysp, temperature=0.3, max_completion_tokens=300)
+    # отдельная LLM для сопроводительного письма (заполняем поле на форме отклика)
+    letter_sys = LETTER_SYS + (("\n\nРезюме:\n" + resume) if resume else "")
+    letter_llm = ChatOpenAI(token=oa["token"], model=oa.get("model"),
+                            completion_endpoint=oa.get("completion_endpoint"),
+                            system_prompt=letter_sys, temperature=0.5, max_completion_tokens=300)
 
     seen = pgconn.seen_keys("tests")
 
@@ -334,6 +381,9 @@ async def main():
                 _shot_dir = f"/tmp/{pgconn.get_schema()}"
                 os.makedirs(_shot_dir, exist_ok=True)
                 await page.screenshot(path=f"{_shot_dir}/test_filled_{vid}.png", full_page=True)
+                # сопроводительное письмо (если на форме есть поле/тогл письма)
+                if await fill_cover_letter(page, letter_llm, vname):
+                    print("  ✍️ сопроводительное добавлено")
                 if APPLY:
                     btn = await page.query_selector('button[data-qa="vacancy-response-submit-popup"], button[data-qa*="response-submit"]')
                     if btn:

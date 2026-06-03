@@ -58,6 +58,13 @@ CREATE TABLE IF NOT EXISTS action_items (
     action text NOT NULL, chat_url text, vacancy_url text,
     created_at timestamptz DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS notifications (
+    id bigserial PRIMARY KEY, priority int NOT NULL DEFAULT 2,
+    category text, text text NOT NULL, link text, dedup_key text UNIQUE,
+    created_at timestamptz DEFAULT now(), sent_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS idx_notif_unsent
+    ON notifications(sent_at, priority, created_at);
 CREATE INDEX IF NOT EXISTS idx_vac_upd ON vacancies(updated_at);
 CREATE INDEX IF NOT EXISTS idx_emp_upd ON employers(updated_at);
 CREATE INDEX IF NOT EXISTS idx_neg_upd ON negotiations(updated_at);
@@ -343,6 +350,37 @@ def add_action_items(items: list[dict]) -> None:
                         it.get("vacancy_url"),
                     ),
                 )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# --- Единые приоритизированные уведомления (TG-дайджест) ---
+# Приоритет: меньше = важнее. Дайджест сортирует по нему.
+PRIORITY_HIGH = 1   # 🔴 нужен ты лично/срочно
+PRIORITY_MED = 2    # 🟡 действие, не срочно
+PRIORITY_LOW = 3    # 🟢 рутина/инфо
+
+
+def notify(
+    priority: int,
+    text: str,
+    category: str | None = None,
+    link: str | None = None,
+    dedup_key: str | None = None,
+) -> None:
+    """Положить уведомление в очередь (таблица notifications текущей схемы).
+    Отправит позже send_digest.py одним отсортированным дайджестом.
+    dedup_key (если задан) защищает от повторов одного и того же события
+    между прогонами. Если dedup_key=None — дубль-защиты нет (NULL уникальны в PG)."""
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO notifications(priority, category, text, link, dedup_key) "
+                "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (dedup_key) DO NOTHING",
+                (priority, category, text, link, dedup_key),
+            )
         conn.commit()
     finally:
         conn.close()

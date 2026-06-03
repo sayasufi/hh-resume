@@ -1,6 +1,7 @@
-"""Мониторинг/heartbeat одного юзера (запускается через run_all -> на каждого).
-Проверяет: валидность токена, доступность vLLM, активность; шлёт сводку/алерт
-в Telegram-топик юзера. Dead-man-switch: если сводка не пришла — что-то сломалось.
+"""Мониторинг/heartbeat одного юзера (через run_all -> на каждого).
+Проверяет токен, vLLM, активность и КЛАДЁТ результат в очередь уведомлений
+(pgconn.notify); отправит send_digest. Dead-man-switch: ежедневный 🟢 «бот жив»
+(если в дайджесте его нет — что-то сломалось). Проблемы идут как 🔴/🟡.
 """
 import asyncio
 import datetime as dt
@@ -23,36 +24,20 @@ def label():
         return os.environ.get("HH_DB_SCHEMA", "?")
 
 
-async def tg(cfg, text):
-    t = cfg.get("telegram") or {}
-    if not (t.get("token") and t.get("chat_id")):
-        return
-    data = {"chat_id": t["chat_id"], "text": text}
-    if t.get("topic_id"):
-        data["message_thread_id"] = t["topic_id"]
-    try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            await c.post(
-                f"https://api.telegram.org/bot{t['token']}/sendMessage", data=data
-            )
-    except Exception as e:
-        print("tg err", repr(e)[:80])
-
-
 async def main():
     cfg = pgconn.app_config()
-    who = label()
-    alerts = []
-    info = []
+    today = dt.date.today().isoformat()
+    problems = []   # (priority, text)
+    info = []       # строки для 🟢 heartbeat
 
     # 1) токен
     tok = cfg.get("token") or {}
     exp = tok.get("access_expires_at", 0)
     days_left = (exp - time.time()) / 86400 if exp else -1
     if days_left < 0:
-        alerts.append("🔴 токен ИСТЁК — нужна переавторизация")
+        problems.append((pgconn.PRIORITY_HIGH, "токен ИСТЁК — нужна переавторизация"))
     elif days_left < 2:
-        alerts.append(f"🟠 токен истекает через {days_left:.1f} дн")
+        problems.append((pgconn.PRIORITY_MED, f"токен истекает через {days_left:.1f} дн"))
     else:
         info.append(f"токен ок ({days_left:.0f} дн)")
 
@@ -67,7 +52,7 @@ async def main():
                 ids = [m["id"] for m in r.json().get("data", [])]
                 info.append(f"LLM ок ({ids[0] if ids else '—'})")
         except Exception:
-            alerts.append("🔴 vLLM недоступен (письма/ответы в шаблон)")
+            problems.append((pgconn.PRIORITY_MED, "vLLM недоступен (письма/ответы в шаблон)"))
 
     # 3) активность за сегодня + counters
     try:
@@ -88,17 +73,25 @@ async def main():
             f"просмотров +{cnt.get('new_resume_views', 0)}"
         )
     except Exception as e:
-        alerts.append(f"🟠 hh API: {repr(e)[:50]}")
+        problems.append((pgconn.PRIORITY_MED, f"hh API: {repr(e)[:50]}"))
 
-    today = dt.date.today().isoformat()
     cnt_today = pgconn.get_setting("_applications_count") or "?"
     dat = pgconn.get_setting("_applications_date")
     info.append(f"откликов сегодня: {cnt_today if dat == today else 0}")
 
-    head = "🟢 бот жив" if not alerts else "⚠️ ВНИМАНИЕ"
-    msg = f"{head} | 👤 {who}\n" + "\n".join(alerts + ["• " + i for i in info])
-    print(msg)
-    await tg(cfg, msg)
+    # Проблемы -> отдельные 🔴/🟡 уведомления (dedup по дню).
+    for prio, text in problems:
+        pgconn.notify(
+            prio, f"мониторинг: {text}", category="monitor",
+            dedup_key=f"monitor:{prio}:{text[:20]}:{today}",
+        )
+    # Ежедневный heartbeat -> 🟢 (dead-man-switch).
+    head = "бот жив" if not problems else "бот работает (есть проблемы выше)"
+    pgconn.notify(
+        pgconn.PRIORITY_LOW, head + " · " + "; ".join(info),
+        category="heartbeat", dedup_key=f"heartbeat:{today}",
+    )
+    print(f"монитор: проблем {len(problems)}, heartbeat поставлен.")
 
 
 if __name__ == "__main__":

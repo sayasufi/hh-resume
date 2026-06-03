@@ -1,16 +1,17 @@
-"""
-Сканирует диалоги с работодателями на hh.ru, извлекает "дела" (тест, интервью,
-анкета, написать в ТГ, и т.п.), шлёт НОВЫЕ в Telegram + пишет в PG (action_items).
-Состояние (config/seen/action_items) — в Postgres (схема из HH_DB_SCHEMA).
+"""Сканирует диалоги с работодателями, LLM-классифицирует внешние «дела» и кладёт
+их в очередь уведомлений (pgconn.notify) с приоритетом. Отправит потом send_digest.
+
+Категория -> приоритет:
+  contact (написать/позвонить в TG/мессенджер/телефон, дать контакт) -> 🔴 HIGH
+  form    (анкета/опрос/форма/регистрация/внешний бот-рекрутёр)       -> 🟡 MED
+  test    (тест/тестовое задание — бот делает сам)                    -> 🟢 LOW
+  interview (приглашение на интервью/созвон) -> пропуск (владеет reply_employers/handoff)
+  none -> пропуск (обычный вопрос — на него ответит reply_employers)
 
 Запуск:  python notify_actions.py [--dry]
 """
 import asyncio
-import datetime as dt
-import os
 import sys
-
-import httpx
 
 from hh_applicant_tool.ai import ChatOpenAI
 from hh_applicant_tool.api.client import ApiClient
@@ -20,50 +21,32 @@ from hh_applicant_tool.storage import pgconn
 DRY = "--dry" in sys.argv
 
 SYS = (
-    "Ты анализируешь ПОСЛЕДНЕЕ сообщение работодателя в чате на hh.ru. "
-    "Определи, требует ли оно от кандидата действия, которое нужно сделать ВНЕ этого чата "
-    "(его нельзя выполнить, просто написав текстовый ответ в переписке). "
-    "Считаются такими действиями: пройти тест/тестовое задание; пройти интервью с ботом-рекрутёром по ссылке; "
-    "заполнить анкету/опрос/форму по ссылке или во внешнем боте; прийти или созвониться на собеседование "
-    "(особенно если указаны дата/время/место); написать или связаться в другом мессенджере (Telegram, WhatsApp) "
-    "или по телефону; зарегистрироваться на платформе/сайте; прислать документы или файлы. "
-    "Если такое действие ТРЕБУЕТСЯ — верни ОДНУ короткую строку на русском в формате: "
-    "<что сделать>[ | срок: <если есть>][ | контакт/ссылка: <если есть>]. "
-    "Если работодатель просто задаёт вопрос, на который можно ответить ТЕКСТОМ прямо в этом чате "
-    "(про опыт, навыки, формат работы, зарплатные ожидания и т.п.), либо это благодарность за отклик, "
-    "«рассмотрим ваше резюме», отказ или общие вежливые фразы — верни РОВНО: НЕТ"
+    "Ты анализируешь ПОСЛЕДНЕЕ сообщение работодателя в чате на hh.ru. Определи, "
+    "требует ли оно действия кандидата ВНЕ этого чата, и к какой категории относится. "
+    "Ответь СТРОГО в формате: `<категория> | <что сделать одной строкой на русском>`.\n"
+    "Категории:\n"
+    "- contact — нужно написать/позвонить работодателю в Telegram/WhatsApp/по телефону "
+    "или оставить свой контакт;\n"
+    "- form — пройти анкету/опрос/форму по ссылке, зарегистрироваться на платформе, "
+    "пообщаться с внешним ботом-рекрутёром;\n"
+    "- test — пройти тест/тестовое задание;\n"
+    "- interview — зовут на собеседование/интервью/созвон или предлагают время встречи;\n"
+    "- none — ничего из перечисленного (обычный вопрос, на который можно ответить в "
+    "чате, благодарность, «рассмотрим резюме», отказ).\n"
+    "Если категория none — ответь просто: none"
 )
 
-
-def _user_label():
-    try:
-        name = pgconn.get_setting("user.full_name")
-    except Exception:
-        name = None
-    return name or os.environ.get("HH_DB_SCHEMA", "public")
-
-
-async def tg_send(token, chat_id, text, topic_id=None):
-    async with httpx.AsyncClient(timeout=25) as client:
-        for i in range(0, len(text), 3800):
-            chunk = text[i:i + 3800]
-            data = {"chat_id": chat_id, "text": chunk,
-                    "disable_web_page_preview": True}
-            if topic_id:
-                data["message_thread_id"] = topic_id
-            r = await client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage", data=data,
-            )
-            if r.status_code != 200:
-                print("TG error:", r.status_code, r.text[:200])
-            await asyncio.sleep(0.5)
+PRIO = {
+    "contact": pgconn.PRIORITY_HIGH,
+    "form": pgconn.PRIORITY_MED,
+    "test": pgconn.PRIORITY_LOW,
+}
 
 
 async def main():
     cfg = pgconn.app_config()
     tok = cfg["token"]
     oa = cfg["openai"]
-    tg = cfg.get("telegram") or {}
 
     api = ApiClient(
         access_token=tok["access_token"],
@@ -79,8 +62,9 @@ async def main():
     )
 
     seen = pgconn.seen_keys("actions")
+    handoff = pgconn.seen_keys("handoff")  # чаты, переданные тебе (интервью) — мимо
     fresh_seen = []
-    new_items = []
+    queued = []  # (prio, task, link, dedup, nid, chat_id, vacancy)
     page = 0
     scanned = 0
     try:
@@ -95,6 +79,8 @@ async def main():
                 if n.get("state", {}).get("id") == "discard":
                     continue
                 nid = n["id"]
+                if str(nid) in handoff:
+                    continue
                 v = n.get("vacancy") or {}
                 try:
                     m = await api.get(f"/negotiations/{nid}/messages", page=0)
@@ -122,59 +108,47 @@ async def main():
                     print("LLM error:", repr(e)[:120])
                     continue
                 fresh_seen.append(key)
-                if ans.upper().startswith("НЕТ") or len(ans) < 3:
-                    continue
+                cat, _, task = ans.partition("|")
+                cat = cat.strip().lower()
+                task = task.strip()
+                prio = PRIO.get(cat)
+                if not prio or len(task) < 3:
+                    continue  # none/interview/неразборчиво -> пропуск
                 chat_id = n.get("chat_id") or nid
-                new_items.append({
-                    "vacancy": v.get("name", ""),
-                    "chat_url": f"https://hh.ru/chat/{chat_id}",
-                    "vacancy_url": v.get("alternate_url", ""),
-                    "action": ans,
-                    "nid": nid,
-                    "chat_id": chat_id,
-                })
+                queued.append((
+                    prio, task, f"https://hh.ru/chat/{chat_id}",
+                    f"action:{key}", nid, chat_id, v.get("name", ""),
+                ))
             if page + 1 >= r.get("pages", 0):
                 break
             page += 1
     finally:
         await api.aclose()
 
-    print(f"scanned new employer messages: {scanned} | actions found: {len(new_items)}")
-    for it in new_items:
-        print(f"  • {it['vacancy']} :: {it['action']}")
+    print(f"scanned: {scanned} | дел в очередь: {len(queued)}")
+    for prio, task, link, *_ in queued:
+        print(f"  [P{prio}] {task} :: {link}")
 
     if DRY:
-        print("DRY — ничего не отправлено и не сохранено.")
-        return
-    if not new_items:
-        if fresh_seen:
-            pgconn.add_seen("actions", fresh_seen)
-        print("Новых дел нет.")
+        print("DRY — ничего не сохранено и не поставлено в очередь.")
         return
 
-    pgconn.add_action_items(new_items)
-
-    if tg.get("token") and tg.get("chat_id"):
-        lines = [
-            f"👤 {_user_label()}",
-            f"📋 Новые дела из диалогов hh ({len(new_items)}):",
-            "",
-        ]
-        for i, it in enumerate(new_items, 1):
-            lines.append(
-                f"{i}. {it['vacancy']}\n"
-                f"   → {it['action']}\n"
-                f"   💬 диалог: {it['chat_url']}"
-            )
-        await tg_send(
-            tg["token"], tg["chat_id"], "\n\n".join(lines),
-            topic_id=tg.get("topic_id"),
+    for prio, task, link, dedup, nid, chat_id, vac in queued:
+        pgconn.notify(
+            prio, f"{task} — {vac}" if vac else task,
+            category="action", link=link, dedup_key=dedup,
         )
-        print("Отправлено в Telegram.")
-    else:
-        print("Telegram не настроен.")
-
-    pgconn.add_seen("actions", fresh_seen)
+    if queued:
+        pgconn.add_action_items([
+            {
+                "nid": nid, "chat_id": chat_id, "vacancy": vac,
+                "action": task, "chat_url": link, "vacancy_url": "",
+            }
+            for prio, task, link, dedup, nid, chat_id, vac in queued
+        ])
+    if fresh_seen:
+        pgconn.add_seen("actions", fresh_seen)
+    print("готово.")
 
 
 if __name__ == "__main__":

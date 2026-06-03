@@ -68,21 +68,17 @@ def _user_label():
     return name or os.environ.get("HH_DB_SCHEMA", "public")
 
 
-def tg_alert(cfg, text):
-    import httpx
+def tg_alert(text, priority=pgconn.PRIORITY_MED, key=None):
+    """Кладёт алёрт в очередь уведомлений (отправит send_digest дайджестом).
+    key -> dedup по дню, чтобы при повторных прогонах не спамить одним и тем же."""
+    import datetime as dt
 
-    t = cfg.get("telegram") or {}
-    if t.get("token") and t.get("chat_id"):
-        data = {"chat_id": t["chat_id"], "text": f"👤 {_user_label()}\n{text}"}
-        if t.get("topic_id"):
-            data["message_thread_id"] = t["topic_id"]
-        try:
-            httpx.post(
-                f"https://api.telegram.org/bot{t['token']}/sendMessage",
-                data=data, timeout=20,
-            )
-        except Exception:
-            pass
+    dedup = (
+        f"apply_tests:{key}:{dt.date.today().isoformat()}" if key else None
+    )
+    pgconn.notify(
+        priority, f"apply_tests: {text}", category="apply_tests", dedup_key=dedup
+    )
 
 
 def bad_answer(a):
@@ -281,7 +277,7 @@ async def main():
         if need_login:
             print("веб-сессия отсутствует/невалидна -> логин")
             if not await web_login(page, user, pw):
-                tg_alert(cfg, "⚠️ apply_tests: не удалось залогиниться в веб hh (возможно капча/OTP).")
+                tg_alert("не удалось залогиниться в веб hh (возможно капча/OTP)", pgconn.PRIORITY_MED, key="login")
                 await browser.close(); return
             pgconn.set_app_config("web_state", await ctx.storage_state())
             # после логина вернёмся на резюме, чтобы убедиться
@@ -327,7 +323,7 @@ async def main():
                     print(f"[{vid}] временный сбой (LLM/сеть) #{transient_streak} -> пропуск без seen")
                     if transient_streak >= 3:
                         print("3 временных сбоя подряд -> LLM/сеть недоступны, прогон прерван")
-                        tg_alert(cfg, "⚠️ apply_tests: LLM/сеть недоступны, прогон прерван (вакансии не сожжены).")
+                        tg_alert("LLM/сеть недоступны, прогон прерван (вакансии не сожжены)", pgconn.PRIORITY_LOW, key="transient")
                         break
                     continue
                 transient_streak = 0  # дошли без блипа — сбрасываем счётчик

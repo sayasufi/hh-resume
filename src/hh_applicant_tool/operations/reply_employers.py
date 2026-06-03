@@ -9,8 +9,26 @@ from typing import TYPE_CHECKING
 from ..ai.base import AIError
 from ..api import ApiError, datatypes
 from ..main import BaseNamespace, BaseOperation
+from ..storage import pgconn
 from ..utils.date import parse_api_datetime
 from ..utils.string import rand_text
+
+# Классификатор хэндоффа: приглашение на интервью/созвон -> передаём человеку.
+HANDOFF_SYS = (
+    "Тебе дают ПОСЛЕДНЕЕ сообщение работодателя в чате на hh.ru. Определи, является "
+    "ли оно приглашением к ЖИВОМУ общению: приглашение на собеседование/интервью, "
+    "предложение созвониться/позвонить, назначение конкретного времени или места "
+    "встречи/звонка. Ответь РОВНО одним словом: ДА или НЕТ. Обычные вопросы про опыт/"
+    "навыки/зарплату/формат работы, благодарности за отклик, «рассмотрим резюме», "
+    "отказы и общие фразы — это НЕТ."
+)
+
+# Ключевые слова-префильтр: без них точно не приглашение (экономим LLM-вызов).
+_INVITE_KW = (
+    "собеседован", "интервью", "созвон", "созвонимся", "созвониться", "звонок",
+    "позвон", "встреч", "zoom", "зум", "teams", "тимс", "телемост", "видеосвяз",
+    "видеозвон", "когда удоб", "удобное время", "приглаша", "ждём вас", "ждем вас",
+)
 
 if TYPE_CHECKING:
     from ..main import HHApplicantTool
@@ -186,6 +204,11 @@ class Operation(BaseOperation):
         self.openai_chat = (
             tool.get_openai_chat(system_prompt) if args.use_ai else None
         )
+        # Отдельный классификатор для хэндоффа + множество уже переданных чатов.
+        self.handoff_chat = (
+            tool.get_openai_chat(HANDOFF_SYS) if args.use_ai else None
+        )
+        self.handoff_seen = pgconn.seen_keys("handoff")
         self.period = args.period
 
         logger.debug(f"{self.reply_message = }")
@@ -208,6 +231,20 @@ class Operation(BaseOperation):
         await self._reply_chats(
             user=me, resumes=resumes, blacklist=blacklist
         )
+
+    async def _is_interview_invite(self, text: str) -> bool:
+        """Последнее сообщение работодателя — приглашение на интервью/созвон?
+        Дешёвый keyword-префильтр, затем LLM ДА/НЕТ."""
+        if not (self.handoff_chat and text):
+            return False
+        low = text.lower()
+        if not any(k in low for k in _INVITE_KW):
+            return False
+        try:
+            ans = (await self.handoff_chat.send_message(text)).strip().upper()
+        except AIError:
+            return False  # LLM недоступна — не эскалируем (не теряем, ответим позже)
+        return ans.startswith("ДА")
 
     async def _reply_chats(
         self,
@@ -261,6 +298,10 @@ class Operation(BaseOperation):
                         "🚫 Пропускаем заблокированного работодателя",
                         employer.get("alternate_url"),
                     )
+                    continue
+
+                # Чат уже передан тебе (хэндофф по интервью) — бот в него не лезет.
+                if str(nid) in self.handoff_seen:
                     continue
 
                 placeholders = {
@@ -320,6 +361,28 @@ class Operation(BaseOperation):
                 # (Раньше также срабатывало на "не просмотрено" — это слало
                 # сообщения по свежим неоткрытым откликам, т.е. спам.)
                 if is_employer_message:
+                    # Приглашение на интервью -> эскалация тебе (🔴), бот в чате
+                    # молчит, чат помечается переданным (больше не трогаем).
+                    last_text = last_message.get("text") or ""
+                    if await self._is_interview_invite(last_text):
+                        chat_id = negotiation.get("chat_id") or nid
+                        link = f"https://hh.ru/chat/{chat_id}"
+                        if not self.dry_run:
+                            pgconn.notify(
+                                pgconn.PRIORITY_HIGH,
+                                f"Приглашение на интервью — "
+                                f"{placeholders['vacancy_name']} "
+                                f"({placeholders['employer_name']}). "
+                                f"«{last_text[:300]}»",
+                                category="interview",
+                                link=link,
+                                dedup_key=f"interview:{nid}",
+                            )
+                            pgconn.add_seen("handoff", [str(nid)])
+                            self.handoff_seen.add(str(nid))
+                        print(f"🔔 ИНТЕРВЬЮ -> эскалация тебе, бот молчит: {link}")
+                        continue
+
                     send_message = ""
                     if self.reply_message:
                         send_message = (

@@ -225,19 +225,33 @@ async def main():
                     refresh_hook=pgconn.locked_token_refresh)
     resume = (cfg.get("resume_text") or "").strip()
     salary = (cfg.get("preferences") or {}).get("salary")
-    sysp = SYS_BASE
-    if salary:
-        sysp += f"\n\nЖелаемая зарплата кандидата: {salary}. На вопросы о зарплате/доходе указывай её."
-    if resume:
-        sysp += "\n\nРезюме:\n" + resume
-    llm = ChatOpenAI(token=oa["token"], model=oa.get("model"), completion_endpoint=oa.get("completion_endpoint"),
-                     system_prompt=sysp, temperature=0.3, max_completion_tokens=300)
 
     resume_id = pgconn.get_setting("apply.resume_id")
     if not resume_id:
         print("apply.resume_id не задан для схемы", pgconn.get_schema())
         await api.aclose()
         return
+
+    # Город берём из hh-резюме (area.name — авторитетно), НЕ угадываем по тексту:
+    # в resume_text может не быть текущего города, и LLM брал его из строки про вуз
+    # и отвечал неверно (напр. «Волгоград», когда кандидат на самом деле в Москве).
+    city = None
+    try:
+        city = ((await api.get(f"/resumes/{resume_id}")).get("area") or {}).get("name")
+    except Exception as e:
+        print("не удалось получить город из резюме:", repr(e)[:60])
+
+    sysp = SYS_BASE
+    if salary:
+        sysp += f"\n\nЖелаемая зарплата кандидата: {salary}. На вопросы о зарплате/доходе указывай её."
+    if city:
+        sysp += (f"\n\nГород проживания кандидата: {city}. На вопросы о городе/локации "
+                 f"указывай именно этот город (не выдумывай другой по строке про вуз). "
+                 f"Кандидат физически находится в этом городе.")
+    if resume:
+        sysp += "\n\nРезюме:\n" + resume
+    llm = ChatOpenAI(token=oa["token"], model=oa.get("model"), completion_endpoint=oa.get("completion_endpoint"),
+                     system_prompt=sysp, temperature=0.3, max_completion_tokens=300)
 
     seen = pgconn.seen_keys("tests")
 

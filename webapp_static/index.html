@@ -28,7 +28,6 @@
           <div class="stat"><div class="num" id="s-apps">—</div><div class="lbl">Откликов всего</div></div>
           <div class="stat"><div class="num" id="s-today">—</div><div class="lbl">Откликов сегодня</div></div>
           <div class="stat"><div class="num" id="s-views">—</div><div class="lbl">Просмотров резюме</div></div>
-          <div class="stat"><div class="num" id="s-resp">—</div><div class="lbl">Ответов</div></div>
           <div class="stat"><div class="num" id="s-inv">—</div><div class="lbl">Приглашений</div></div>
           <div class="stat"><div class="num" id="s-intv">—</div><div class="lbl">Интервью</div></div>
         </div>
@@ -39,25 +38,40 @@
       </section>
 
       <section id="tab-dialogs" class="tab">
-        <div class="hint feat-hint">Куда откликнулись и что ответили работодатели.</div>
+        <div class="dlg-bar">
+          <span class="hint">Откликов: <b id="dlg-count">—</b></span>
+          <select id="dlg-sort">
+            <option value="date">Сначала новые</option>
+            <option value="status">По статусу</option>
+          </select>
+        </div>
         <div id="dialogs"></div>
       </section>
 
       <section id="tab-feat" class="tab">
-        <div class="sec-title">Настройки</div>
-        <div class="cfg">
-          <label class="cfgrow"><span>Желаемая зарплата, ₽</span>
-            <input type="number" id="cfg-salary" inputmode="numeric" placeholder="напр. 250000"></label>
-          <label class="cfgrow"><span>Лимит откликов в день</span>
-            <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></label>
-          <label class="cfgrow"><span>Активное резюме</span>
-            <select id="cfg-resume"></select></label>
+        <div class="sec-title">Профиль откликов</div>
+        <div class="cfgrow"><span>Желаемая зарплата, ₽</span>
+          <input type="number" id="cfg-salary" inputmode="numeric" placeholder="напр. 250000"></div>
+        <div class="cfgrow"><span>Активное резюме</span>
+          <select id="cfg-resume"></select></div>
+
+        <div class="sec-title">Обычные отклики</div>
+        <div class="featgroup">
+          <label class="toggle"><span><b>Авто-отклики</b><small>на подходящие вакансии</small></span>
+            <input type="checkbox" data-feat="apply"><i></i></label>
+          <div class="cfgrow sub"><span>Лимит в день</span>
+            <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></div>
         </div>
 
-        <div class="sec-title">Функции</div>
-        <div class="hint feat-hint">Включай и выключай. Применяется сразу.</div>
-        <label class="toggle"><span><b>Отклики</b><small>авто-отклики + тесты</small></span>
-          <input type="checkbox" data-feat="apply"><i></i></label>
+        <div class="sec-title">Отклики с тестами</div>
+        <div class="featgroup">
+          <label class="toggle"><span><b>Авто-тесты</b><small>отклик + прохождение теста через браузер</small></span>
+            <input type="checkbox" data-feat="tests"><i></i></label>
+          <div class="cfgrow sub"><span>Лимит в день</span>
+            <input type="number" id="cfg-tlimit" inputmode="numeric" min="0" max="100"></div>
+        </div>
+
+        <div class="sec-title">Прочее</div>
         <label class="toggle"><span><b>Ответы работодателям</b><small>авто-ответы на сообщения</small></span>
           <input type="checkbox" data-feat="reply"><i></i></label>
         <label class="toggle"><span><b>Активность + поднятие</b><small>просмотр вакансий, авто-bump</small></span>
@@ -74,6 +88,19 @@
       <button data-tab="feat">⚙️<span>Функции</span></button>
     </nav>
   </div>
+
+  <div id="modal" class="hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <button id="m-close">✕</button>
+        <div class="modal-title" id="m-title">—</div>
+        <div class="modal-emp hint" id="m-emp"></div>
+      </div>
+      <div id="m-body"></div>
+      <a id="m-hh" class="modal-hh hidden" target="_blank">Открыть на hh.ru ↗</a>
+    </div>
+  </div>
+
   <div id="err" class="hidden"></div>
   <script src="/app.js"></script>
 </body>

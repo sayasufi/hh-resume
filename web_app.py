@@ -22,7 +22,7 @@ from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp_static")
-FEATURES = ("apply", "reply", "browse", "giga")  # тумблеры
+FEATURES = ("apply", "tests", "reply", "browse", "giga")  # тумблеры
 _INITDATA_MAX_AGE = 86400  # сутки
 
 app = FastAPI(title="hh Mini App")
@@ -211,8 +211,11 @@ _NEG_STATE = {
 }
 
 
+_STATE_RANK = {"invitation": 0, "response": 1, "discard": 3, "hidden": 4}
+
+
 async def _dialogs(account: str) -> list:
-    data = await _hh_call(account, "/negotiations", per_page=50, order_by="updated_at")
+    data = await _hh_call(account, "/negotiations", per_page=100, order_by="updated_at")
     out = []
     for n in (data or {}).get("items", []):
         vac = n.get("vacancy") or {}
@@ -220,14 +223,31 @@ async def _dialogs(account: str) -> list:
         sid = (n.get("state") or {}).get("id") or ""
         emoji, label = _NEG_STATE.get(sid, ("•", (n.get("state") or {}).get("name") or sid))
         out.append({
+            "id": n.get("id"),
             "title": vac.get("name") or "Вакансия",
             "employer": emp,
             "state": label,
+            "state_id": sid,
             "emoji": emoji,
+            "rank": _STATE_RANK.get(sid, 2),
+            "has_updates": bool(n.get("has_updates")),
             "url": vac.get("alternate_url") or "",
             "updated": (n.get("updated_at") or "")[:10],
         })
     return out
+
+
+async def _dialog_messages(account: str, nid: str) -> dict:
+    data = await _hh_call(account, f"/negotiations/{nid}/messages")
+    msgs = []
+    for m in (data or {}).get("items", []):
+        author = ((m.get("author") or {}).get("participant_type") or "")
+        msgs.append({
+            "me": author == "applicant",
+            "text": (m.get("text") or "").strip(),
+            "at": (m.get("created_at") or "")[:16].replace("T", " "),
+        })
+    return {"messages": msgs}
 
 
 def _snapshot(account: str, apps: int, views: int, invitations: int) -> None:
@@ -261,6 +281,19 @@ def _trends(account: str) -> list:
         conn.close()
 
 
+def _funnel(apps: int, invitations: int, interviews: int) -> list:
+    """Последовательная воронка: каждый этап ⊆ предыдущего + конверсия %."""
+    stages = [("Отклики", apps), ("Приглашения", invitations),
+              ("Интервью", min(interviews, invitations) if invitations else interviews)]
+    out = []
+    prev = None
+    for label, val in stages:
+        conv = round(val / prev * 100) if prev else None
+        out.append({"label": label, "value": val, "conv": conv})
+        prev = val
+    return out
+
+
 async def _build_me(account: str) -> dict:
     cached = _me_cache.get(account)
     if cached and time.time() - cached[0] < 60:
@@ -291,12 +324,8 @@ async def _build_me(account: str) -> dict:
             "responses": hh["responses"],
             "invitations": hh["invitations"],
             "interviews": db["interviews"],
-            "funnel": [
-                {"label": "Отклики", "value": hh["applications_total"]},
-                {"label": "Просмотры", "value": hh["resume_views"]},
-                {"label": "Приглашения", "value": hh["invitations"]},
-                {"label": "Интервью", "value": db["interviews"]},
-            ],
+            "funnel": _funnel(hh["applications_total"], hh["invitations"],
+                              db["interviews"]),
         },
     }
     _me_cache[account] = (time.time(), payload)
@@ -321,6 +350,8 @@ async def api_settings(x_init_data: str = Header(None, alias="X-Init-Data")):
         "salary": (cfg.get("preferences") or {}).get("salary") or "",
         "max_per_day": await asyncio.to_thread(
             pgconn.get_setting, "apply.max_per_day", 15, account),
+        "tests_per_day": await asyncio.to_thread(
+            pgconn.get_setting, "apply.tests_per_day", 10, account),
         "resume_id": await asyncio.to_thread(
             pgconn.get_setting, "apply.resume_id", "", account),
     }
@@ -336,9 +367,8 @@ async def _set_config(account: str, key: str, value) -> None:
         prefs = cfg.get("preferences") or {}
         prefs["salary"] = str(value).strip()
         await asyncio.to_thread(pgconn.set_app_config, "preferences", prefs, account)
-    elif key == "apply.max_per_day":
-        await asyncio.to_thread(
-            pgconn.set_setting, "apply.max_per_day", max(0, int(value)), account)
+    elif key in ("apply.max_per_day", "apply.tests_per_day"):
+        await asyncio.to_thread(pgconn.set_setting, key, max(0, int(value)), account)
     elif key == "apply.resume_id":
         await asyncio.to_thread(pgconn.set_setting, "apply.resume_id", str(value), account)
     else:
@@ -362,6 +392,12 @@ async def api_settings_set(body: dict,
 async def api_dialogs(x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data)
     return {"items": await _dialogs(account)}
+
+
+@app.get("/api/dialog")
+async def api_dialog(id: str, x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data)
+    return await _dialog_messages(account, id)
 
 
 @app.get("/api/trends")

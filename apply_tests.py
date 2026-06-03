@@ -255,9 +255,11 @@ async def fill_task(page, task, llm, vname):
 
 
 async def main():
-    if not pgconn.feature_enabled("apply"):
-        print("feat.apply выключен в Mini App — пропуск apply_tests")
+    if not pgconn.feature_enabled("tests"):
+        print("feat.tests выключен в Mini App — пропуск apply_tests")
         return
+    global LIMIT
+    LIMIT = int(pgconn.get_setting("apply.tests_per_day", LIMIT) or LIMIT)
     cfg = pgconn.app_config()
     user, pw = creds()
     tok = cfg["token"]; oa = cfg["openai"]

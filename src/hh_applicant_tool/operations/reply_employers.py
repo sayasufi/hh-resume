@@ -400,7 +400,7 @@ class Operation(BaseOperation):
                     # Финальная отправка текста
                     if self.dry_run:
                         logger.debug(
-                            "dry-run: отклик на",
+                            "dry-run: ответ на %s: %s",
                             vacancy["alternate_url"],
                             send_message,
                         )

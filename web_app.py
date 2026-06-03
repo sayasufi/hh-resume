@@ -168,9 +168,9 @@ async def _build_me(account: str) -> dict:
     name = (await asyncio.to_thread(
         pgconn.get_setting, "user.full_name", None, account)) or hh["full_name"] or account
     salary = (cfg.get("preferences") or {}).get("salary") or ""
-    active = all(
-        await asyncio.to_thread(pgconn.feature_enabled, f, account) for f in FEATURES
-    )
+    flags = [await asyncio.to_thread(pgconn.feature_enabled, f, account)
+             for f in FEATURES]
+    active = all(flags)
     payload = {
         "profile": {
             "name": name,

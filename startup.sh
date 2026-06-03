@@ -13,4 +13,8 @@ echo "[$(date)] Running startup tasks..."
 # НЕ запускаем apply-similar при старте — иначе up -d мгновенно разошлёт пачку.
 # Рассылка только по cron (0 8-21).
 
+# Слушатель /connect (привязка Telegram кандидата по QR) — стартуем сразу;
+# watchdog в cron поднимет, если упадёт. setsid — полный detach (переживёт).
+HH_DB_SCHEMA=u_egor setsid /usr/local/bin/python -u /app/tg_connect_bot.py >> /var/log/cron.log 2>&1 < /dev/null &
+
 echo "[$(date)] Startup tasks finished."

@@ -38,7 +38,8 @@ def fetch_unsent() -> list[tuple]:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, priority, text, link FROM notifications "
-                "WHERE sent_at IS NULL ORDER BY priority, created_at"
+                "WHERE account=%s AND sent_at IS NULL ORDER BY priority, created_at",
+                (pgconn.get_account(),),
             )
             return cur.fetchall()
     finally:
@@ -52,8 +53,9 @@ def mark_sent(ids: list[int]) -> None:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE notifications SET sent_at = now() WHERE id = ANY(%s)",
-                (ids,),
+                "UPDATE notifications SET sent_at = now() "
+                "WHERE account=%s AND id = ANY(%s)",
+                (pgconn.get_account(), ids),
             )
         conn.commit()
     finally:

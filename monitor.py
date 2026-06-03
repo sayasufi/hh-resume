@@ -67,6 +67,11 @@ async def main():
             me = await api.get("/me")
         finally:
             await api.aclose()
+        # храним телефон hh-профиля (для сопоставления Telegram<->hh в /connect)
+        try:
+            pgconn.set_app_config("hh_phone", me.get("phone") or "")
+        except Exception:
+            pass
         cnt = me.get("counters", {})
         info.append(
             f"приглашений +{cnt.get('unread_negotiations', 0)}, "

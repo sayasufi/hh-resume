@@ -1,15 +1,17 @@
 """Слушающий бот: команда /connect В ЛИЧКЕ -> QR-вход Telethon -> сохранение
 user-сессии Telegram кандидата. Только ЛС, ничего не постится в топики/группу.
 
-  /connect            — тест: сессия в public.tg_sessions (привязка к tg-аккаунту)
-  /connect <имя>      — привязать к юзеру (имя из public.app_users) -> в его схему
-                        app_config.tg_user_session (для ГигаРекрутера и пр.)
+Сопоставление Telegram<->hh — АВТОМАТИЧЕСКИ по номеру телефона: после входа
+берём номер Telegram-аккаунта и ищем hh-аккаунт (схему) с таким же номером в
+профиле (app_config.hh_phone, кладёт monitor.py из hh /me). Совпало -> сессия
+(ЗАШИФРОВАННАЯ) сохраняется в схему этого юзера: u_xxx.app_config.tg_user_session.
+Не совпало -> сессию не храним, просто сообщаем (и разлогиниваем устройство).
 
-api_id/api_hash — общий публичный ключ (Telegram Desktop): идентифицирует ПРОГРАММУ,
+api_id/api_hash — общий публичный ключ (Telegram Desktop): идентификатор ПРОГРАММЫ,
 не пользователя; кандидат логинится своим аккаунтом сканом QR.
 
-Запуск (процесс): HH_DB_SCHEMA=u_egor python tg_connect_bot.py  (токен берётся из
-telegram-конфига; он один на всех юзеров).
+Запуск (процесс): HH_DB_SCHEMA=u_egor python tg_connect_bot.py  (токен бота один
+на всех; берётся из telegram-конфига).
 """
 import asyncio
 import io
@@ -46,46 +48,43 @@ async def api(token, method, files=None, **kw):
         return r.json()
 
 
-def resolve_schema(arg):
-    if not arg:
+def resolve_schema_by_phone(tg_phone):
+    """Найти схему юзера, чей hh-номер совпадает с номером Telegram-аккаунта."""
+    norm = pgconn._norm_phone(tg_phone)
+    if not norm:
         return None
-    arg = arg.strip().lower()
-    for name, schema in pgconn.list_users():
-        if arg in (name.lower(), schema.lower()):
-            return schema
-    return None
-
-
-def save_session(schema, sess, tg_id, name, phone):
     conn = psycopg.connect(pgconn.get_dsn())
     try:
         with conn.cursor() as cur:
-            if schema:
+            for _name, schema in pgconn.list_users():
                 cur.execute(
-                    f'INSERT INTO "{schema}".app_config(key, value) '
-                    "VALUES (%s, %s::jsonb) ON CONFLICT(key) DO UPDATE SET "
-                    "value = excluded.value, updated_at = now()",
-                    ("tg_user_session", json.dumps(sess)),
+                    f'SELECT value FROM "{schema}".app_config WHERE key = %s',
+                    ("hh_phone",),
                 )
-            else:
-                cur.execute(
-                    "CREATE TABLE IF NOT EXISTS public.tg_sessions ("
-                    "tg_user_id bigint PRIMARY KEY, name text, phone text, "
-                    "session text, created_at timestamptz DEFAULT now())"
-                )
-                cur.execute(
-                    "INSERT INTO public.tg_sessions(tg_user_id, name, phone, session) "
-                    "VALUES (%s, %s, %s, %s) ON CONFLICT(tg_user_id) DO UPDATE SET "
-                    "session = excluded.session, phone = excluded.phone, "
-                    "name = excluded.name",
-                    (tg_id, name, phone, sess),
-                )
+                row = cur.fetchone()
+                if row and pgconn._norm_phone(row[0]) == norm:
+                    return schema
+    finally:
+        conn.close()
+    return None
+
+
+def save_session(schema, enc_sess):
+    conn = psycopg.connect(pgconn.get_dsn())
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f'INSERT INTO "{schema}".app_config(key, value) '
+                "VALUES (%s, %s::jsonb) ON CONFLICT(key) DO UPDATE SET "
+                "value = excluded.value, updated_at = now()",
+                ("tg_user_session", json.dumps(enc_sess)),
+            )
         conn.commit()
     finally:
         conn.close()
 
 
-async def do_connect(token, chat_id, target_schema):
+async def do_connect(token, chat_id):
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     mid = None
@@ -124,13 +123,25 @@ async def do_connect(token, chat_id, target_schema):
             await api(token, "sendMessage", chat_id=str(chat_id),
                       text="⌛ QR истёк, никто не отсканировал. Повтори /connect.")
             return
-        sess = client.session.save()
+
         me = await client.get_me()
-        save_session(target_schema, sess, chat_id, me.first_name, me.phone)
-        tgt = f"к «{target_schema}»" if target_schema else "(тестовая привязка)"
+        schema = resolve_schema_by_phone(me.phone)
+        if not schema:
+            # сессию не сохраняем и разлогиниваем устройство (гигиена)
+            try:
+                await client.log_out()
+            except Exception:
+                pass
+            await api(token, "sendMessage", chat_id=str(chat_id),
+                      text=f"⚠️ Номер +{me.phone} не совпал ни с одним hh-аккаунтом "
+                           "в боте. Подключайся с того Telegram, чей номер = номер "
+                           "в твоём hh-профиле.")
+            return
+        save_session(schema, pgconn.enc_session(client.session.save()))
         await api(token, "sendMessage", chat_id=str(chat_id),
-                  text=f"✅ Telegram подключён: {me.first_name}. Привязка {tgt}.")
-        print(f"linked: {me.phone} -> {target_schema or 'public.tg_sessions'}")
+                  text=f"✅ Telegram подключён к hh-аккаунту «{schema}». "
+                       "Сессия зашифрована. Готово.")
+        print(f"linked: +{me.phone} -> {schema}")
     finally:
         await client.disconnect()
 
@@ -153,26 +164,19 @@ async def main():
             offset = u["update_id"] + 1
             msg = u.get("message") or {}
             chat = msg.get("chat") or {}
-            text = (msg.get("text") or "").strip()
+            text = (msg.get("text") or "").strip().lower()
             if chat.get("type") != "private":
                 continue
-            if not text.lower().startswith("/connect"):
+            if not text.startswith("/connect"):
                 continue
             cid = chat["id"]
             if cid in busy:
-                continue
-            arg = text[len("/connect"):].strip()
-            schema = resolve_schema(arg)
-            if arg and not schema:
-                users = ", ".join(n for n, _ in pgconn.list_users())
-                await api(token, "sendMessage", chat_id=str(cid),
-                          text=f"Не нашёл юзера «{arg}». Доступны: {users}")
                 continue
             busy.add(cid)
             try:
                 await api(token, "sendMessage", chat_id=str(cid),
                           text="Генерирую QR-код…")
-                await do_connect(token, cid, schema)
+                await do_connect(token, cid)
             finally:
                 busy.discard(cid)
 

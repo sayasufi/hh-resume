@@ -362,6 +362,52 @@ PRIORITY_MED = 2    # 🟡 действие, не срочно
 PRIORITY_LOW = 3    # 🟢 рутина/инфо
 
 
+def _norm_phone(p) -> str:
+    """Последние 10 цифр номера (без кода страны/плюса) — для сопоставления
+    Telegram-номера с номером hh-профиля."""
+    d = "".join(ch for ch in str(p or "") if ch.isdigit())
+    return d[-10:]
+
+
+def _session_key() -> bytes:
+    """Ключ шифрования Telegram-сессий. Из env HH_SESSION_KEY либо файл
+    <CONFIG_DIR>/.session_key (генерится 1 раз, не в git/образе, в bind-mount)."""
+    from cryptography.fernet import Fernet
+
+    k = os.environ.get("HH_SESSION_KEY")
+    if k:
+        return k.encode()
+    path = os.path.join(os.environ.get("CONFIG_DIR", "/app/config"), ".session_key")
+    try:
+        with open(path, "rb") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        key = Fernet.generate_key()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(key)
+        try:
+            os.chmod(path, 0o600)
+        except Exception:
+            pass
+        return key
+
+
+def enc_session(s: str) -> str:
+    from cryptography.fernet import Fernet
+
+    return Fernet(_session_key()).encrypt(s.encode()).decode()
+
+
+def dec_session(s: str) -> str:
+    from cryptography.fernet import Fernet
+
+    try:
+        return Fernet(_session_key()).decrypt(s.encode()).decode()
+    except Exception:
+        return s  # не зашифровано/иной формат — вернуть как есть
+
+
 def notify(
     priority: int,
     text: str,

@@ -82,31 +82,42 @@ async def _addacc_fail(message, state, exc) -> None:
 
 
 START_TEXT = (
-    "👋 Привет! Я бот-помощник по поиску работы на hh.ru.\n\n"
-    "Что я делаю сам:\n"
-    "• откликаюсь на подходящие вакансии с сопроводительными письмами\n"
-    "• отвечаю работодателям в чатах\n"
-    "• прохожу тесты к вакансиям\n"
-    "• присылаю тебе важное: приглашения на интервью, просьбы связаться\n\n"
-    "Чтобы я мог проходить за тебя авто-интервью (ГигаРекрутер Сбера и т.п.) — "
-    "подключи свой Telegram кнопкой ниже."
+    "👋 Привет! Я ищу работу на hh.ru за тебя — на автопилоте.\n\n"
+    "Что делаю сам, круглосуточно:\n"
+    "• 📨 откликаюсь на подходящие вакансии с сопроводительными\n"
+    "• 💬 отвечаю работодателям в чатах\n"
+    "• 🧩 прохожу тесты к вакансиям\n"
+    "• 📈 поднимаю резюме и захожу на вакансии для активности\n"
+    "• 🔔 присылаю важное: приглашения, просьбы связаться\n\n"
+    "📊 <b>Личный кабинет</b> — вся статистика и тумблеры: что включить, "
+    "что выключить.\n\n"
+    "<b>С чего начать:</b>\n"
+    "1️⃣ «Привязать профиль» — свяжу твой Telegram с hh по номеру\n"
+    "2️⃣ «Открыть кабинет» — профиль, статистика, управление\n\n"
+    "Аккаунта на hh ещё нет в системе? Жми «Добавить hh-аккаунт»."
 )
 HELP_TEXT = (
-    "❓ Команды:\n"
-    "/addaccount — добавить новый hh-аккаунт (логин/пароль hh, один раз)\n"
-    "/connect — подключить твой Telegram (скан QR) для авто-интервью\n"
-    "/status — статус: аккаунт, отклики, токен\n"
-    "/start — это меню\n\n"
-    "Важное (интервью, контакты от работодателей) приходит автоматически "
-    "приоритизированным дайджестом 🔴🟡🟢."
+    "❓ <b>Как пользоваться</b>\n\n"
+    "📊 <b>Личный кабинет</b> — кнопка «Профиль» слева от поля ввода (или "
+    "/start → «Открыть кабинет»): профиль, статистика и тумблеры функций.\n\n"
+    "<b>Команды:</b>\n"
+    "/link — привязать профиль к hh по номеру телефона\n"
+    "/addaccount — добавить новый hh-аккаунт (один раз логин+пароль hh)\n"
+    "/connect — подключить Telegram для ГигаРекрутера (авто-интервью)\n"
+    "/status — короткий статус: отклики, приглашения, токен\n"
+    "/start — главное меню\n\n"
+    "Важное (интервью, контакты работодателей) приходит автоматически "
+    "дайджестом 🔴🟡🟢."
 )
 
 
 def _kb():
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Открыть кабинет",
+                              web_app=WebAppInfo(url=WEBAPP_URL))],
+        [InlineKeyboardButton(text="🔗 Привязать профиль", callback_data="link")],
         [InlineKeyboardButton(text="➕ Добавить hh-аккаунт", callback_data="addacc")],
-        [InlineKeyboardButton(text="🔗 Подключить Telegram", callback_data="connect")],
-        [InlineKeyboardButton(text="📊 Статус", callback_data="status"),
+        [InlineKeyboardButton(text="🧩 ГигаРекрутер", callback_data="connect"),
          InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
     ])
 
@@ -281,12 +292,12 @@ async def cmd_start(message: Message, state: FSMContext):
     if message.chat.type != "private":
         return
     await state.clear()
-    await message.answer(START_TEXT, reply_markup=_kb())
+    await message.answer(START_TEXT, reply_markup=_kb(), parse_mode="HTML")
 
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
-    await message.answer(HELP_TEXT)
+    await message.answer(HELP_TEXT, parse_mode="HTML")
 
 
 @dp.message(Command("connect"))
@@ -300,18 +311,29 @@ async def cmd_connect(message: Message, state: FSMContext):
 # Telethon /connect (полный доступ к TG) нужен ТОЛЬКО для ГигаРекрутера. Чтобы
 # открыть профиль/статистику, достаточно сопоставить TG↔hh по телефону.
 
-@dp.message(Command("link"))
-async def cmd_link(message: Message):
-    if message.chat.type != "private":
-        return
+async def _send_link_prompt(message: Message):
     kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="📱 Поделиться номером", request_contact=True)]],
         resize_keyboard=True, one_time_keyboard=True,
     )
     await message.answer(
-        "Чтобы открыть личный профиль, привяжем твой Telegram к hh-аккаунту по "
-        "номеру телефона. Нажми кнопку ниже 👇", reply_markup=kb,
+        "Чтобы открыть личный кабинет, свяжем твой Telegram с hh-аккаунтом по "
+        "номеру телефона. Нажми кнопку ниже 👇\n\n"
+        "(нужен тот же номер, что указан на hh)", reply_markup=kb,
     )
+
+
+@dp.message(Command("link"))
+async def cmd_link(message: Message):
+    if message.chat.type != "private":
+        return
+    await _send_link_prompt(message)
+
+
+@dp.callback_query(F.data == "link")
+async def cb_link(cq: CallbackQuery):
+    await cq.answer()
+    await _send_link_prompt(cq.message)
 
 
 @dp.message(F.contact)
@@ -345,7 +367,7 @@ async def cmd_status(message: Message):
         return
     schema = _account_by("tg_user_id", message.from_user.id)
     if not schema:
-        await message.answer("Твой Telegram пока не подключён. Нажми /connect.")
+        await message.answer("Твой Telegram пока не привязан. Нажми /link.")
         return
     await message.answer(status_text(schema))
 
@@ -497,7 +519,7 @@ async def acc_salary(message: Message, state: FSMContext):
     await message.answer(
         f"✅ Аккаунт {full_name} добавлен — работает и API, и браузер.\n"
         f"Резюме: {pub[0].get('title','')}. Отклики пойдут по расписанию.\n\n"
-        "Теперь /connect — привязать твой Telegram (авто-интервью)."
+        "Теперь /link — привязать профиль и открыть личный кабинет."
     )
 
 
@@ -523,7 +545,7 @@ async def cb_status(cq: CallbackQuery):
     await cq.answer()
     schema = _account_by("tg_user_id", cq.from_user.id)
     if not schema:
-        await cq.message.answer("Твой Telegram пока не подключён. Нажми /connect.")
+        await cq.message.answer("Твой Telegram пока не привязан. Нажми /link.")
         return
     await cq.message.answer(status_text(schema))
 
@@ -531,7 +553,7 @@ async def cb_status(cq: CallbackQuery):
 @dp.callback_query(F.data == "help")
 async def cb_help(cq: CallbackQuery):
     await cq.answer()
-    await cq.message.answer(HELP_TEXT)
+    await cq.message.answer(HELP_TEXT, parse_mode="HTML")
 
 
 async def main():

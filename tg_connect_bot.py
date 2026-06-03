@@ -128,9 +128,22 @@ def _kb_linked():
                               web_app=WebAppInfo(url=WEBAPP_URL))],
         [InlineKeyboardButton(text="📊 Статус", callback_data="status"),
          InlineKeyboardButton(text="🧩 ГигаРекрутер", callback_data="connect")],
-        [InlineKeyboardButton(text="➕ Ещё аккаунт", callback_data="addacc"),
-         InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
+        [InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
     ])
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
+
+
+def _valid_login(s: str):
+    """-> 'email' | 'phone' | None. Телефон РФ: 10-11 цифр."""
+    s = (s or "").strip()
+    if _EMAIL_RE.match(s):
+        return "email"
+    digits = re.sub(r"\D", "", s)
+    if 10 <= len(digits) <= 11:
+        return "phone"
+    return None
 
 
 START_LINKED = (
@@ -370,7 +383,14 @@ async def on_contact(message: Message):
         await message.answer("Это чужой контакт. Поделись СВОИМ номером.",
                              reply_markup=ReplyKeyboardRemove())
         return
+    # один TG — один аккаунт: если уже привязан к ДРУГОМУ, не плодим вторую связь
+    existing = _account_by("tg_user_id", message.from_user.id)
     account = _account_by("hh_phone", c.phone_number)
+    if existing and account and existing != account:
+        name = pgconn.get_setting("user.full_name", None, account=existing) or existing
+        await message.answer(ALREADY_LINKED.format(name=name),
+                             reply_markup=ReplyKeyboardRemove())
+        return
     if not account:
         await message.answer(
             "❌ Не нашёл hh-аккаунт с таким номером. Убедись, что номер совпадает "
@@ -417,22 +437,46 @@ async def got_password(message: Message, state: FSMContext):
     await _finish(message, client)
 
 
-@dp.message(Command("addaccount"))
-async def cmd_addaccount(message: Message, state: FSMContext):
-    if message.chat.type != "private":
-        return
+ALREADY_LINKED = (
+    "У тебя уже привязан hh-аккаунт «{name}». Один Telegram — один аккаунт.\n"
+    "Открой кабинет кнопкой «📊 Профиль» или /start."
+)
+
+
+async def _start_addaccount(message: Message, state: FSMContext) -> bool:
+    """Общий старт онбординга с проверкой «один TG — один аккаунт». False = отказ."""
+    linked = _account_by("tg_user_id", message.from_user.id)
+    if linked:
+        name = pgconn.get_setting("user.full_name", None, account=linked) or linked
+        await message.answer(ALREADY_LINKED.format(name=name))
+        return False
     await _drop_login(message.chat.id)
     await state.clear()
     await state.set_state(AddAcc.login)
     await message.answer(
         "➕ Новый hh-аккаунт.\nЛогин hh — email или телефон (напр. +79991234567):"
     )
+    return True
+
+
+@dp.message(Command("addaccount"))
+async def cmd_addaccount(message: Message, state: FSMContext):
+    if message.chat.type != "private":
+        return
+    await _start_addaccount(message, state)
 
 
 @dp.message(AddAcc.login)
 async def acc_login(message: Message, state: FSMContext):
     login = (message.text or "").strip()
-    medium = "email" if "@" in login else "phone"
+    kind = _valid_login(login)
+    if not kind:
+        await message.answer(
+            "❌ Это не похоже на email или телефон. Введи корректный логин hh "
+            "(напр. name@mail.ru или +79991234567):"
+        )
+        return  # остаёмся на шаге логина
+    medium = "email" if kind == "email" else "phone"
     await state.update_data(login=login, medium=medium, mode="password", password="")
     await state.set_state(AddAcc.password)
     await message.answer("Пароль hh (удалю сообщение сразу):")
@@ -446,6 +490,9 @@ async def acc_password(message: Message, state: FSMContext):
         await message.delete()
     except Exception:
         pass
+    if len(pw) < 4:
+        await message.answer("❌ Пароль слишком короткий. Введи пароль hh:")
+        return  # остаёмся на шаге пароля
     d = await state.get_data()
     medium = d.get("medium", "email")
     await state.update_data(password=pw)
@@ -494,6 +541,11 @@ async def acc_salary(message: Message, state: FSMContext):
     import onboard
     d = await state.get_data()
     salary = (message.text or "").strip()
+    digits = re.sub(r"\D", "", salary)
+    if not digits or len(digits) < 4:
+        await message.answer("❌ Зарплата должна быть числом, напр. 250000:")
+        return  # остаёмся на шаге зарплаты (сессия жива)
+    salary = digits
     sess = _login_sessions.get(message.chat.id)
     if sess is None:
         await state.clear()
@@ -550,6 +602,12 @@ async def acc_salary(message: Message, state: FSMContext):
 @dp.callback_query(F.data == "addacc")
 async def cb_addacc(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
+    # тот же чек «один TG — один аккаунт» (from_user у колбэка — нажавший)
+    linked = _account_by("tg_user_id", cq.from_user.id)
+    if linked:
+        name = pgconn.get_setting("user.full_name", None, account=linked) or linked
+        await cq.message.answer(ALREADY_LINKED.format(name=name))
+        return
     await _drop_login(cq.message.chat.id)
     await state.clear()
     await state.set_state(AddAcc.login)

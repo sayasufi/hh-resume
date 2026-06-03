@@ -20,28 +20,28 @@
     <main>
       <!-- ПРОФИЛЬ -->
       <section id="tab-profile" class="tab active">
-        <div class="rows">
-          <div class="row"><span class="k">Имя</span><span class="v" id="p-name">—</span></div>
-          <div class="row"><span class="k">hh ID</span><span class="v" id="p-id">—</span></div>
-          <div class="row"><span class="k">Резюме</span><span class="v" id="p-resume">—</span></div>
-          <div class="row"><span class="k">Желаемая зарплата</span><span class="v" id="p-salary">—</span></div>
-          <div class="row"><span class="k">Статус</span><span class="v" id="p-status">—</span></div>
+        <div class="list">
+          <div class="cell"><span class="k">Имя</span><span class="v" id="p-name">—</span></div>
+          <div class="cell"><span class="k">hh ID</span><span class="v" id="p-id">—</span></div>
+          <div class="cell"><span class="k">Резюме</span><span class="v" id="p-resume">—</span></div>
+          <div class="cell"><span class="k">Желаемая зарплата</span><span class="v" id="p-salary">—</span></div>
+          <div class="cell"><span class="k">Статус</span><span class="v" id="p-status">—</span></div>
         </div>
       </section>
 
       <!-- СТАТИСТИКА -->
       <section id="tab-stats" class="tab">
         <div class="grid">
-          <div class="stat a"><div class="num" id="s-apps">—</div><div class="lbl">Откликов всего</div></div>
-          <div class="stat b"><div class="num" id="s-today">—</div><div class="lbl">Сегодня</div></div>
-          <div class="stat c"><div class="num" id="s-views">—</div><div class="lbl">Просмотров резюме</div></div>
-          <div class="stat d"><div class="num" id="s-inv">—</div><div class="lbl">Приглашений</div></div>
-          <div class="stat e"><div class="num" id="s-intv">—</div><div class="lbl">Интервью</div></div>
+          <div class="stat"><div class="num" id="s-apps">—</div><div class="lbl">Откликов всего</div></div>
+          <div class="stat"><div class="num" id="s-today">—</div><div class="lbl">Сегодня</div></div>
+          <div class="stat"><div class="num" id="s-views">—</div><div class="lbl">Просмотров резюме</div></div>
+          <div class="stat"><div class="num" id="s-inv">—</div><div class="lbl">Приглашений</div></div>
+          <div class="stat"><div class="num" id="s-intv">—</div><div class="lbl">Интервью</div></div>
         </div>
-        <div class="sec-title">Воронка</div>
-        <div id="funnel" class="surface"></div>
-        <div class="sec-title">Динамика откликов</div>
-        <div id="trend" class="surface"></div>
+        <div class="gtitle">Воронка</div>
+        <div id="funnel" class="list pad-list"></div>
+        <div class="gtitle">Динамика откликов</div>
+        <div id="trend" class="list pad-list"></div>
       </section>
 
       <!-- ОТКЛИКИ -->
@@ -51,6 +51,7 @@
           <button class="chip" data-f="invitation">🟢 Приглашения</button>
           <button class="chip" data-f="response">💬 Ответы</button>
           <button class="chip" data-f="discard">🔴 Отказы</button>
+          <button class="chip" data-f="updates">🔵 Новое</button>
         </div>
         <div class="subbar">
           <span class="hint"><b id="dlg-count">—</b> откликов</span>
@@ -64,37 +65,37 @@
 
       <!-- ФУНКЦИИ -->
       <section id="tab-feat" class="tab">
-        <div class="sec-title">Профиль откликов</div>
-        <div class="rows">
-          <label class="row tap"><span class="k">Желаемая зарплата, ₽</span>
+        <div class="gtitle">Профиль откликов</div>
+        <div class="list">
+          <label class="cell tap"><span class="k">Желаемая зарплата, ₽</span>
             <input type="number" id="cfg-salary" inputmode="numeric" placeholder="250000"></label>
-          <button class="row tap" id="resume-row"><span class="k">Активное резюме</span>
-            <span class="v pick" id="resume-val">—<i>›</i></span></button>
+          <button class="cell tap" id="resume-row"><span class="k">Активное резюме</span>
+            <span class="v chevron" id="resume-val">—</span></button>
         </div>
 
-        <div class="sec-title">Обычные отклики</div>
-        <div class="featgroup">
-          <label class="toggle"><span><b>Авто-отклики</b><small>на подходящие вакансии</small></span>
+        <div class="gtitle">Обычные отклики</div>
+        <div class="list">
+          <label class="cell toggle"><span class="t"><b>Авто-отклики</b><small>на подходящие вакансии</small></span>
             <input type="checkbox" data-feat="apply"><i></i></label>
-          <label class="row sub"><span class="k">Лимит в день</span>
+          <label class="cell tap"><span class="k">Лимит в день</span>
             <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></label>
         </div>
 
-        <div class="sec-title">Отклики с тестами</div>
-        <div class="featgroup">
-          <label class="toggle"><span><b>Авто-тесты</b><small>отклик + тест через браузер</small></span>
+        <div class="gtitle">Отклики с тестами</div>
+        <div class="list">
+          <label class="cell toggle"><span class="t"><b>Авто-тесты</b><small>отклик + тест через браузер</small></span>
             <input type="checkbox" data-feat="tests"><i></i></label>
-          <label class="row sub"><span class="k">Лимит в день</span>
+          <label class="cell tap"><span class="k">Лимит в день</span>
             <input type="number" id="cfg-tlimit" inputmode="numeric" min="0" max="100"></label>
         </div>
 
-        <div class="sec-title">Прочее</div>
-        <div class="featgroup">
-          <label class="toggle"><span><b>Ответы работодателям</b><small>авто-ответы на сообщения</small></span>
+        <div class="gtitle">Прочее</div>
+        <div class="list">
+          <label class="cell toggle"><span class="t"><b>Ответы работодателям</b><small>авто-ответы на сообщения</small></span>
             <input type="checkbox" data-feat="reply"><i></i></label>
-          <label class="toggle"><span><b>Активность + поднятие</b><small>просмотр вакансий, авто-bump</small></span>
+          <label class="cell toggle"><span class="t"><b>Активность + поднятие</b><small>просмотр вакансий, авто-bump</small></span>
             <input type="checkbox" data-feat="browse"><i></i></label>
-          <label class="toggle"><span><b>ГигаРекрутер + уведомления</b><small>авто-интервью, дайджест</small></span>
+          <label class="cell toggle"><span class="t"><b>ГигаРекрутер + уведомления</b><small>авто-интервью, дайджест</small></span>
             <input type="checkbox" data-feat="giga"><i></i></label>
         </div>
       </section>
@@ -108,14 +109,12 @@
     </nav>
   </div>
 
-  <!-- модалка переписки -->
+  <!-- переписка -->
   <div id="modal" class="sheet-wrap hidden">
     <div class="sheet">
       <div class="sheet-grip"></div>
-      <div class="sheet-head">
-        <div class="sheet-title" id="m-title">—</div>
-        <div class="hint" id="m-emp"></div>
-      </div>
+      <div class="sheet-head"><div class="sheet-title" id="m-title">—</div>
+        <div class="hint" id="m-emp"></div></div>
       <div id="m-body" class="sheet-body"></div>
       <a id="m-hh" class="sheet-action hidden" target="_blank">Открыть на hh.ru ↗</a>
     </div>

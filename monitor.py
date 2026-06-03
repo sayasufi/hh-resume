@@ -17,11 +17,9 @@ from hh_applicant_tool.storage import pgconn
 
 def label():
     try:
-        return pgconn.get_setting("user.full_name") or os.environ.get(
-            "HH_DB_SCHEMA", "?"
-        )
+        return pgconn.get_setting("user.full_name") or pgconn.get_account()
     except Exception:
-        return os.environ.get("HH_DB_SCHEMA", "?")
+        return pgconn.get_account()
 
 
 async def main():

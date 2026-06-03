@@ -123,38 +123,38 @@ def build_resume_text(me, r):
     return "\n".join(L)
 
 
-def setup_account(nick, schema, login, password, token, web_state, me,
+def setup_account(name, account, login, password, token, web_state, me,
                   resume_id, resume_text, salary, topic_id, bot_token, chat_id):
-    """Провижин новой схемы (роль/таблицы/гранты) + запись токена/web_state/дефолтов."""
-    import provision_roles
-
+    """Регистрация аккаунта + запись токена/web_state/дефолтов в общую схему
+    (разделение по колонке account). Без отдельной схемы/роли."""
     full_name = " ".join(
         x for x in [me.get("last_name"), me.get("first_name"),
                     me.get("middle_name")] if x
-    ) or nick
+    ) or name
 
-    pgconn.register_user(nick, schema)
-    provision_roles.main()  # создаёт схему/таблицы/роль/гранты/пароль (идемпотентно)
+    pgconn.register_user(full_name, account)  # connect(ensure=True) создаёт таблицы
 
     conn = psycopg.connect(pgconn.get_dsn())
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT value FROM u_egor.app_config WHERE key='openai'")
+            cur.execute("SET search_path TO public")
+            # openai-конфиг копируем с любого существующего аккаунта (общий vLLM)
+            cur.execute("SELECT value FROM app_config WHERE key='openai' LIMIT 1")
             row = cur.fetchone()
             openai_cfg = row[0] if row else None
 
             def setcfg(k, v):
                 cur.execute(
-                    f'INSERT INTO "{schema}".app_config(key, value) VALUES (%s, %s::jsonb) '
-                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=now()",
-                    (k, json.dumps(v)),
+                    "INSERT INTO app_config(account, key, value) VALUES (%s, %s, %s::jsonb) "
+                    "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value, updated_at=now()",
+                    (account, k, json.dumps(v)),
                 )
 
             def setset(k, v):
                 cur.execute(
-                    f'INSERT INTO "{schema}".settings(key, value) VALUES (%s, %s) '
-                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                    (k, json.dumps(v)),
+                    "INSERT INTO settings(account, key, value) VALUES (%s, %s, %s) "
+                    "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value",
+                    (account, k, json.dumps(v)),
                 )
 
             setcfg("token", token)

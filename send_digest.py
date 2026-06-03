@@ -27,11 +27,9 @@ BLOCKS = {
 
 def _user_label() -> str:
     try:
-        return pgconn.get_setting("user.full_name") or os.environ.get(
-            "HH_DB_SCHEMA", "?"
-        )
+        return pgconn.get_setting("user.full_name") or pgconn.get_account()
     except Exception:
-        return os.environ.get("HH_DB_SCHEMA", "?")
+        return pgconn.get_account()
 
 
 def fetch_unsent() -> list[tuple]:

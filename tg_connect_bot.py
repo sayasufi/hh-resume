@@ -85,56 +85,61 @@ def _png(data: str) -> bytes:
 
 # --- сопоставление и хранилище ---
 
-def _schema_by(col_key, value):
-    """Найти схему, где app_config[col_key] совпадает (по нормализации для phone)."""
+def _account_by(col_key, value):
+    """Найти account, у которого app_config[col_key] совпадает (single schema)."""
     conn = psycopg.connect(pgconn.get_dsn())
     try:
         with conn.cursor() as cur:
-            for _n, schema in pgconn.list_users():
-                cur.execute(
-                    f'SELECT value FROM "{schema}".app_config WHERE key = %s',
-                    (col_key,),
-                )
-                row = cur.fetchone()
-                if not row:
-                    continue
+            cur.execute("SET search_path TO public")
+            cur.execute(
+                "SELECT account, value FROM app_config WHERE key=%s", (col_key,)
+            )
+            for acc, val in cur.fetchall():
                 if col_key == "hh_phone":
-                    if pgconn._norm_phone(row[0]) == pgconn._norm_phone(value):
-                        return schema
-                elif str(row[0]) == str(value):
-                    return schema
+                    if pgconn._norm_phone(val) == pgconn._norm_phone(value):
+                        return acc
+                elif str(val) == str(value):
+                    return acc
     finally:
         conn.close()
     return None
 
 
-def save_link(schema, enc_sess, tg_id):
+def save_link(account, enc_sess, tg_id):
     conn = psycopg.connect(pgconn.get_dsn())
     try:
         with conn.cursor() as cur:
+            cur.execute("SET search_path TO public")
             for k, v in (("tg_user_session", enc_sess), ("tg_user_id", tg_id)):
                 cur.execute(
-                    f'INSERT INTO "{schema}".app_config(key, value) '
-                    "VALUES (%s, %s::jsonb) ON CONFLICT(key) DO UPDATE SET "
-                    "value = excluded.value, updated_at = now()",
-                    (k, json.dumps(v)),
+                    "INSERT INTO app_config(account, key, value) "
+                    "VALUES (%s, %s, %s::jsonb) ON CONFLICT(account, key) DO UPDATE "
+                    "SET value=excluded.value, updated_at=now()",
+                    (account, k, json.dumps(v)),
                 )
         conn.commit()
     finally:
         conn.close()
 
 
-def status_text(schema):
+def status_text(account):
     conn = psycopg.connect(pgconn.get_dsn())
     g = {}
     try:
         with conn.cursor() as cur:
-            cur.execute(f'SELECT value FROM "{schema}".app_config WHERE key=%s', ("token",))
+            cur.execute("SET search_path TO public")
+            cur.execute(
+                "SELECT value FROM app_config WHERE account=%s AND key='token'",
+                (account,),
+            )
             r = cur.fetchone()
             tok = r[0] if r else None
             for k in ("_applications_count", "_applications_date",
                       "_applications_pause_until", "user.full_name"):
-                cur.execute(f'SELECT value FROM "{schema}".settings WHERE key=%s', (k,))
+                cur.execute(
+                    "SELECT value FROM settings WHERE account=%s AND key=%s",
+                    (account, k),
+                )
                 r = cur.fetchone()
                 try:
                     g[k] = json.loads(r[0]) if r else None
@@ -143,7 +148,7 @@ def status_text(schema):
     finally:
         conn.close()
 
-    name = g.get("user.full_name") or schema
+    name = g.get("user.full_name") or account
     today = time.strftime("%Y-%m-%d")
     cnt = g.get("_applications_count") if g.get("_applications_date") == today else 0
     pause = g.get("_applications_pause_until")
@@ -163,8 +168,8 @@ def status_text(schema):
 
 async def _finish(message: Message, client: TelegramClient):
     me = await client.get_me()
-    schema = _schema_by("hh_phone", me.phone)
-    if not schema:
+    account = _account_by("hh_phone", me.phone)
+    if not account:
         try:
             await client.log_out()
         finally:
@@ -174,10 +179,10 @@ async def _finish(message: Message, client: TelegramClient):
             "Подключайся с того Telegram, чей номер = номер в твоём hh-профиле."
         )
         return
-    save_link(schema, pgconn.enc_session(client.session.save()), me.id)
+    save_link(account, pgconn.enc_session(client.session.save()), me.id)
     await client.disconnect()
     await message.answer(
-        f"✅ Telegram подключён к hh-аккаунту «{schema}». Сессия зашифрована.\n"
+        f"✅ Telegram подключён к hh-аккаунту «{account}». Сессия зашифрована.\n"
         "Теперь я смогу проходить за тебя авто-интервью."
     )
     print(f"linked: +{me.phone} -> {schema}")
@@ -261,7 +266,7 @@ async def cmd_connect(message: Message, state: FSMContext):
 async def cmd_status(message: Message):
     if message.chat.type != "private":
         return
-    schema = _schema_by("tg_user_id", message.from_user.id)
+    schema = _account_by("tg_user_id", message.from_user.id)
     if not schema:
         await message.answer("Твой Telegram пока не подключён. Нажми /connect.")
         return
@@ -344,7 +349,7 @@ async def acc_salary(message: Message, state: FSMContext):
     if not acc_id:
         await message.answer("❌ Не удалось определить идентификатор hh-аккаунта.")
         return
-    schema = "u_" + re.sub(r"\W", "", acc_id)
+    account = re.sub(r"\W", "", acc_id)
     full_name = " ".join(
         x for x in [me.get("last_name"), me.get("first_name")] if x
     ) or d["login"]
@@ -359,7 +364,7 @@ async def acc_salary(message: Message, state: FSMContext):
         full = await onboard.fetch_resume_full(token, resume_id)
         resume_text = onboard.build_resume_text(me, full)
         onboard.setup_account(
-            full_name, schema, d["login"], d["password"], token, web_state,
+            full_name, account, d["login"], d["password"], token, web_state,
             me, resume_id, resume_text, salary, topic_id,
             tg.get("token"), tg.get("chat_id"),
         )
@@ -389,7 +394,7 @@ async def cb_connect(cq: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "status")
 async def cb_status(cq: CallbackQuery):
     await cq.answer()
-    schema = _schema_by("tg_user_id", cq.from_user.id)
+    schema = _account_by("tg_user_id", cq.from_user.id)
     if not schema:
         await cq.message.answer("Твой Telegram пока не подключён. Нажми /connect.")
         return

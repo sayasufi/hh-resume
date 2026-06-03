@@ -22,20 +22,14 @@ def main() -> None:
         print("usage: run_all.py -- <command...>")
         sys.exit(2)
 
-    admin_dsn = os.environ.get("HH_DB_DSN", "")
-    users = pgconn.list_users_full()
-    print(f"run_all: {len(users)} active users -> {' '.join(argv)}", flush=True)
+    users = pgconn.list_users()
+    print(f"run_all: {len(users)} active accounts -> {' '.join(argv)}", flush=True)
     rc = 0
-    for name, schema, db_password in users:
-        env = dict(os.environ, HH_DB_SCHEMA=schema)
-        # Per-tenant роль (#18): процесс юзера ходит в БД под ограниченной ролью
-        # (видит только свою схему). Нет пароля → фолбэк на admin-DSN (откат).
-        if db_password and admin_dsn:
-            env["HH_DB_DSN"] = pgconn.tenant_dsn(admin_dsn, schema, db_password)
-            role_note = f"role={schema}"
-        else:
-            role_note = "role=admin(fallback)"
-        print(f"=== [{name}] schema={schema} {role_note} ===", flush=True)
+    for name, account in users:
+        # Единая схема: разделение по HH_ACCOUNT (см. pgconn.get_account).
+        env = dict(os.environ, HH_ACCOUNT=account)
+        env.pop("HH_DB_SCHEMA", None)
+        print(f"=== [{name}] account={account} ===", flush=True)
         try:
             r = subprocess.run(argv, env=env)
             if r.returncode:

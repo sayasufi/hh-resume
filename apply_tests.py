@@ -129,14 +129,21 @@ async def fill_task(page, task, llm, vname):
 
     q = task["question"] or "Ответьте на вопрос"
     if task["type"] == "text":
-        try:
-            a = (await llm.send_message(
-                f"Вакансия: {vname}\nВопрос: {q}\nОтветь кратко."
-            )).strip()
-        except OpenAIError as e:
-            return "transient", q, f"LLM error: {repr(e)[:60]}"
+        # transient = РЕАЛЬНЫЙ сбой сети/LLM (OpenAIError). Если модель ответила,
+        # но ответ плохой — повторяем раз, и если снова плохо → manual (не сеть
+        # виновата, не надо крутить вечно).
+        a = ""
+        for attempt in (1, 2):
+            try:
+                a = (await llm.send_message(
+                    f"Вакансия: {vname}\nВопрос: {q}\nОтветь кратко и по делу, без оговорок."
+                )).strip()
+            except OpenAIError as e:
+                return "transient", q, f"LLM error: {repr(e)[:60]}"
+            if not bad_answer(a):
+                break
         if bad_answer(a):
-            return "transient", q, f"LLM ответ ненадёжен: {a[:60]}"
+            return "manual", q, f"LLM ответ ненадёжен: {a[:60]}"
         sel = f'textarea[name="{task["textarea"]}"]'
         try:
             el = await page.query_selector(sel)
@@ -151,16 +158,30 @@ async def fill_task(page, task, llm, vname):
     if not opts:
         return "manual", q, "(нет вариантов)"
     listing = "\n".join(f"{i + 1}) {o['label']}" for i, o in enumerate(opts))
-    try:
-        r = (await llm.send_message(
-            f"Вакансия: {vname}\nВопрос: {q}\nВарианты:\n{listing}\n"
-            "Выбери ОДИН правдивый вариант (исходя из резюме). Ответь ТОЛЬКО номером варианта."
-        )).strip()
-    except OpenAIError as e:
-        return "transient", q, f"LLM error: {repr(e)[:60]}"
+    base = (
+        f"Вакансия: {vname}\nВопрос: {q}\nВарианты:\n{listing}\n"
+        f"Выбери ОДИН наиболее подходящий вариант исходя из резюме. Если в резюме "
+        f"нет прямого ответа — выбери самый разумный/нейтрально-положительный "
+        f"(например, согласие на формат работы). "
+        f"Ответь СТРОГО одной цифрой от 1 до {len(opts)} и ничем больше."
+    )
+    # transient только при реальном сбое сети. Если модель «вильнула» и не дала
+    # цифру — повторяем раз жёстче, потом manual (не крутим вечно, не считаем за
+    # недоступность LLM).
+    r = ""
+    for attempt in (1, 2):
+        try:
+            r = (await llm.send_message(
+                base if attempt == 1
+                else base + "\n\nОтветь ТОЛЬКО числом, без слов и пояснений."
+            )).strip()
+        except OpenAIError as e:
+            return "transient", q, f"LLM error: {repr(e)[:60]}"
+        if re.search(r"\d+", r):
+            break
     m = re.search(r"\d+", r)
     if not m:
-        return "transient", q, f"LLM не дал номер: {r[:40]}"
+        return "manual", q, f"LLM не дал номер: {r[:40]}"
     idx = int(m.group()) - 1
     if idx < 0 or idx >= len(opts):
         return "manual", q, f"номер вне диапазона: {r[:30]}"

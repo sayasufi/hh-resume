@@ -121,6 +121,34 @@ async def web_login(page, user, pw):
     return "login" not in page.url.lower() and "otp" not in page.url.lower()
 
 
+async def fill_textarea(page, sel, value) -> bool:
+    """Устойчивое заполнение textarea. Сначала обычный page.fill (он сам скроллит
+    и ждёт актуабельности). Если таймаутит (поле вне вида / под оверлеем / в
+    React-форме) — выставляем значение через JS нативным сеттером + dispatch
+    input/change, чтобы контролируемый React-компонент зарегистрировал ввод."""
+    try:
+        await page.fill(sel, value, timeout=6000)
+        return True
+    except Exception:
+        pass
+    try:
+        return bool(await page.eval_on_selector(
+            sel,
+            """(el, val) => {
+                if (!el) return false;
+                const setter = Object.getOwnPropertyDescriptor(
+                    window.HTMLTextAreaElement.prototype, 'value').set;
+                setter.call(el, val);
+                el.dispatchEvent(new Event('input', {bubbles: true}));
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                return true;
+            }""",
+            value,
+        ))
+    except Exception:
+        return False
+
+
 async def fill_task(page, task, llm, vname):
     """Вернёт (status, question, repr). status:
     'ok' — заполнено; 'manual' — форму авто-заполнить нельзя (помечаем seen);
@@ -145,13 +173,8 @@ async def fill_task(page, task, llm, vname):
         if bad_answer(a):
             return "manual", q, f"LLM ответ ненадёжен: {a[:60]}"
         sel = f'textarea[name="{task["textarea"]}"]'
-        try:
-            el = await page.query_selector(sel)
-            if el:
-                await el.scroll_into_view_if_needed(timeout=4000)
-            await page.fill(sel, a, timeout=8000)
-        except Exception as e:
-            return "manual", q, f"fill fail: {repr(e)[:50]}"
+        if not await fill_textarea(page, sel, a):
+            return "manual", q, "fill fail (textarea недоступна)"
         return "ok", q, a
     # radio / checkbox
     opts = task["options"]

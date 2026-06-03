@@ -36,9 +36,27 @@ async def authorize_hh(login: str, password: str):
             page = await ctx.new_page()
             try:
                 if not await web_login(page, login, password):
+                    url = page.url.lower()
+                    otp = ("otp" in url) or bool(await page.query_selector(
+                        'input[data-qa="otp-code-input"], '
+                        '[data-qa="account-login-code-input"], '
+                        'input[name="otpCode"]'
+                    ))
+                    captcha = bool(await page.query_selector(
+                        'input[data-qa="account-captcha-input"], '
+                        'img[data-qa="account-captcha-picture"]'
+                    ))
+                    if otp:
+                        raise RuntimeError(
+                            "hh запросил вход по КОДУ (SMS/почта) — так бывает при "
+                            "входе по ТЕЛЕФОНУ. Вход по коду пока не поддержан: "
+                            "укажи EMAIL аккаунта и его пароль."
+                        )
+                    if captcha:
+                        raise RuntimeError("hh показал капчу — повтори позже.")
                     raise RuntimeError(
-                        "веб-логин не удался (неверный логин/пароль, либо hh "
-                        "запросил код/капчу)"
+                        "неверный логин/пароль. Если вводил телефон — попробуй "
+                        "EMAIL аккаунта (вход по телефону требует SMS-кода)."
                     )
                 web_state = await ctx.storage_state()
                 fut = asyncio.get_event_loop().create_future()

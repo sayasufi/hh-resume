@@ -173,28 +173,35 @@ class LoginSession:
         await self.page.wait_for_timeout(500)
         await self._click_submit()  # «Дальше» -> отправляет код по SMS
 
-    async def _settle(self) -> None:
-        """Ждём до ~9с: появился код / ушли со страницы логина / капча."""
-        for _ in range(18):
+    def _on_login(self) -> bool:
+        """Мы всё ещё на странице логина hh? (по PATH, не по подстроке — иначе
+        ?hhtmFrom=account_login в query главной даёт ложный positive)."""
+        return urlsplit(self.page.url).path.lower().startswith("/account/login")
+
+    async def _settle(self, for_code: bool = False) -> None:
+        """Ждём до ~10с. for_code=False (после логина): стоп когда появилось поле
+        кода / ушли с логина / капча. for_code=True (после ввода кода): стоп ТОЛЬКО
+        когда ушли с логина / капча (поле во время навигации игнорируем — иначе
+        примем поиск на главной за поле кода)."""
+        for _ in range(20):
             await self.page.wait_for_timeout(500)
-            if await self._code_input():
-                return
-            if "login" not in self.page.url.lower():
+            if not self._on_login():
                 return
             if await self._has_captcha():
                 return
+            if not for_code and await self._code_input():
+                return
 
     async def _state(self) -> str:
+        if not self._on_login():
+            return "logged_in"                       # ушли с логина = успех
         if await self._has_captcha():
             raise OnboardError("hh показал капчу — повтори позже.", await self._shot())
-        url = self.page.url.lower()
-        if await self._code_input() or "otp" in url or "code" in url:
+        if await self._code_input():
             return "need_code"
-        if "login" in url:
-            raise OnboardError(
-                "неверный логин/пароль — hh не пустил дальше.", await self._shot()
-            )
-        return "logged_in"
+        raise OnboardError(
+            "неверный логин/пароль — hh не пустил дальше.", await self._shot()
+        )
 
     async def start(self, login, password) -> str:
         login = (login or "").strip()
@@ -226,15 +233,15 @@ class LoginSession:
             pass
         await self.page.keyboard.type(digits)  # одно поле или 6 ячеек
         await self.page.wait_for_timeout(800)
-        await self._click_submit()
-        await self._settle()
+        await self._click_submit()             # некоторые экраны авто-сабмитят
+        await self._settle(for_code=True)
+        if not self._on_login():
+            return "logged_in"                 # ушли с логина = код подошёл
         if await self._has_captcha():
             raise OnboardError("hh показал капчу — повтори позже.", await self._shot())
-        if await self._code_input() or "otp" in self.page.url.lower():
-            raise OnboardError(
-                "код не подошёл — проверь и повтори /addaccount.", await self._shot()
-            )
-        return "logged_in"
+        raise OnboardError(
+            "код не подошёл — проверь и повтори /addaccount.", await self._shot()
+        )
 
     async def finalize(self):
         """web_state (куки) + OAuth-токен + me + resumes."""

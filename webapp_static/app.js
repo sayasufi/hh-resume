@@ -9,7 +9,9 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g,
 const err = (m) => { const e = $("#err"); e.textContent = m; e.classList.remove("hidden"); setTimeout(() => e.classList.add("hidden"), 4000); };
 const hap = (k) => { try { if (!tg || !tg.HapticFeedback) return; k === "sel" ? tg.HapticFeedback.selectionChanged() : tg.HapticFeedback.impactOccurred("light"); } catch (e) {} };
 
+let VIEW_ACCOUNT = null;  // админ: смотрим выбранный аккаунт (account-override)
 async function api(path, opts = {}) {
+  if (VIEW_ACCOUNT) path += (path.includes("?") ? "&" : "?") + "account=" + encodeURIComponent(VIEW_ACCOUNT);
   const r = await fetch(path, { ...opts, headers: { "X-Init-Data": INIT, "Content-Type": "application/json", ...(opts.headers || {}) } });
   if (r.status === 404) throw new Error("not_linked");
   if (!r.ok) throw new Error("HTTP " + r.status);
@@ -230,10 +232,32 @@ document.querySelectorAll(".period button").forEach((b) => {
   };
 });
 
-(async () => {
+// ── админ: переключатель аккаунтов ──
+let ADMIN_ACCOUNTS = [];
+function setupAdmin(me) {
+  const bar = $("#admin-bar");
+  if (!me.is_admin) { bar.classList.add("hidden"); return; }
+  ADMIN_ACCOUNTS = me.accounts || [];
+  bar.classList.remove("hidden");
+  const cur = ADMIN_ACCOUNTS.find((a) => a.account === me.account);
+  $("#admin-acc").textContent = (cur && cur.name) || me.account;
+}
+$("#admin-pick").onclick = () => {
+  $("#pk-title").textContent = "Аккаунт (админ)";
+  $("#pk-body").innerHTML = '<div class="list">' + ADMIN_ACCOUNTS.map((a) =>
+    `<div class="cell tap pk-acc${a.account === VIEW_ACCOUNT ? " sel" : ""}" data-acc="${esc(a.account)}">`
+    + `<span>${esc(a.name)}</span><span class="hint">${esc(a.account)}</span></div>`).join("") + "</div>";
+  openSheet("#picker"); hap("sel");
+  $("#pk-body").querySelectorAll(".pk-acc").forEach((el) => {
+    el.onclick = () => { closeSheet("#picker"); VIEW_ACCOUNT = el.dataset.acc; hap("light"); boot(); };
+  });
+};
+
+async function boot() {
   try {
     const [me, st] = await Promise.all([api("/api/me?days=" + PERIOD), api("/api/settings")]);
-    renderMe(me); bindToggles(st.features); bindConfig(st.config, st.resumes || []);
+    renderMe(me); setupAdmin(me);
+    bindToggles(st.features); bindConfig(st.config, st.resumes || []);
     loadDialogs(PERIOD); loadActivity(PERIOD); loadActions();
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {
@@ -241,4 +265,5 @@ document.querySelectorAll(".period button").forEach((b) => {
       ? "Сначала привяжи профиль: в боте /link и поделись номером"
       : "Ошибка загрузки: " + e.message);
   }
-})();
+}
+boot();

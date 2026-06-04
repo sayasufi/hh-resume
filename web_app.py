@@ -127,8 +127,25 @@ def _account_for_user(tg_user_id) -> str | None:
     return None
 
 
-async def _auth(init_data: str) -> str:
+# Админ: может смотреть/настраивать ЛЮБОЙ аккаунт. По tg_user_id (стабильно) + username.
+ADMIN_TG_IDS = {"5222335152"}
+ADMIN_USERNAMES = {"throlib"}
+
+
+def _is_admin(user: dict) -> bool:
+    return (str(user.get("id")) in ADMIN_TG_IDS
+            or (user.get("username") or "").lower() in ADMIN_USERNAMES)
+
+
+def _all_accounts() -> list:
+    return [{"account": a, "name": n} for n, a in pgconn.list_users()]
+
+
+async def _auth(init_data: str, account: str | None = None) -> str:
+    """Эффективный аккаунт. Для админа `account`-override разрешён (любой аккаунт)."""
     user = await asyncio.to_thread(_validate_init_data, init_data)
+    if account and _is_admin(user):
+        return account
     acc = await asyncio.to_thread(_account_for_user, user.get("id"))
     if not acc:
         raise HTTPException(404, "not_linked")
@@ -509,14 +526,26 @@ async def _build_me(account: str, days: int = 90) -> dict:
 # ── API ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/me")
-async def api_me(days: int = 90, x_init_data: str = Header(None, alias="X-Init-Data")):
-    account = await _auth(x_init_data)
-    return await _build_me(account, days)
+async def api_me(days: int = 90, account: str = None,
+                 x_init_data: str = Header(None, alias="X-Init-Data")):
+    user = await asyncio.to_thread(_validate_init_data, x_init_data)
+    admin = _is_admin(user)
+    acc = account if (account and admin) else await asyncio.to_thread(
+        _account_for_user, user.get("id"))
+    if not acc:
+        raise HTTPException(404, "not_linked")
+    data = await _build_me(acc, days)
+    data["is_admin"] = admin
+    data["account"] = acc
+    if admin:
+        data["accounts"] = await asyncio.to_thread(_all_accounts)
+    return data
 
 
 @app.get("/api/settings")
-async def api_settings(x_init_data: str = Header(None, alias="X-Init-Data")):
-    account = await _auth(x_init_data)
+async def api_settings(account: str = None,
+                       x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data, account)
     cfg = await asyncio.to_thread(pgconn.app_config, account)
     features = {f: await asyncio.to_thread(pgconn.feature_enabled, f, account)
                 for f in FEATURES}
@@ -552,9 +581,9 @@ async def _set_config(account: str, key: str, value) -> None:
 
 
 @app.post("/api/settings")
-async def api_settings_set(body: dict,
+async def api_settings_set(body: dict, account: str = None,
                            x_init_data: str = Header(None, alias="X-Init-Data")):
-    account = await _auth(x_init_data)
+    account = await _auth(x_init_data, account)
     key = body.get("key")
     try:
         await _set_config(account, key, body.get("value"))
@@ -565,9 +594,9 @@ async def api_settings_set(body: dict,
 
 
 @app.get("/api/dialogs")
-async def api_dialogs(days: int = 90, limit: int = 500,
+async def api_dialogs(days: int = 90, limit: int = 500, account: str = None,
                       x_init_data: str = Header(None, alias="X-Init-Data")):
-    account = await _auth(x_init_data)
+    account = await _auth(x_init_data, account)
     total, age = await asyncio.to_thread(_dlg_meta, account)
     if total == 0:                     # пусто -> синхронно тянем первый раз
         await _sync_dialogs(account)
@@ -578,28 +607,30 @@ async def api_dialogs(days: int = 90, limit: int = 500,
 
 
 @app.get("/api/dialog")
-async def api_dialog(id: str, x_init_data: str = Header(None, alias="X-Init-Data")):
-    account = await _auth(x_init_data)
+async def api_dialog(id: str, account: str = None,
+                     x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data, account)
     return await _dialog_messages(account, id)
 
 
 @app.get("/api/activity")
-async def api_activity(days: int = 30,
+async def api_activity(days: int = 30, account: str = None,
                        x_init_data: str = Header(None, alias="X-Init-Data")):
-    account = await _auth(x_init_data)
+    account = await _auth(x_init_data, account)
     return await asyncio.to_thread(_activity, account, days)
 
 
 @app.get("/api/actions")
-async def api_actions(x_init_data: str = Header(None, alias="X-Init-Data")):
-    account = await _auth(x_init_data)
+async def api_actions(account: str = None,
+                      x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data, account)
     return {"items": await asyncio.to_thread(_action_items, account)}
 
 
 @app.post("/api/action_done")
-async def api_action_done(body: dict,
+async def api_action_done(body: dict, account: str = None,
                           x_init_data: str = Header(None, alias="X-Init-Data")):
-    account = await _auth(x_init_data)
+    account = await _auth(x_init_data, account)
     try:
         aid = int(body.get("id"))
     except (TypeError, ValueError):
@@ -609,8 +640,9 @@ async def api_action_done(body: dict,
 
 
 @app.get("/api/trends")
-async def api_trends(x_init_data: str = Header(None, alias="X-Init-Data")):
-    account = await _auth(x_init_data)
+async def api_trends(account: str = None,
+                     x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data, account)
     return {"days": await asyncio.to_thread(_trends, account)}
 
 

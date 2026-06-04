@@ -155,6 +155,15 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
   padding: 13px 16px; border-radius: 13px; font-size: 14px; text-align: center; z-index: 70;
   box-shadow: 0 6px 24px #0004; }
 
+#admin-bar { padding: 0 14px 4px; }
+#admin-pick { width: 100%; background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent); border: none; border-radius: 12px; padding: 11px 14px; font: inherit;
+  font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center;
+  justify-content: center; gap: 6px; }
+#admin-pick b { font-weight: 700; }
+.pk-acc { justify-content: space-between; }
+.pk-acc.sel span:first-child { color: var(--accent); font-weight: 700; }
+
 .ghint { color: var(--hint); font-size: 12px; padding: 6px 18px 0; }
 .cell .k em { color: var(--hint); font-style: normal; font-size: 12px; margin-left: 4px; }
 

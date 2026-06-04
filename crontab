@@ -14,7 +14,7 @@ SHELL=/bin/bash
 # Автоподнятие резюме 24/7. Попытка каждые 2ч: hh даёт бесплатный бамп раз в ~4ч,
 # поэтому половина попыток получит «Не могу обновить» (безвредно), зато момент
 # готовности ловим без 8-часовых дыр -> максимум 6 реальных поднятий/сутки.
-0 */2 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool update-resumes >> /var/log/cron.log 2>&1
+# MIGRATED-TO-PREFECT: 0 */2 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool update-resumes >> /var/log/cron.log 2>&1
 
 # Человекоподобный просмотр вакансий: засветиться в «кто смотрел вакансию» у
 # работодателей + живость аккаунта. Только GET, без откликов. Каждые 2 часа в
@@ -54,11 +54,11 @@ SHELL=/bin/bash
 
 # Ежедневный heartbeat/мониторинг (токен, vLLM, активность) -> очередь уведомлений.
 # Dead-man-switch: не пришла сводка утром = что-то сломалось. 08:00 МСК (старт дня).
-0 5 * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/monitor.py >> /var/log/cron.log 2>&1
+# MIGRATED-TO-PREFECT: 0 5 * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/monitor.py >> /var/log/cron.log 2>&1
 
 # Воронка откликов (отклики→ответы→интервью→отказы, по резюме) -> 🟢 в дайджест.
 # Аналитика для глаз, ничего не фильтрует. Раз в день, 08:05 МСК (05:05 UTC).
-5 5 * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/funnel.py >> /var/log/cron.log 2>&1
+# MIGRATED-TO-PREFECT: 5 5 * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/funnel.py >> /var/log/cron.log 2>&1
 
 # Единый приоритизированный дайджест уведомлений -> TG (🔴→🟡→🟢). Каждые 30 мин
 # в рабочее окно 08:00–22:00 МСК (05–19 UTC), в :15 и :45 — после задач-источников.

@@ -392,17 +392,19 @@ def _state_counts(account: str, dfrom=None, dto=None) -> dict:
 
 
 def _funnel_from_states(c: dict) -> list:
-    """Воронка: Отклики → Ответили → Собеседования (invitation легаси = interview,
-    hired считаем в собеседованиях). Без отдельного этапа «Оффер»."""
+    """Воронка: Отклики → Ответили → Собеседования → Офферы.
+    % у каждого этапа — доля от ВСЕХ откликов (единый знаменатель, как в деталях,
+    чтобы «Собеседования» давали одно и то же число и тут, и в разбивке).
+    invitation легаси = interview; hired = оффер (и входит в собеседования)."""
+    total = sum(c.values())
     sob = c.get("interview", 0) + c.get("invitation", 0) + c.get("hired", 0)
     resp = c.get("response", 0)
-    stages = [("Отклики", sum(c.values())), ("Ответили", resp + sob),
-              ("Собеседования", sob)]
-    out, prev = [], None
-    for label, val in stages:
+    stages = [("Отклики", total), ("Ответили", resp + sob),
+              ("Собеседования", sob), ("Офферы", c.get("hired", 0))]
+    out = []
+    for i, (label, val) in enumerate(stages):
         out.append({"label": label, "value": val,
-                    "conv": round(val / prev * 100) if prev else None})
-        prev = val
+                    "conv": (round(val / total * 100) if (total and i) else None)})
     return out
 
 
@@ -412,7 +414,7 @@ def _breakdown(c: dict) -> list:
     sob = c.get("interview", 0) + c.get("invitation", 0) + c.get("hired", 0)
     rows = [
         ("🤝", "Собеседования", sob),
-        ("💬", "Ответ / на рассмотрении", c.get("response", 0)),
+        ("💬", "Ждём ответа", c.get("response", 0)),
         ("🔴", "Отказы", c.get("discard", 0) + c.get("discard_by_applicant", 0)),
     ]
     other = c.get("hidden", 0)
@@ -420,21 +422,6 @@ def _breakdown(c: dict) -> list:
         rows.append(("⚪️", "Прочее", other))
     return [{"emoji": e, "label": lbl, "value": v, "pct": round(v / total * 100)}
             for e, lbl, v in rows]
-
-
-def _kpis(c: dict) -> dict:
-    """Ключевые конверсии воронки в абсолютных % (данные уже в counts)."""
-    total = sum(c.values())
-    if not total:
-        return {}
-    sob = c.get("interview", 0) + c.get("invitation", 0) + c.get("hired", 0)
-    answered = c.get("response", 0) + sob  # ответили = ответ + дошли дальше
-    return {
-        "total": total,
-        "response_rate": round(answered / total * 100),  # отклик → ответ
-        "interview_rate": round(sob / total * 100),       # отклик → собеседование
-        "offer_rate": round(c.get("hired", 0) / total * 100),  # отклик → оффер
-    }
 
 
 def _giga_summary(account: str) -> dict:
@@ -557,15 +544,13 @@ def _action_done(account: str, aid: int) -> None:
 
 
 def _funnel(apps: int, invitations: int, interviews: int) -> list:
-    """Последовательная воронка: каждый этап ⊆ предыдущего + конверсия %."""
-    stages = [("Отклики", apps), ("Приглашения", invitations),
-              ("Интервью", min(interviews, invitations) if invitations else interviews)]
+    """Воронка-фолбэк (когда кэш диалогов пуст): % у этапов — доля от всех откликов."""
+    sob = max(invitations, interviews)
+    stages = [("Отклики", apps), ("Собеседования", sob), ("Офферы", 0)]
     out = []
-    prev = None
-    for label, val in stages:
-        conv = round(val / prev * 100) if prev else None
-        out.append({"label": label, "value": val, "conv": conv})
-        prev = val
+    for i, (label, val) in enumerate(stages):
+        out.append({"label": label, "value": val,
+                    "conv": (round(val / apps * 100) if (apps and i) else None)})
     return out
 
 
@@ -631,7 +616,6 @@ async def _build_me(account: str, dfrom=None, dto=None) -> dict:
         "stats": {
             "funnel": funnel,
             "breakdown": _breakdown(counts) if has_cache else [],
-            "kpis": _kpis(counts) if has_cache else {},
         },
         "next_apply": _next_apply(
             flags[0],

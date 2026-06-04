@@ -59,11 +59,6 @@ function renderMe(d) {
     `<div class="fbar"><div class="fill" style="width:${Math.round(f.value / max * 100)}%"></div>`
     + `<div class="ftext"><span>${esc(f.label)}</span><span class="fval"><b>${f.value}</b>`
     + `${f.conv != null ? `<em>${f.conv}%</em>` : ""}</span></div></div>`).join("");
-  const kp = s.kpis || {};
-  $("#kpis").innerHTML = kp.total
-    ? [["Ответили", kp.response_rate], ["Собеседования", kp.interview_rate], ["Офферы", kp.offer_rate]]
-        .map(([l, v]) => `<div class="kpi"><div class="kv">${v}%</div><div class="kl">${esc(l)}</div></div>`).join("")
-    : "";
   const bd = s.breakdown || [];
   $("#breakdown").innerHTML = bd.length ? bd.map((b) =>
     `<div class="cell"><span class="k">${b.emoji} ${esc(b.label)}</span>`

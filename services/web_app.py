@@ -476,18 +476,25 @@ def _snapshot(account: str, apps: int, views: int, invitations: int) -> None:
 
 
 def _trends(account: str) -> list:
+    """Динамика откликов по дням за 30 дней — РЕАЛЬНЫЕ отправленные за день
+    (activity_daily kind='apply'), а не накопительный neg.found (раньше линия
+    только росла даже когда бот стоял). Пропущенные дни = 0; ось X по реальным датам."""
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT day, applications, views, invitations FROM stats_daily "
-                "WHERE account=%s AND day >= current_date - 29 ORDER BY day",
+                "SELECT day, count FROM activity_daily "
+                "WHERE account=%s AND kind='apply' AND day >= current_date - 29",
                 (account,),
             )
-            return [{"day": str(d), "applications": a, "views": v, "invitations": i}
-                    for d, a, v, i in cur.fetchall()]
+            by = {str(d): int(c) for d, c in cur.fetchall()}
     finally:
         conn.close()
+    today = datetime.utcnow().date()
+    out = [{"day": (today - timedelta(days=i)).isoformat(),
+            "applications": by.get((today - timedelta(days=i)).isoformat(), 0)}
+           for i in range(29, -1, -1)]
+    return out if any(x["applications"] for x in out) else []
 
 
 def _activity(account: str, dfrom=None, dto=None) -> dict:

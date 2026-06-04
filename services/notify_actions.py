@@ -53,6 +53,29 @@ GR_MARK_RE = re.compile(
     r"первичн\w* интервью\s+с\s+ботом|автоматическ\w*\s+(?:скрининг|интервью)", re.I)
 
 
+def _norm_cat(raw: str):
+    """Нормализуем категорию из ответа LLM (бэктики/кавычки/префикс «категория:»/синонимы).
+    Возвращает contact|form|test|interview|none, либо None если не распознали — тогда
+    дело НЕ помечается seen и переразберётся в следующий ран (а не теряется молча)."""
+    s = (raw or "").strip().strip("`'\"*•- ").lower()
+    if ":" in s:                       # «категория: form» -> form
+        s = s.split(":")[-1].strip()
+    s = s.strip("`'\"*•-. ").lower()
+    if not s:
+        return None
+    if s.startswith(("contact", "контакт")):
+        return "contact"
+    if s.startswith(("form", "анкет", "форм", "опрос", "регистр")):
+        return "form"
+    if s.startswith(("test", "тест")):
+        return "test"
+    if s.startswith(("interview", "интервью", "собес", "созвон")):
+        return "interview"
+    if s.startswith(("none", "нет", "ничего", "no", "—")):
+        return "none"
+    return None
+
+
 async def main():
     if not pgconn.feature_enabled("notify"):
         print("feat.notify выключен в Mini App — пропуск notify_actions")
@@ -99,6 +122,9 @@ async def main():
                 v = n.get("vacancy") or {}
                 try:
                     m = await api.get(f"/negotiations/{nid}/messages", page=0)
+                    _pages = m.get("pages", 1)
+                    if _pages > 1:   # последняя страница — там СВЕЖЕЕ сообщение работодателя
+                        m = await api.get(f"/negotiations/{nid}/messages", page=_pages - 1)
                 except Exception:
                     continue
                 msgs = [x for x in (m.get("items") or []) if x.get("text")]
@@ -125,13 +151,16 @@ async def main():
                 except Exception as e:
                     print("LLM error:", repr(e)[:120])
                     continue
-                fresh_seen.append(key)
-                cat, _, task = ans.partition("|")
-                cat = cat.strip().lower()
+                cat_raw, _, task = ans.partition("|")
+                cat = _norm_cat(cat_raw)
                 task = task.strip()
+                if cat is None:   # не распознали -> НЕ помечаем seen, переразберём в след. ран
+                    print("notify: неразборчивая категория LLM, не помечаю seen:", ans[:90])
+                    continue
+                fresh_seen.append(key)  # терминальная классификация -> больше не дёргаем
                 prio = PRIO.get(cat)
                 if not prio or len(task) < 3:
-                    continue  # none/interview/неразборчиво -> пропуск
+                    continue  # none/interview -> пропуск (seen уже стоит)
                 chat_id = n.get("chat_id") or nid
                 queued.append((
                     prio, task, f"https://hh.ru/chat/{chat_id}",

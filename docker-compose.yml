@@ -34,6 +34,29 @@ services:
     networks:
       - default
 
+  hh-orchestrator:
+    container_name: hh_orchestrator
+    image: hh_applicant_tool:latest
+    restart: unless-stopped
+    command: python -m orchestration.serve
+    depends_on:
+      db:
+        condition: service_healthy
+      prefect-server:
+        condition: service_started
+    volumes:
+      - .:/app
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - CONFIG_DIR=/app/config
+      - HH_DB_DSN=postgresql://hh:hh_local_pw@db:5432/hh
+      - HH_DB_SCHEMA=public
+      - PREFECT_API_URL=http://prefect-server:4200/api
+      - ORCH_ENABLED=refresh-token
+    networks:
+      - default
+      - test-llm
+
   hh_applicant_tool:
     container_name: hh_applicant_tool
     image: hh_applicant_tool:latest

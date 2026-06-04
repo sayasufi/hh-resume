@@ -39,7 +39,7 @@ SHELL=/bin/bash
 */3 5-19 * * * /bin/bash -c 'sleep $((RANDOM \% 60))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/giga_recruiter.py >> /var/log/cron.log 2>&1
 
 # Обновление токена каждую минуту (для всех юзеров)
-*/1 * * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool refresh-token >> /dev/null 2>&1
+# MIGRATED-TO-PREFECT: */1 * * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool refresh-token >> /dev/null 2>&1
 
 # Watchdog слушателя /connect (привязка Telegram кандидата по QR в ЛС). Раз в
 # минуту: если процесс не запущен — поднять. HH_DB_SCHEMA=u_egor только ради

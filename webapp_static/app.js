@@ -41,8 +41,8 @@ function renderMe(d) {
   $("#s-apps").textContent = s.applications_total;
   $("#s-today").textContent = s.applications_today;
   $("#s-views").textContent = s.resume_views;
+  $("#s-resp").textContent = s.responses;
   $("#s-inv").textContent = s.invitations;
-  $("#s-intv").textContent = s.interviews;
   const max = Math.max(1, ...s.funnel.map((f) => f.value));
   $("#funnel").innerHTML = s.funnel.map((f) =>
     `<div class="fbar"><div class="fill" style="width:${Math.round(f.value / max * 100)}%"></div>`
@@ -70,7 +70,7 @@ function renderDialogs() {
   const box = $("#dialogs");
   let arr = DIALOGS.filter((d) =>
     FILTER === "all" ? true :
-    FILTER === "updates" ? d.has_updates :
+    FILTER === "sob" ? ["interview", "invitation", "hired"].includes(d.state_id) :
     FILTER === "discard" ? (d.state_id || "").startsWith("discard") :
     d.state_id === FILTER);
   $("#dlg-count").textContent = arr.length;
@@ -167,11 +167,25 @@ $("#resume-row").onclick = () => {
   });
 };
 
+// период (30/90/Всё) — общий для статистики и откликов
+let PERIOD = 90;
+const loadStats = (d) => api("/api/me?days=" + d).then(renderMe).catch(() => {});
+const loadDialogs = (d) => api("/api/dialogs?days=" + d)
+  .then((r) => { DIALOGS = r.items || []; renderDialogs(); }).catch(() => {});
+document.querySelectorAll(".period button").forEach((b) => {
+  b.onclick = () => {
+    PERIOD = parseInt(b.dataset.p, 10);
+    document.querySelectorAll(".period button").forEach(
+      (x) => x.classList.toggle("active", x.dataset.p === b.dataset.p));
+    loadStats(PERIOD); loadDialogs(PERIOD); hap("sel");
+  };
+});
+
 (async () => {
   try {
-    const [me, st] = await Promise.all([api("/api/me"), api("/api/settings")]);
+    const [me, st] = await Promise.all([api("/api/me?days=" + PERIOD), api("/api/settings")]);
     renderMe(me); bindToggles(st.features); bindConfig(st.config, st.resumes || []);
-    api("/api/dialogs").then((d) => { DIALOGS = d.items || []; renderDialogs(); }).catch(() => {});
+    loadDialogs(PERIOD);
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {
     err(String(e.message) === "not_linked"

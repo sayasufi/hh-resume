@@ -221,13 +221,13 @@ async def _resume_list(account: str) -> list:
 
 
 _NEG_STATE = {
-    "invitation": ("🟢", "Приглашение"), "response": ("💬", "Ответ"),
-    "discard": ("🔴", "Отказ"), "discard_by_applicant": ("⚪️", "Отозван"),
-    "hidden": ("⚪️", "Скрыт"),
+    "hired": ("🎉", "Оффер"),
+    "interview": ("🤝", "Собеседование"), "invitation": ("🤝", "Собеседование"),
+    "response": ("💬", "Ответ"), "discard": ("🔴", "Отказ"),
+    "discard_by_applicant": ("⚪️", "Отозван"), "hidden": ("⚪️", "Скрыт"),
 }
-
-
-_STATE_RANK = {"invitation": 0, "response": 1, "discard": 3, "hidden": 4}
+_STATE_RANK = {"hired": 0, "interview": 1, "invitation": 1, "response": 2,
+               "discard": 4, "hidden": 5}
 
 
 async def _sync_dialogs(account: str) -> int:
@@ -277,25 +277,79 @@ async def _sync_dialogs(account: str) -> int:
     return len(rows)
 
 
-def _dlg_read(account: str, limit: int):
+def _period_sql(days: int):
+    """-> (доп. условие SQL, параметры) для фильтра по периоду. days<=0 = всё время."""
+    if days and days > 0:
+        return " AND updated >= (current_date - %s)::text", [days]
+    return "", []
+
+
+def _dlg_meta(account: str):
+    """(всего строк в кэше, возраст последнего синка в сек) — для решения о синке."""
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT count(*), extract(epoch FROM now()-max(ts)) "
                         "FROM dlg_cache WHERE account=%s", (account,))
             cnt, age = cur.fetchone()
-            cur.execute(
-                "SELECT nid, title, employer, state_id, state, emoji, rank, "
-                "has_updates, url, updated FROM dlg_cache WHERE account=%s "
-                "ORDER BY updated DESC NULLS LAST LIMIT %s", (account, limit))
-            items = [{
-                "id": r[0], "title": r[1], "employer": r[2], "state_id": r[3],
-                "state": r[4], "emoji": r[5], "rank": r[6], "has_updates": r[7],
-                "url": r[8], "updated": r[9],
-            } for r in cur.fetchall()]
-        return items, int(cnt or 0), (age if age is not None else 1e9)
+        return int(cnt or 0), (age if age is not None else 1e9)
     finally:
         conn.close()
+
+
+def _dlg_read(account: str, limit: int, days: int = 0):
+    cond, params = _period_sql(days)
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM dlg_cache WHERE account=%s" + cond,
+                        [account] + params)
+            cnt = cur.fetchone()[0]
+            cur.execute(
+                "SELECT nid, title, employer, state_id, state, emoji, rank, "
+                "has_updates, url, updated FROM dlg_cache WHERE account=%s" + cond
+                + " ORDER BY updated DESC NULLS LAST LIMIT %s",
+                [account] + params + [limit])
+            items = []
+            for r in cur.fetchall():
+                sid = r[3] or ""
+                emoji, label = _NEG_STATE.get(sid, (r[5] or "•", r[4] or sid))
+                items.append({
+                    "id": r[0], "title": r[1], "employer": r[2], "state_id": sid,
+                    "state": label, "emoji": emoji,
+                    "rank": _STATE_RANK.get(sid, r[6] if r[6] is not None else 3),
+                    "has_updates": r[7], "url": r[8], "updated": r[9],
+                })
+        return items, int(cnt or 0)
+    finally:
+        conn.close()
+
+
+def _state_counts(account: str, days: int = 0) -> dict:
+    cond, params = _period_sql(days)
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT state_id, count(*) FROM dlg_cache WHERE account=%s"
+                        + cond + " GROUP BY state_id", [account] + params)
+            return {k: v for k, v in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def _funnel_from_states(c: dict) -> list:
+    """Воронка из реальных статусов hh: Отклики→Ответили→Приглашения→Собеседования."""
+    # invitation (легаси, до 2025) = interview = «Собеседование»; hired = оффер
+    sob = c.get("interview", 0) + c.get("invitation", 0)
+    resp, hir = c.get("response", 0), c.get("hired", 0)
+    stages = [("Отклики", sum(c.values())), ("Ответили", resp + sob + hir),
+              ("Собеседования", sob + hir), ("Оффер", hir)]
+    out, prev = [], None
+    for label, val in stages:
+        out.append({"label": label, "value": val,
+                    "conv": round(val / prev * 100) if prev else None})
+        prev = val
+    return out
 
 
 async def _dialog_messages(account: str, nid: str) -> dict:
@@ -355,14 +409,16 @@ def _funnel(apps: int, invitations: int, interviews: int) -> list:
     return out
 
 
-async def _build_me(account: str) -> dict:
-    cached = _me_cache.get(account)
+async def _build_me(account: str, days: int = 90) -> dict:
+    key = (account, days)
+    cached = _me_cache.get(key)
     if cached and time.time() - cached[0] < 60:
         return cached[1]
     hh, db = await _hh_stats(account), await asyncio.to_thread(_db_stats, account)
     if hh["hh_id"]:  # токен жив -> фиксируем дневной срез для трендов
         await asyncio.to_thread(_snapshot, account, hh["applications_total"],
                                 hh["resume_views"], hh["invitations"])
+    counts = await asyncio.to_thread(_state_counts, account, days)
     cfg = await asyncio.to_thread(pgconn.app_config, account)
     name = (await asyncio.to_thread(
         pgconn.get_setting, "user.full_name", None, account)) or hh["full_name"] or account
@@ -370,35 +426,40 @@ async def _build_me(account: str) -> dict:
     flags = [await asyncio.to_thread(pgconn.feature_enabled, f, account)
              for f in FEATURES]
     active = all(flags)
+    if sum(counts.values()):  # есть кэш откликов -> точные цифры по статусам за период
+        apps_total = sum(counts.values())
+        responses = counts.get("response", 0)
+        invitations = counts.get("invitation", 0) + counts.get("interview", 0)
+        funnel = _funnel_from_states(counts)
+    else:                     # кэш пуст -> фолбэк на hh-счётчики (всё время)
+        apps_total, responses = hh["applications_total"], hh["responses"]
+        invitations = hh["invitations"]
+        funnel = _funnel(apps_total, invitations, db["interviews"])
     payload = {
         "profile": {
-            "name": name,
-            "hh_id": hh["hh_id"],
-            "resume": hh["resume_title"],
+            "name": name, "hh_id": hh["hh_id"], "resume": hh["resume_title"],
             "salary": salary,
             "status": "работает" if active else "часть функций на паузе",
         },
         "stats": {
-            "applications_total": hh["applications_total"],
+            "applications_total": apps_total,
             "applications_today": db["applications_today"],
             "resume_views": hh["resume_views"],
-            "responses": hh["responses"],
-            "invitations": hh["invitations"],
-            "interviews": db["interviews"],
-            "funnel": _funnel(hh["applications_total"], hh["invitations"],
-                              db["interviews"]),
+            "responses": responses,
+            "invitations": invitations,
+            "funnel": funnel,
         },
     }
-    _me_cache[account] = (time.time(), payload)
+    _me_cache[key] = (time.time(), payload)
     return payload
 
 
 # ── API ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/me")
-async def api_me(x_init_data: str = Header(None, alias="X-Init-Data")):
+async def api_me(days: int = 90, x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data)
-    return await _build_me(account)
+    return await _build_me(account, days)
 
 
 @app.get("/api/settings")
@@ -450,15 +511,15 @@ async def api_settings_set(body: dict,
 
 
 @app.get("/api/dialogs")
-async def api_dialogs(limit: int = 500,
+async def api_dialogs(days: int = 90, limit: int = 500,
                       x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data)
-    items, cnt, age = await asyncio.to_thread(_dlg_read, account, limit)
-    if cnt == 0:                       # пусто -> синхронно тянем первый раз
+    total, age = await asyncio.to_thread(_dlg_meta, account)
+    if total == 0:                     # пусто -> синхронно тянем первый раз
         await _sync_dialogs(account)
-        items, cnt, age = await asyncio.to_thread(_dlg_read, account, limit)
     elif age > 900:                    # старше 15 мин -> освежаем в фоне
         asyncio.create_task(_sync_dialogs(account))
+    items, cnt = await asyncio.to_thread(_dlg_read, account, limit, days)
     return {"items": items, "total": cnt}
 
 

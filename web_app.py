@@ -28,6 +28,15 @@ _INITDATA_MAX_AGE = 86400  # сутки
 app = FastAPI(title="hh Mini App")
 
 
+@app.middleware("http")
+async def _no_cache(request, call_next):
+    resp = await call_next(request)
+    p = request.url.path
+    if p == "/" or p.endswith((".html", ".css", ".js")):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+
 def _ensure_tables() -> None:
     try:
         conn = pgconn.connect()
@@ -37,6 +46,13 @@ def _ensure_tables() -> None:
                 "account text NOT NULL, day date NOT NULL, applications int DEFAULT 0, "
                 "views int DEFAULT 0, invitations int DEFAULT 0, "
                 "PRIMARY KEY (account, day))"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS dlg_cache ("
+                "account text NOT NULL, nid text NOT NULL, title text, employer text, "
+                "state_id text, state text, emoji text, rank int DEFAULT 2, "
+                "has_updates boolean DEFAULT false, url text, updated text, "
+                "ts timestamptz DEFAULT now(), PRIMARY KEY (account, nid))"
             )
         conn.commit()
         conn.close()
@@ -214,27 +230,72 @@ _NEG_STATE = {
 _STATE_RANK = {"invitation": 0, "response": 1, "discard": 3, "hidden": 4}
 
 
-async def _dialogs(account: str) -> list:
-    data = await _hh_call(account, "/negotiations", per_page=100, order_by="updated_at")
-    out = []
-    for n in (data or {}).get("items", []):
-        vac = n.get("vacancy") or {}
-        emp = (vac.get("employer") or {}).get("name") or ""
-        sid = (n.get("state") or {}).get("id") or ""
-        emoji, label = _NEG_STATE.get(sid, ("•", (n.get("state") or {}).get("name") or sid))
-        out.append({
-            "id": n.get("id"),
-            "title": vac.get("name") or "Вакансия",
-            "employer": emp,
-            "state": label,
-            "state_id": sid,
-            "emoji": emoji,
-            "rank": _STATE_RANK.get(sid, 2),
-            "has_updates": bool(n.get("has_updates")),
-            "url": vac.get("alternate_url") or "",
-            "updated": (n.get("updated_at") or "")[:10],
-        })
-    return out
+async def _sync_dialogs(account: str) -> int:
+    """Тянем ВСЕ отклики из hh (постранично) и кладём в dlg_cache. -> кол-во."""
+    rows, page = [], 0
+    while page < 8:  # до 800 откликов
+        data = await _hh_call(account, "/negotiations", per_page=100, page=page,
+                              order_by="updated_at")
+        if not data:
+            break
+        for n in data.get("items", []):
+            vac = n.get("vacancy") or {}
+            sid = (n.get("state") or {}).get("id") or ""
+            emoji, label = _NEG_STATE.get(
+                sid, ("•", (n.get("state") or {}).get("name") or sid))
+            rows.append((
+                account, str(n.get("id")), vac.get("name") or "Вакансия",
+                (vac.get("employer") or {}).get("name") or "", sid, label, emoji,
+                _STATE_RANK.get(sid, 2), bool(n.get("has_updates")),
+                vac.get("alternate_url") or "", (n.get("updated_at") or "")[:10],
+            ))
+        if page + 1 >= (data.get("pages") or 1):
+            break
+        page += 1
+    if not rows:
+        return 0
+
+    def _write():
+        conn = pgconn.connect()
+        try:
+            with conn.cursor() as cur:
+                for r in rows:
+                    cur.execute(
+                        "INSERT INTO dlg_cache(account, nid, title, employer, state_id, "
+                        "state, emoji, rank, has_updates, url, updated, ts) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now()) "
+                        "ON CONFLICT(account, nid) DO UPDATE SET title=excluded.title, "
+                        "employer=excluded.employer, state_id=excluded.state_id, "
+                        "state=excluded.state, emoji=excluded.emoji, rank=excluded.rank, "
+                        "has_updates=excluded.has_updates, url=excluded.url, "
+                        "updated=excluded.updated, ts=now()", r)
+            conn.commit()
+        finally:
+            conn.close()
+
+    await asyncio.to_thread(_write)
+    return len(rows)
+
+
+def _dlg_read(account: str, limit: int):
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*), extract(epoch FROM now()-max(ts)) "
+                        "FROM dlg_cache WHERE account=%s", (account,))
+            cnt, age = cur.fetchone()
+            cur.execute(
+                "SELECT nid, title, employer, state_id, state, emoji, rank, "
+                "has_updates, url, updated FROM dlg_cache WHERE account=%s "
+                "ORDER BY updated DESC NULLS LAST LIMIT %s", (account, limit))
+            items = [{
+                "id": r[0], "title": r[1], "employer": r[2], "state_id": r[3],
+                "state": r[4], "emoji": r[5], "rank": r[6], "has_updates": r[7],
+                "url": r[8], "updated": r[9],
+            } for r in cur.fetchall()]
+        return items, int(cnt or 0), (age if age is not None else 1e9)
+    finally:
+        conn.close()
 
 
 async def _dialog_messages(account: str, nid: str) -> dict:
@@ -389,9 +450,16 @@ async def api_settings_set(body: dict,
 
 
 @app.get("/api/dialogs")
-async def api_dialogs(x_init_data: str = Header(None, alias="X-Init-Data")):
+async def api_dialogs(limit: int = 500,
+                      x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data)
-    return {"items": await _dialogs(account)}
+    items, cnt, age = await asyncio.to_thread(_dlg_read, account, limit)
+    if cnt == 0:                       # пусто -> синхронно тянем первый раз
+        await _sync_dialogs(account)
+        items, cnt, age = await asyncio.to_thread(_dlg_read, account, limit)
+    elif age > 900:                    # старше 15 мин -> освежаем в фоне
+        asyncio.create_task(_sync_dialogs(account))
+    return {"items": items, "total": cnt}
 
 
 @app.get("/api/dialog")

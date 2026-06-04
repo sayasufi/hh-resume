@@ -47,3 +47,19 @@ def test_run_op_success(monkeypatch):
     monkeypatch.setattr(runner, "get_run_logger", lambda: logging.getLogger("test"))
     rc = asyncio.run(run_op(["python", "-c", "print('hi')"], "hh", "acct", timeout=30))
     assert rc == 0
+
+
+def test_jobs_table_complete():
+    from orchestration.flows import JOBS
+    names = [j["name"] for j in JOBS]
+    assert len(names) == len(set(names)) == 11
+    for j in JOBS:
+        assert j["command"] and isinstance(j["command"], list)
+        assert j["cron"] and isinstance(j["cron"], str)
+
+
+def test_build_deployments_filters_by_name():
+    from orchestration.flows import build_deployments
+    deps = build_deployments({"refresh-token"})
+    assert len(deps) == 1 and deps[0].name == "hh-refresh-token"
+    assert len(build_deployments(None)) == 11

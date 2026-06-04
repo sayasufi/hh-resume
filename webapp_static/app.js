@@ -34,8 +34,9 @@ function renderMe(d) {
   const p = d.profile, s = d.stats;
   $("#avatar").textContent = (p.name || "·").trim().charAt(0).toUpperCase() || "·";
   $("#hname").textContent = p.name || "—";
-  const paused = (p.status || "").includes("паузе");
-  const st = $("#hstatus"); st.textContent = p.status || ""; st.className = "pill " + (paused ? "warn" : "good");
+  const stt = p.status || "";
+  const st = $("#hstatus"); st.textContent = stt;
+  st.className = "pill " + (stt.includes("работает") ? "good" : stt.indexOf("всё") === 0 ? "bad" : "warn");
   $("#p-name").textContent = p.name || "—";
   $("#p-id").textContent = p.hh_id || "—";
   $("#p-resume").textContent = p.resume || "—";

@@ -494,7 +494,10 @@ async def _build_me(account: str, days: int = 90) -> dict:
     salary = (cfg.get("preferences") or {}).get("salary") or ""
     flags = [await asyncio.to_thread(pgconn.feature_enabled, f, account)
              for f in FEATURES]
-    active = all(flags)
+    on = sum(1 for f in flags if f)
+    status = ("работает" if on == len(flags)
+              else "всё на паузе" if on == 0
+              else "часть функций на паузе")
     if sum(counts.values()):  # есть кэш откликов -> точные цифры по статусам за период
         apps_total = sum(counts.values())
         responses = counts.get("response", 0)
@@ -508,7 +511,7 @@ async def _build_me(account: str, days: int = 90) -> dict:
         "profile": {
             "name": name, "hh_id": hh["hh_id"], "resume": hh["resume_title"],
             "salary": salary,
-            "status": "работает" if active else "часть функций на паузе",
+            "status": status,
         },
         "stats": {
             "applications_total": apps_total,

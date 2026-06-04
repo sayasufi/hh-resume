@@ -30,6 +30,7 @@ html, body { margin: 0; padding: 0; background: var(--page); color: var(--text);
   padding: 3px 10px; border-radius: 999px; }
 .pill.good { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
 .pill.warn { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+.pill.bad { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
 
 main { padding: 0 0 10px; }
 .tab { display: none; }

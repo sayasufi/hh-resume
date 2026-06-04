@@ -100,14 +100,19 @@
             <span class="v chevron" id="resume-val">—</span></button>
         </div>
 
+        <div class="gtitle">Фильтры вакансий</div>
+        <div class="list">
+          <label class="cell toggle"><span class="t"><b>Только по договору ГПХ</b><small>лишь вакансии с оформлением ГПХ</small></span>
+            <input type="checkbox" id="cfg-gph"><i></i></label>
+        </div>
+        <div class="ghint">Применяется ко всем откликам — обычным и тестовым. Раздел будем расширять.</div>
+
         <div class="gtitle">Обычные отклики</div>
         <div class="list">
           <label class="cell toggle"><span class="t"><b>Авто-отклики</b><small>на подходящие вакансии</small></span>
             <input type="checkbox" data-feat="apply"><i></i></label>
           <label class="cell tap"><span class="k">Лимит в день <em id="cap-limit">(макс 200)</em></span>
             <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></label>
-          <label class="cell toggle"><span class="t"><b>Только по договору ГПХ</b><small>откликаться лишь на вакансии с оформлением ГПХ</small></span>
-            <input type="checkbox" id="cfg-gph"><i></i></label>
         </div>
         <div class="ghint">Серверный потолок hh — 200 откликов в сутки.</div>
 

@@ -260,6 +260,7 @@ async def main():
         return
     global LIMIT
     LIMIT = int(pgconn.get_setting("apply.tests_per_day", LIMIT) or LIMIT)
+    gph_only = bool(pgconn.get_setting("apply.civil_law_only", False))  # общий фильтр ГПХ
     cfg = pgconn.app_config()
     user, pw = creds()
     tok = cfg["token"]; oa = cfg["openai"]
@@ -307,8 +308,10 @@ async def main():
         r = await api.get(f"/resumes/{resume_id}/similar_vacancies", page=0, per_page=80)
     finally:
         await api.aclose()  # api больше не нужен — дальше только браузер
-    tvs = [v for v in r.get("items", []) if v.get("has_test") and str(v["id"]) not in seen]
-    print(f"test vacancies (new): {len(tvs)}")
+    tvs = [v for v in r.get("items", [])
+           if v.get("has_test") and str(v["id"]) not in seen
+           and (not gph_only or v.get("civil_law_contracts"))]
+    print(f"test vacancies (new): {len(tvs)}" + (" [только ГПХ]" if gph_only else ""))
     if not tvs:
         return
 

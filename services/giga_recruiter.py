@@ -45,7 +45,8 @@ DONE_RE = re.compile(
 # активного интервью нет / отклик уже сдан
 NOACTIVE_RE = re.compile(
     r"диалог по вакансии заверш|отклик уже у рекрут|помогаю только на этапе первичн|"
-    r"нет новых вакансий|новых вакансий (пока )?нет|нет активных", re.I)
+    r"нет новых вакансий|новых вакансий (пока )?нет|нет активных|"
+    r"неполадк|передано рекрут", re.I)
 # филлер — подождать, не отвечать
 WAIT_RE = re.compile(
     r"нужно немного времени|ничего не писать|скоро продолж|обрабатыва|секундоч|подожд", re.I)
@@ -380,6 +381,7 @@ async def _run_session(client, entity, oa, sys_prompt, last_id, account, seed=No
                 _set_status(account, cur_tok, "done")
                 cur_tok = None
             convo = []
+            await asyncio.sleep(5)  # пауза, не хаммерим бота /start по сданным токенам
             if await start_next():
                 continue
             return "done", completed, turns

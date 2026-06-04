@@ -807,9 +807,12 @@ class Operation(BaseOperation):
                         )
                         assert res == {}
                         self.applications_count += 1
-                        pgconn.bump_activity("apply", 1)
                         # Сохраняем счетчик в базу данных
                         await self.tool.storage.settings.set_value("_applications_count", str(self.applications_count))
+                        # Счётчик активности Mini App (best-effort; pgconn — этот метод
+                        # ниже run(), поэтому импортируем локально, не из run-скоупа)
+                        from ..storage import pgconn
+                        pgconn.bump_activity("apply", 1)
                         logger.debug(
                             "Откликнулись на %s с резюме %s (отклик #%d за сегодня)",
                             vacancy["alternate_url"],

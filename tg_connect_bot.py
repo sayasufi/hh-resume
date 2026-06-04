@@ -322,8 +322,11 @@ async def _connect_send_code(message: Message, state: FSMContext, phone: str) ->
                                  "hash": sent.phone_code_hash}
     await state.set_state(Connect.code)
     await message.answer(
-        "📲 Telegram прислал тебе <b>код для входа</b> (в чат «Telegram», "
-        "служебное сообщение). Введи его сюда (только цифры):", parse_mode="HTML",
+        "📲 Telegram прислал тебе <b>код для входа</b> (в чат «Telegram»).\n\n"
+        "⚠️ <b>Важно:</b> вводи код <b>через пробелы или дефисы</b> — например, если "
+        "код <code>12345</code>, напиши <b>1 2 3 4 5</b> или <b>1-2-3-4-5</b>.\n"
+        "Если ввести просто «12345», Telegram аннулирует код как «пересланный в чат».",
+        parse_mode="HTML",
     )
 
 
@@ -401,7 +404,11 @@ async def conn_got_code(message: Message, state: FSMContext):
         _pending.pop(message.chat.id, None)
         await state.clear()
         await client.disconnect()
-        await message.answer("⌛ Код истёк. Повтори /connect.")
+        await message.answer(
+            "⌛ Код аннулирован (Telegram гасит коды, введённые цифрами подряд).\n"
+            "Повтори /connect и в этот раз вводи код <b>через пробелы/дефисы</b>: "
+            "напр. <b>1 2 3 4 5</b>.", parse_mode="HTML",
+        )
         return
     except Exception as e:
         _pending.pop(message.chat.id, None)

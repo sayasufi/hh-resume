@@ -564,7 +564,9 @@ async def api_settings(account: str = None,
         "tests_per_day_cap": 30,  # практический потолок браузерного флоу
     }
     return {"features": features, "config": config,
-            "resumes": await _resume_list(account)}
+            "resumes": await _resume_list(account),
+            # подключён ли Telegram-юзербот (нужен для авто-ГигаРекрутера)
+            "tg_connected": bool(cfg.get("tg_user_session"))}
 
 
 async def _set_config(account: str, key: str, value) -> None:

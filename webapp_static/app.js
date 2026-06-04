@@ -259,6 +259,9 @@ async function boot() {
     const [me, st] = await Promise.all([api("/api/me?days=" + PERIOD), api("/api/settings")]);
     renderMe(me); setupAdmin(me);
     bindToggles(st.features); bindConfig(st.config, st.resumes || []);
+    $("#giga-hint").textContent = st.tg_connected
+      ? "✅ Telegram подключён — авто-ГигаРекрутер сможет отвечать."
+      : "⚠️ Для авто-ГигаРекрутера подключи Telegram: в боте /connect. Сейчас тумблер управляет только уведомлениями/дайджестом.";
     loadDialogs(PERIOD); loadActivity(PERIOD); loadActions();
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {

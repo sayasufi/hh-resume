@@ -613,6 +613,8 @@ async def api_settings(account: str = None,
             pgconn.get_setting, "apply.tests_per_day", 10, account),
         "resume_id": await asyncio.to_thread(
             pgconn.get_setting, "apply.resume_id", "", account),
+        "civil_law_only": bool(await asyncio.to_thread(
+            pgconn.get_setting, "apply.civil_law_only", False, account)),
         "max_per_day_cap": 200,   # серверный суточный потолок hh
         "tests_per_day_cap": 30,  # практический потолок браузерного флоу
     }
@@ -634,6 +636,8 @@ async def _set_config(account: str, key: str, value) -> None:
         await asyncio.to_thread(pgconn.set_setting, key, max(0, int(value)), account)
     elif key == "apply.resume_id":
         await asyncio.to_thread(pgconn.set_setting, "apply.resume_id", str(value), account)
+    elif key == "apply.civil_law_only":
+        await asyncio.to_thread(pgconn.set_setting, key, bool(value), account)
     else:
         raise HTTPException(400, "unknown key")
 

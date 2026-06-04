@@ -129,7 +129,7 @@ async function openDialog(id) {
 // ── функции / настройки ──
 let RESUMES = [], RESUME_ID = "";
 function bindToggles(features) {
-  document.querySelectorAll(".toggle input").forEach((inp) => {
+  document.querySelectorAll(".toggle input[data-feat]").forEach((inp) => {
     inp.checked = !!features[inp.dataset.feat];
     inp.onchange = async () => {
       const row = inp.closest(".toggle"); row.classList.add("busy");
@@ -169,6 +169,16 @@ function bindConfig(cfg, resumes) {
   wire($("#cfg-salary"), "salary");
   clampWire($("#cfg-limit"), "apply.max_per_day", capL);
   clampWire($("#cfg-tlimit"), "apply.tests_per_day", capT);
+  const gph = $("#cfg-gph");
+  if (gph) {
+    gph.checked = !!cfg.civil_law_only;
+    gph.onchange = async () => {
+      const row = gph.closest(".toggle"); row.classList.add("busy");
+      try { await save("apply.civil_law_only", gph.checked); hap("light"); }
+      catch (e) { gph.checked = !gph.checked; err("Не удалось сохранить"); }
+      finally { row.classList.remove("busy"); }
+    };
+  }
 }
 $("#resume-row").onclick = () => {
   if (!RESUMES.length) return;

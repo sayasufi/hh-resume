@@ -371,6 +371,10 @@ class Operation(BaseOperation):
             self.max_applications_per_day = int(mpd) if mpd is not None else 100
         except (TypeError, ValueError):
             self.max_applications_per_day = 100
+        # Только вакансии по договору ГПХ (поле civil_law_contracts непустое)
+        self.civil_law_only = bool(
+            await tool.storage.settings.get_value("apply.civil_law_only", False)
+        )
         await self._init_daily_counter()
         await self._apply_similar()
 
@@ -588,6 +592,13 @@ class Operation(BaseOperation):
                         "Пропускаем вакансию %s с перенаправлением: %s",
                         vacancy["alternate_url"],
                         redirect_url,
+                    )
+                    continue
+
+                # Фильтр «только ГПХ»: пропускаем вакансии без договора ГПХ
+                if self.civil_law_only and not vacancy.get("civil_law_contracts"):
+                    logger.debug(
+                        "Пропускаем не-ГПХ вакансию: %s", vacancy["alternate_url"]
                     )
                     continue
 

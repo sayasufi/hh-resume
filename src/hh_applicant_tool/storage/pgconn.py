@@ -321,12 +321,21 @@ def add_action_items(items: list[dict]) -> None:
     conn = connect()
     try:
         with conn.cursor() as cur:
+            cur.execute("ALTER TABLE action_items "
+                        "ADD COLUMN IF NOT EXISTS action_url text")  # ссылка на анкету/тест
             for it in items:
+                # дедуп: не плодим дело, если по этой вакансии (nid) уже есть невыполненное
+                cur.execute("SELECT 1 FROM action_items WHERE account=%s AND nid=%s "
+                            "AND NOT done LIMIT 1", (acc, it.get("nid")))
+                if cur.fetchone():
+                    continue
                 cur.execute(
                     "INSERT INTO action_items(account, nid, chat_id, vacancy, action, "
-                    "chat_url, vacancy_url) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    "chat_url, vacancy_url, action_url) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                     (acc, it.get("nid"), it.get("chat_id"), it.get("vacancy"),
-                     it.get("action"), it.get("chat_url"), it.get("vacancy_url")),
+                     it.get("action"), it.get("chat_url"), it.get("vacancy_url"),
+                     it.get("action_url")),
                 )
         conn.commit()
     finally:

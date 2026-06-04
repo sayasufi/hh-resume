@@ -141,6 +141,7 @@ async function openDialog(id) {
   } else hh.classList.add("hidden");
   $("#m-body").innerHTML = '<div class="empty">Загрузка…</div>';
   openSheet("#modal");
+  if (d.has_updates) { d.has_updates = false; renderDialogs(); }  // сбрасываем синюю точку
   try {
     const r = await api("/api/dialog?id=" + encodeURIComponent(id));
     if (!r.messages || !r.messages.length) { $("#m-body").innerHTML = '<div class="empty">Сообщений нет</div>'; return; }
@@ -262,9 +263,10 @@ function renderActions(items) {
     + `<div class="dlg-emp">${esc(a.vacancy)}</div>`
     + `<div class="dlg-date">${esc(a.created_at)}</div></div>`
     + `<div class="act-btns">`
-    + (a.chat_url ? `<button class="abtn open" data-url="${esc(a.chat_url)}">Открыть</button>` : "")
+    + (a.action_url ? `<button class="abtn open" data-url="${esc(a.action_url)}">Открыть ↗</button>` : "")
+    + (a.chat_url ? `<button class="abtn chat" data-url="${esc(a.chat_url)}">Чат</button>` : "")
     + `<button class="abtn done" data-id="${a.id}">✓</button></div></div>`).join("") + "</div>";
-  box.querySelectorAll(".abtn.open").forEach((el) => {
+  box.querySelectorAll(".abtn[data-url]").forEach((el) => {
     el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
   });
   box.querySelectorAll(".abtn.done").forEach((el) => {
@@ -296,9 +298,22 @@ const qp = () => {
   return s.length ? "?" + s.join("&") : "";
 };
 const loadStats = () => api("/api/me" + qp()).then(renderMe).catch(() => {});
+function showFresh(age) {
+  const el = $("#dlg-fresh"); if (!el) return;
+  if (age == null) { el.textContent = ""; return; }
+  const m = Math.round(age / 60);
+  el.textContent = m <= 0 ? "обновлено только что" : "обновлено " + m + " мин назад";
+}
 const loadDialogs = () => api("/api/dialogs" + qp())
-  .then((r) => { DIALOGS = r.items || []; renderDialogs(); })
+  .then((r) => { DIALOGS = r.items || []; renderDialogs(); showFresh(r.synced_age); })
   .catch(() => failBox("#dialogs", "#dlg-count", loadDialogs));
+// ручное обновление (кнопка в шапке) — перетягивает всё актуальное
+function refreshAll() {
+  hap("light");
+  loadStats(); loadActivity(); loadDialogs(); loadActions(); loadGiga();
+  api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
+}
+if ($("#refresh")) $("#refresh").onclick = refreshAll;
 // период влияет на воронку, детали, активность бота и список откликов
 const _reloadPeriod = () => { loadStats(); loadActivity(); loadDialogs(); };
 document.querySelectorAll(".period button").forEach((b) => {

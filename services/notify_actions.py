@@ -52,6 +52,8 @@ GR_MARK_RE = re.compile(
     r"giga_recruiter_bot|t\.me/\S*bot\?start=|бот[- ]?рекрут|"
     r"первичн\w* интервью\s+с\s+ботом|автоматическ\w*\s+(?:скрининг|интервью)", re.I)
 
+URL_RE = re.compile(r"https?://\S+")  # первая ссылка из сообщения -> action_url дела
+
 
 def _norm_cat(raw: str):
     """Нормализуем категорию из ответа LLM (бэктики/кавычки/префикс «категория:»/синонимы).
@@ -162,9 +164,11 @@ async def main():
                 if not prio or len(task) < 3:
                     continue  # none/interview -> пропуск (seen уже стоит)
                 chat_id = n.get("chat_id") or nid
+                _u = URL_RE.search(last.get("text") or "")
+                action_url = _u.group(0).rstrip(").,;") if _u else ""
                 queued.append((
                     prio, task, f"https://hh.ru/chat/{chat_id}",
-                    f"action:{key}", nid, chat_id, v.get("name", ""),
+                    f"action:{key}", nid, chat_id, v.get("name", ""), action_url,
                 ))
             if page + 1 >= r.get("pages", 0):
                 break
@@ -180,7 +184,7 @@ async def main():
         print("DRY — ничего не сохранено и не поставлено в очередь.")
         return
 
-    for prio, task, link, dedup, nid, chat_id, vac in queued:
+    for prio, task, link, dedup, nid, chat_id, vac, action_url in queued:
         pgconn.notify(
             prio, f"{task} — {vac}" if vac else task,
             category="action", link=link, dedup_key=dedup,
@@ -190,8 +194,9 @@ async def main():
             {
                 "nid": nid, "chat_id": chat_id, "vacancy": vac,
                 "action": task, "chat_url": link, "vacancy_url": "",
+                "action_url": action_url,
             }
-            for prio, task, link, dedup, nid, chat_id, vac in queued
+            for prio, task, link, dedup, nid, chat_id, vac, action_url in queued
         ])
     if fresh_seen:
         pgconn.add_seen("actions", fresh_seen)

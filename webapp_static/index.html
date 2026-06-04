@@ -15,6 +15,7 @@
         <div id="hname">Загрузка…</div>
         <div id="hstatus" class="pill"></div>
       </div>
+      <button id="refresh" aria-label="Обновить">↻</button>
     </header>
 
     <div id="admin-bar" class="hidden">
@@ -83,7 +84,7 @@
           <button class="chip" data-f="discard">🔴 Отказы</button>
         </div>
         <div class="subbar">
-          <span class="hint"><b id="dlg-count">—</b> откликов</span>
+          <span class="hint"><b id="dlg-count">—</b> откликов <span id="dlg-fresh" class="fresh"></span></span>
           <div class="seg" id="dlg-sort">
             <button class="active" data-s="date">Новые</button>
             <button data-s="status">Статус</button>

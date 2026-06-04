@@ -69,9 +69,13 @@ def _ensure_tables() -> None:
                 "created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(), "
                 "PRIMARY KEY (account, token))"
             )
-            # действия-«дела»: колонка done могла отсутствовать в старой таблице
+            # действия-«дела»: колонки могли отсутствовать в старой таблице
             cur.execute("ALTER TABLE action_items "
                         "ADD COLUMN IF NOT EXISTS done boolean NOT NULL DEFAULT false")
+            cur.execute("ALTER TABLE action_items "
+                        "ADD COLUMN IF NOT EXISTS action_url text")  # ссылка на анкету/тест
+            cur.execute("ALTER TABLE dlg_cache "
+                        "ADD COLUMN IF NOT EXISTS created text")  # дата отклика (для воронки)
         conn.commit()
         conn.close()
     except Exception as e:
@@ -287,6 +291,7 @@ async def _sync_dialogs(account: str) -> int:
                 (vac.get("employer") or {}).get("name") or "", sid, label, emoji,
                 _STATE_RANK.get(sid, 2), bool(n.get("has_updates")),
                 vac.get("alternate_url") or "", (n.get("updated_at") or "")[:10],
+                (n.get("created_at") or "")[:10],
             ))
         if page + 1 >= (data.get("pages") or 1):
             break
@@ -301,13 +306,15 @@ async def _sync_dialogs(account: str) -> int:
                 for r in rows:
                     cur.execute(
                         "INSERT INTO dlg_cache(account, nid, title, employer, state_id, "
-                        "state, emoji, rank, has_updates, url, updated, ts) "
-                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now()) "
+                        "state, emoji, rank, has_updates, url, updated, created, ts) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now()) "
                         "ON CONFLICT(account, nid) DO UPDATE SET title=excluded.title, "
                         "employer=excluded.employer, state_id=excluded.state_id, "
                         "state=excluded.state, emoji=excluded.emoji, rank=excluded.rank, "
                         "has_updates=excluded.has_updates, url=excluded.url, "
-                        "updated=excluded.updated, ts=now()", r)
+                        "updated=excluded.updated, "
+                        "created=COALESCE(excluded.created, dlg_cache.created), "
+                        "ts=now()", r)
             conn.commit()
         finally:
             conn.close()
@@ -371,7 +378,9 @@ def _dlg_read(account: str, limit: int, dfrom=None, dto=None):
 
 
 def _state_counts(account: str, dfrom=None, dto=None) -> dict:
-    cond, params = _range_sql("updated", dfrom, dto)
+    # воронка за период — по дате ОТКЛИКА (created), а не изменения статуса (updated);
+    # для ещё не пересинканных строк created пуст -> COALESCE откатывается на updated
+    cond, params = _range_sql("COALESCE(NULLIF(created,''), updated)", dfrom, dto)
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
@@ -512,17 +521,25 @@ def _activity(account: str, dfrom=None, dto=None) -> dict:
 
 
 def _action_items(account: str) -> list:
-    """Актуальные «дела» (не выполненные, за 30 дней), новые сверху."""
+    """Актуальные «дела» (не выполненные, за 30 дней), новые сверху.
+    Авто-снятие (#10): скрываем дела по вакансиям в терминальном статусе
+    (отказ/найм/скрыто) — их делать незачем; join с dlg_cache по nid."""
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, vacancy, action, chat_url, created_at FROM action_items "
-                "WHERE account=%s AND NOT done "
-                "AND created_at > now() - interval '30 days' "
-                "ORDER BY created_at DESC LIMIT 100", (account,))
+                "SELECT a.id, a.vacancy, a.action, a.chat_url, a.created_at, "
+                "COALESCE(a.action_url,'') FROM action_items a "
+                "LEFT JOIN dlg_cache d ON d.account=a.account AND d.nid=a.nid::text "
+                "WHERE a.account=%s AND NOT a.done "
+                "AND a.created_at > now() - interval '30 days' "
+                "AND COALESCE(d.state_id,'') NOT IN "
+                "('discard','discard_by_applicant','hidden','hired') "
+                "ORDER BY a.created_at DESC LIMIT 100", (account,))
             return [{"id": r[0], "vacancy": r[1] or "", "action": r[2] or "",
-                     "chat_url": r[3] or "", "created_at": (str(r[4])[:16] if r[4] else "")}
+                     "chat_url": r[3] or "",
+                     "created_at": (str(r[4])[:16] if r[4] else ""),
+                     "action_url": r[5] or ""}
                     for r in cur.fetchall()]
     finally:
         conn.close()
@@ -723,10 +740,12 @@ async def api_dialogs(dfrom: str = None, dto: str = None, limit: int = 500,
     total, age = await asyncio.to_thread(_dlg_meta, account)
     if total == 0:                     # пусто -> синхронно тянем первый раз
         await _sync_dialogs(account)
+        age = 0
     elif age > 900:                    # старше 15 мин -> освежаем в фоне
         asyncio.create_task(_sync_dialogs(account))
     items, cnt = await asyncio.to_thread(_dlg_read, account, limit, dfrom, dto)
-    return {"items": items, "total": cnt}
+    return {"items": items, "total": cnt,
+            "synced_age": int(age) if age is not None and age < 1e8 else None}
 
 
 @app.get("/api/dialog")

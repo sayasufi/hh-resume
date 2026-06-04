@@ -33,7 +33,12 @@ from aiogram.types import (
 
 WEBAPP_URL = "https://tgbot-afisha.ru"
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import (
+    PhoneCodeExpiredError,
+    PhoneCodeInvalidError,
+    PhoneNumberInvalidError,
+    SessionPasswordNeededError,
+)
 from telethon.sessions import StringSession
 
 from hh_applicant_tool.storage import pgconn
@@ -41,10 +46,12 @@ from hh_applicant_tool.storage import pgconn
 API_ID, API_HASH = pgconn.tg_api()
 
 dp = Dispatcher()
-_pending: dict[int, TelegramClient] = {}  # chat_id -> клиент на шаге 2FA
+_pending: dict[int, dict] = {}  # chat_id -> {client, phone, hash} на шаге кода/2FA
 
 
 class Connect(StatesGroup):
+    phone = State()
+    code = State()
     password = State()
 
 
@@ -261,10 +268,119 @@ async def _finish(message: Message, client: TelegramClient):
         f"✅ Telegram подключён к hh-аккаунту «{account}». Сессия зашифрована.\n"
         "Теперь я смогу проходить за тебя авто-интервью."
     )
-    print(f"linked: +{me.phone} -> {schema}")
+    print(f"linked: +{me.phone} -> {account}")
+
+
+def _connect_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 По коду (этот телефон)", callback_data="conn:code")],
+        [InlineKeyboardButton(text="🖥 По QR (второе устройство)", callback_data="conn:qr")],
+    ])
 
 
 async def start_connect(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "🔗 <b>Подключение Telegram</b> (для авто-ГигаРекрутера).\n\n"
+        "Как удобнее войти?\n"
+        "• <b>По коду</b> — прямо с этого телефона: пришлю запрос, Telegram даст "
+        "код, введёшь его.\n"
+        "• <b>По QR</b> — если открываешь бота на телефоне, а сканировать будешь "
+        "с компа/планшета.", reply_markup=_connect_kb(), parse_mode="HTML",
+    )
+
+
+@dp.callback_query(F.data == "conn:code")
+async def cb_conn_code(cq: CallbackQuery, state: FSMContext):
+    await cq.answer()
+    await state.set_state(Connect.phone)
+    await cq.message.answer(
+        "Введи номер телефона ЭТОГО Telegram (с кодом страны, напр. +79991234567):"
+    )
+
+
+@dp.callback_query(F.data == "conn:qr")
+async def cb_conn_qr(cq: CallbackQuery, state: FSMContext):
+    await cq.answer()
+    await _connect_qr(cq.message, state)
+
+
+@dp.message(Connect.phone)
+async def conn_got_phone(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    digits = re.sub(r"\D", "", raw)
+    if not (10 <= len(digits) <= 15):
+        await message.answer("❌ Не похоже на номер. Введи в формате +79991234567:")
+        return
+    phone = "+" + digits
+    await message.answer("⏳ Отправляю запрос в Telegram…")
+    client = TelegramClient(StringSession(), API_ID, API_HASH)
+    try:
+        await client.connect()
+        sent = await client.send_code_request(phone)
+    except PhoneNumberInvalidError:
+        await client.disconnect()
+        await message.answer("❌ Telegram не знает такой номер. Проверь и повтори.")
+        return
+    except Exception as e:
+        await client.disconnect()
+        await message.answer(f"❌ Не удалось отправить код ({type(e).__name__}). Повтори /connect.")
+        return
+    _pending[message.chat.id] = {"client": client, "phone": phone,
+                                 "hash": sent.phone_code_hash}
+    await state.set_state(Connect.code)
+    await message.answer(
+        "📲 Telegram прислал тебе <b>код для входа</b> (в чат «Telegram», "
+        "служебное сообщение). Введи его сюда (только цифры):", parse_mode="HTML",
+    )
+
+
+@dp.message(Connect.code)
+async def conn_got_code(message: Message, state: FSMContext):
+    code = re.sub(r"\D", "", message.text or "")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    p = _pending.get(message.chat.id)
+    if not p:
+        await state.clear()
+        await message.answer("Сессия истекла. Повтори /connect.")
+        return
+    if not code:
+        await message.answer("Введи код цифрами:")
+        return
+    client = p["client"]
+    try:
+        await client.sign_in(p["phone"], code, phone_code_hash=p["hash"])
+    except SessionPasswordNeededError:
+        await state.set_state(Connect.password)  # клиент уже в _pending
+        await message.answer(
+            "🔐 На аккаунте включён облачный пароль (2FA). Пришли его одним "
+            "сообщением — удалю сразу после ввода."
+        )
+        return
+    except PhoneCodeInvalidError:
+        await message.answer("❌ Неверный код. Попробуй ввести ещё раз:")
+        return
+    except PhoneCodeExpiredError:
+        _pending.pop(message.chat.id, None)
+        await state.clear()
+        await client.disconnect()
+        await message.answer("⌛ Код истёк. Повтори /connect.")
+        return
+    except Exception as e:
+        _pending.pop(message.chat.id, None)
+        await state.clear()
+        await client.disconnect()
+        await message.answer(f"❌ Не удалось войти ({type(e).__name__}). Повтори /connect.")
+        return
+    _pending.pop(message.chat.id, None)
+    await state.clear()
+    await _finish(message, client)
+
+
+async def _connect_qr(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Генерирую QR-код…")
     client = TelegramClient(StringSession(), API_ID, API_HASH)
@@ -290,7 +406,7 @@ async def start_connect(message: Message, state: FSMContext):
                     await qr_msg.delete()
                 except Exception:
                     pass
-            _pending[message.chat.id] = client
+            _pending[message.chat.id] = {"client": client}
             await state.set_state(Connect.password)
             await message.answer(
                 "🔐 На аккаунте включён облачный пароль (2FA). Пришли его одним "
@@ -440,7 +556,8 @@ async def got_password(message: Message, state: FSMContext):
         await message.delete()
     except Exception:
         pass
-    client = _pending.pop(message.chat.id, None)
+    p = _pending.pop(message.chat.id, None)
+    client = p and p.get("client")
     await state.clear()
     if not client:
         await message.answer("Сессия истекла, повтори /connect.")

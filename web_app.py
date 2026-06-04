@@ -54,6 +54,14 @@ def _ensure_tables() -> None:
                 "has_updates boolean DEFAULT false, url text, updated text, "
                 "ts timestamptz DEFAULT now(), PRIMARY KEY (account, nid))"
             )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS activity_daily ("
+                "account text NOT NULL, day date NOT NULL, kind text NOT NULL, "
+                "count int NOT NULL DEFAULT 0, PRIMARY KEY (account, day, kind))"
+            )
+            # действия-«дела»: колонка done могла отсутствовать в старой таблице
+            cur.execute("ALTER TABLE action_items "
+                        "ADD COLUMN IF NOT EXISTS done boolean NOT NULL DEFAULT false")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -396,6 +404,50 @@ def _trends(account: str) -> list:
         conn.close()
 
 
+def _activity(account: str, days: int = 30) -> dict:
+    """Сумма count по kind за период из activity_daily (days<=0 = всё время)."""
+    cond, params = "", []
+    if days and days > 0:
+        cond, params = " AND day >= current_date - %s", [days]
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT kind, COALESCE(SUM(count),0) FROM activity_daily "
+                        "WHERE account=%s" + cond + " GROUP BY kind", [account] + params)
+            agg = {k: int(v) for k, v in cur.fetchall()}
+    finally:
+        conn.close()
+    return {k: agg.get(k, 0) for k in ("apply", "tests", "reply", "browse", "bump")}
+
+
+def _action_items(account: str) -> list:
+    """Актуальные «дела» (не выполненные, за 30 дней), новые сверху."""
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, vacancy, action, chat_url, created_at FROM action_items "
+                "WHERE account=%s AND NOT done "
+                "AND created_at > now() - interval '30 days' "
+                "ORDER BY created_at DESC LIMIT 100", (account,))
+            return [{"id": r[0], "vacancy": r[1] or "", "action": r[2] or "",
+                     "chat_url": r[3] or "", "created_at": (str(r[4])[:16] if r[4] else "")}
+                    for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _action_done(account: str, aid: int) -> None:
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE action_items SET done=true WHERE account=%s AND id=%s",
+                        (account, aid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _funnel(apps: int, invitations: int, interviews: int) -> list:
     """Последовательная воронка: каждый этап ⊆ предыдущего + конверсия %."""
     stages = [("Отклики", apps), ("Приглашения", invitations),
@@ -476,6 +528,8 @@ async def api_settings(x_init_data: str = Header(None, alias="X-Init-Data")):
             pgconn.get_setting, "apply.tests_per_day", 10, account),
         "resume_id": await asyncio.to_thread(
             pgconn.get_setting, "apply.resume_id", "", account),
+        "max_per_day_cap": 200,   # серверный суточный потолок hh
+        "tests_per_day_cap": 30,  # практический потолок браузерного флоу
     }
     return {"features": features, "config": config,
             "resumes": await _resume_list(account)}
@@ -527,6 +581,31 @@ async def api_dialogs(days: int = 90, limit: int = 500,
 async def api_dialog(id: str, x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data)
     return await _dialog_messages(account, id)
+
+
+@app.get("/api/activity")
+async def api_activity(days: int = 30,
+                       x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data)
+    return await asyncio.to_thread(_activity, account, days)
+
+
+@app.get("/api/actions")
+async def api_actions(x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data)
+    return {"items": await asyncio.to_thread(_action_items, account)}
+
+
+@app.post("/api/action_done")
+async def api_action_done(body: dict,
+                          x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data)
+    try:
+        aid = int(body.get("id"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "bad id")
+    await asyncio.to_thread(_action_done, account, aid)
+    return {"ok": True}
 
 
 @app.get("/api/trends")

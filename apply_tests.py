@@ -394,7 +394,7 @@ async def main():
                     if btn:
                         await btn.click(); await page.wait_for_timeout(4000)
                         print(f"  -> ОТПРАВЛЕНО ({page.url})")
-                        seen.add(str(vid)); done += 1; save_seen()
+                        seen.add(str(vid)); done += 1; pgconn.bump_activity("tests", 1); save_seen()
                     else:
                         print("  кнопка отправки не найдена -> НЕ помечаю seen")
                 else:

@@ -23,6 +23,7 @@ document.querySelectorAll("#tabs button").forEach((b) => {
     document.querySelectorAll("#tabs button").forEach((x) => x.classList.remove("active"));
     document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
     b.classList.add("active"); $("#tab-" + b.dataset.tab).classList.add("active");
+    if (b.dataset.tab === "actions") loadActions();
     window.scrollTo(0, 0); hap("sel");
   };
 });
@@ -136,20 +137,32 @@ function bindToggles(features) {
 function resumeTitle(id) { const r = RESUMES.find((x) => String(x.id) === String(id)); return r ? (r.title || r.id) : (id || "—"); }
 function bindConfig(cfg, resumes) {
   RESUMES = resumes || []; RESUME_ID = cfg.resume_id || (RESUMES[0] && RESUMES[0].id) || "";
+  const capL = cfg.max_per_day_cap || 200, capT = cfg.tests_per_day_cap || 30;
   $("#cfg-salary").value = cfg.salary || "";
   $("#cfg-limit").value = cfg.max_per_day != null ? cfg.max_per_day : "";
   $("#cfg-tlimit").value = cfg.tests_per_day != null ? cfg.tests_per_day : "";
+  $("#cfg-limit").max = capL; $("#cfg-tlimit").max = capT;
+  if ($("#cap-limit")) $("#cap-limit").textContent = "(макс " + capL + ")";
+  if ($("#cap-tlimit")) $("#cap-tlimit").textContent = "(макс " + capT + ")";
   $("#resume-val").textContent = resumeTitle(RESUME_ID);
-  const wire = (el, key, conv) => {
+  const wire = (el, key) => {
     el.onchange = async () => {
       el.classList.add("busy");
-      try { await save(key, conv ? conv(el.value) : el.value); hap("light"); }
+      try { await save(key, el.value); hap("light"); }
+      catch (e) { err("Не удалось сохранить"); } finally { el.classList.remove("busy"); }
+    };
+  };
+  const clampWire = (el, key, max) => {
+    el.onchange = async () => {
+      const n = Math.min(max, Math.max(0, parseInt(el.value || "0", 10) || 0));
+      el.value = n; el.classList.add("busy");
+      try { await save(key, n); hap("light"); }
       catch (e) { err("Не удалось сохранить"); } finally { el.classList.remove("busy"); }
     };
   };
   wire($("#cfg-salary"), "salary");
-  wire($("#cfg-limit"), "apply.max_per_day", (v) => parseInt(v || "0", 10));
-  wire($("#cfg-tlimit"), "apply.tests_per_day", (v) => parseInt(v || "0", 10));
+  clampWire($("#cfg-limit"), "apply.max_per_day", capL);
+  clampWire($("#cfg-tlimit"), "apply.tests_per_day", capT);
 }
 $("#resume-row").onclick = () => {
   if (!RESUMES.length) return;
@@ -167,7 +180,43 @@ $("#resume-row").onclick = () => {
   });
 };
 
-// период (30/90/Всё) — общий для статистики и откликов
+// активность бота (счётчики реальных действий)
+function renderActivity(a) {
+  $("#a-apply").textContent = a.apply || 0;
+  $("#a-tests").textContent = a.tests || 0;
+  $("#a-reply").textContent = a.reply || 0;
+  $("#a-browse").textContent = a.browse || 0;
+  $("#a-bump").textContent = a.bump || 0;
+}
+const loadActivity = (d) => api("/api/activity?days=" + d).then(renderActivity).catch(() => {});
+
+// дела (что нужно сделать самому)
+function renderActions(items) {
+  const box = $("#actions");
+  $("#act-count").textContent = items.length;
+  if (!items.length) { box.innerHTML = '<div class="empty">Дел нет — всё под контролем 👌</div>'; return; }
+  box.innerHTML = '<div class="list">' + items.map((a) =>
+    `<div class="cell act"><div class="dlg-main">`
+    + `<div class="dlg-title">${esc(a.action)}</div>`
+    + `<div class="dlg-emp">${esc(a.vacancy)}</div>`
+    + `<div class="dlg-date">${esc(a.created_at)}</div></div>`
+    + `<div class="act-btns">`
+    + (a.chat_url ? `<button class="abtn open" data-url="${esc(a.chat_url)}">Открыть</button>` : "")
+    + `<button class="abtn done" data-id="${a.id}">✓</button></div></div>`).join("") + "</div>";
+  box.querySelectorAll(".abtn.open").forEach((el) => {
+    el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
+  });
+  box.querySelectorAll(".abtn.done").forEach((el) => {
+    el.onclick = async () => {
+      const row = el.closest(".act"); row.style.opacity = ".4";
+      try { await api("/api/action_done", { method: "POST", body: JSON.stringify({ id: parseInt(el.dataset.id, 10) }) }); hap("light"); loadActions(); }
+      catch (e) { err("Не удалось"); row.style.opacity = "1"; }
+    };
+  });
+}
+const loadActions = () => api("/api/actions").then((r) => renderActions(r.items || [])).catch(() => {});
+
+// период (30/90/Всё) — общий для статистики, откликов и активности
 let PERIOD = 90;
 const loadStats = (d) => api("/api/me?days=" + d).then(renderMe).catch(() => {});
 const loadDialogs = (d) => api("/api/dialogs?days=" + d)
@@ -177,7 +226,7 @@ document.querySelectorAll(".period button").forEach((b) => {
     PERIOD = parseInt(b.dataset.p, 10);
     document.querySelectorAll(".period button").forEach(
       (x) => x.classList.toggle("active", x.dataset.p === b.dataset.p));
-    loadStats(PERIOD); loadDialogs(PERIOD); hap("sel");
+    loadStats(PERIOD); loadDialogs(PERIOD); loadActivity(PERIOD); hap("sel");
   };
 });
 
@@ -185,7 +234,7 @@ document.querySelectorAll(".period button").forEach((b) => {
   try {
     const [me, st] = await Promise.all([api("/api/me?days=" + PERIOD), api("/api/settings")]);
     renderMe(me); bindToggles(st.features); bindConfig(st.config, st.resumes || []);
-    loadDialogs(PERIOD);
+    loadDialogs(PERIOD); loadActivity(PERIOD); loadActions();
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {
     err(String(e.message) === "not_linked"

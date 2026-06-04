@@ -95,6 +95,7 @@ async def main():
             try:
                 await api.get(f"/vacancies/{vid}")
                 viewed += 1
+                pgconn.bump_activity("browse", 1)
             except Exception:
                 pass
             await _dwell()

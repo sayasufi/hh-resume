@@ -62,13 +62,18 @@ CREATE TABLE IF NOT EXISTS seen_keys (
 CREATE TABLE IF NOT EXISTS action_items (
     id bigserial PRIMARY KEY, account text NOT NULL DEFAULT '',
     nid bigint, chat_id bigint, vacancy text, action text NOT NULL,
-    chat_url text, vacancy_url text, created_at timestamptz DEFAULT now()
+    chat_url text, vacancy_url text, created_at timestamptz DEFAULT now(),
+    done boolean NOT NULL DEFAULT false
 );
 CREATE TABLE IF NOT EXISTS notifications (
     id bigserial PRIMARY KEY, account text NOT NULL DEFAULT '',
     priority int NOT NULL DEFAULT 2, category text, text text NOT NULL,
     link text, dedup_key text, created_at timestamptz DEFAULT now(),
     sent_at timestamptz, UNIQUE (account, dedup_key)
+);
+CREATE TABLE IF NOT EXISTS activity_daily (
+    account text NOT NULL, day date NOT NULL, kind text NOT NULL,
+    count int NOT NULL DEFAULT 0, PRIMARY KEY (account, day, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_notif_unsent
     ON notifications(account, sent_at, priority, created_at);
@@ -320,6 +325,31 @@ def add_action_items(items: list[dict]) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def bump_activity(kind: str, n: int = 1, account: str | None = None) -> None:
+    """Инкремент дневного счётчика активности (account, today, kind) += n.
+    Зовётся из воркеров (HH_ACCOUNT в env задаёт run_all). Best-effort —
+    сбой счётчика не должен ронять основной флоу (отправку отклика и т.п.)."""
+    if n <= 0:
+        return
+    acc = account or get_account()
+    try:
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO activity_daily(account, day, kind, count) "
+                    "VALUES (%s, current_date, %s, %s) "
+                    "ON CONFLICT(account, day, kind) "
+                    "DO UPDATE SET count = activity_daily.count + excluded.count",
+                    (acc, kind, n),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
 
 
 # --- Уведомления ---

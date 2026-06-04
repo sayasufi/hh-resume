@@ -499,6 +499,7 @@ class Operation(BaseOperation):
                         message=send_message,
                         delay=random.uniform(1, 3),
                     )
+                    pgconn.bump_activity("reply", 1)
                     print(f"📨 Отправлено для {vacancy['alternate_url']}")
 
             except ApiError as ex:

@@ -52,5 +52,6 @@ class Operation(BaseOperation):
                     "-",
                     shorten(resume["title"]),
                 )
+                pgconn.bump_activity("bump", 1)
             except ApiError as ex:
                 logger.error(f"Ошибка при обновлении резюме: {ex}")

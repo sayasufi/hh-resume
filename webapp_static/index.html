@@ -45,6 +45,14 @@
         </div>
         <div class="gtitle">Воронка</div>
         <div id="funnel" class="list pad-list"></div>
+        <div class="gtitle">Активность бота за период</div>
+        <div class="grid">
+          <div class="stat"><div class="num" id="a-apply">—</div><div class="lbl">Откликов отправлено</div></div>
+          <div class="stat"><div class="num" id="a-tests">—</div><div class="lbl">Тестовых откликов</div></div>
+          <div class="stat"><div class="num" id="a-reply">—</div><div class="lbl">Ответов работодателям</div></div>
+          <div class="stat"><div class="num" id="a-browse">—</div><div class="lbl">Просмотров вакансий</div></div>
+          <div class="stat"><div class="num" id="a-bump">—</div><div class="lbl">Поднятий резюме</div></div>
+        </div>
         <div class="gtitle">Динамика откликов</div>
         <div id="trend" class="list pad-list"></div>
       </section>
@@ -86,17 +94,19 @@
         <div class="list">
           <label class="cell toggle"><span class="t"><b>Авто-отклики</b><small>на подходящие вакансии</small></span>
             <input type="checkbox" data-feat="apply"><i></i></label>
-          <label class="cell tap"><span class="k">Лимит в день</span>
+          <label class="cell tap"><span class="k">Лимит в день <em id="cap-limit">(макс 200)</em></span>
             <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></label>
         </div>
+        <div class="ghint">Серверный потолок hh — 200 откликов в сутки.</div>
 
         <div class="gtitle">Отклики с тестами</div>
         <div class="list">
           <label class="cell toggle"><span class="t"><b>Авто-тесты</b><small>отклик + тест через браузер</small></span>
             <input type="checkbox" data-feat="tests"><i></i></label>
-          <label class="cell tap"><span class="k">Лимит в день</span>
-            <input type="number" id="cfg-tlimit" inputmode="numeric" min="0" max="100"></label>
+          <label class="cell tap"><span class="k">Лимит в день <em id="cap-tlimit">(макс 30)</em></span>
+            <input type="number" id="cfg-tlimit" inputmode="numeric" min="0" max="30"></label>
         </div>
+        <div class="ghint">Медленный браузерный флоу — рекомендуем 10–20.</div>
 
         <div class="gtitle">Прочее</div>
         <div class="list">
@@ -108,12 +118,19 @@
             <input type="checkbox" data-feat="giga"><i></i></label>
         </div>
       </section>
+
+      <!-- ДЕЛА -->
+      <section id="tab-actions" class="tab">
+        <div class="subbar"><span class="hint"><b id="act-count">—</b> дел — нужно сделать самому</span></div>
+        <div id="actions"></div>
+      </section>
     </main>
 
     <nav id="tabs">
       <button class="active" data-tab="profile"><span class="ic">👤</span><span>Профиль</span></button>
-      <button data-tab="stats"><span class="ic">📊</span><span>Статистика</span></button>
+      <button data-tab="stats"><span class="ic">📊</span><span>Стата</span></button>
       <button data-tab="dialogs"><span class="ic">📋</span><span>Отклики</span></button>
+      <button data-tab="actions"><span class="ic">✅</span><span>Дела</span></button>
       <button data-tab="feat"><span class="ic">⚙️</span><span>Функции</span></button>
     </nav>
   </div>

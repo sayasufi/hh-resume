@@ -807,6 +807,7 @@ class Operation(BaseOperation):
                         )
                         assert res == {}
                         self.applications_count += 1
+                        pgconn.bump_activity("apply", 1)
                         # Сохраняем счетчик в базу данных
                         await self.tool.storage.settings.set_value("_applications_count", str(self.applications_count))
                         logger.debug(

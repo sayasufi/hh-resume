@@ -33,6 +33,11 @@ SHELL=/bin/bash
 # Авто-отклик на вакансии с ТЕСТОМ через браузер. Каждые 3ч: 09,12,15,18,21 МСК, до 10 за прогон.
 0 6-18/3 * * * /bin/bash -c 'sleep $((RANDOM \% 90))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/apply_tests.py --apply --limit 10 >> /var/log/cron.log 2>&1
 
+# ГигаРекрутер-автоответчик: читает чат @Giga_recruiter_bot через user-сессию и
+# отвечает на новые вопросы интервью (LLM). Каждые 3 мин в рабочее окно 08–22 МСК
+# (05–19 UTC) + джиттер до 60с. Гейт: feat.giga + привязанная сессия.
+*/3 5-19 * * * /bin/bash -c 'sleep $((RANDOM \% 60))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/giga_recruiter.py >> /var/log/cron.log 2>&1
+
 # Обновление токена каждую минуту (для всех юзеров)
 */1 * * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool refresh-token >> /dev/null 2>&1
 

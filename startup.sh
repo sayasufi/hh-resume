@@ -1,6 +1,10 @@
 #!/bin/bash
 echo "[$(date)] Running startup tasks..."
 
+# Перезагружаем crontab из примонтированного /app/crontab (том .:/app), чтобы
+# правки расписания подхватывались без пересборки образа.
+crontab -u docker /app/crontab 2>/dev/null || true
+
 # Создаём общие таблицы (схема public, разделение по колонке account) — идемпотентно.
 /usr/local/bin/python -c "from hh_applicant_tool.storage import pgconn; pgconn.connect(ensure=True).close()"
 

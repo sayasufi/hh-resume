@@ -36,16 +36,20 @@
       <!-- СТАТИСТИКА -->
       <section id="tab-stats" class="tab">
         <div class="seg period">
-          <button data-p="30">30 дней</button>
-          <button class="active" data-p="90">90 дней</button>
-          <button data-p="0">Всё время</button>
+          <button data-p="today">Сегодня</button>
+          <button data-p="yesterday">Вчера</button>
+          <button class="active" data-p="week">Неделя</button>
+          <button data-p="month">Месяц</button>
+          <button data-p="all">Всё</button>
+        </div>
+        <div class="prange">
+          <input type="date" id="d-from"><span>—</span><input type="date" id="d-to">
         </div>
         <div class="grid">
           <div class="stat"><div class="num" id="s-apps">—</div><div class="lbl">Откликов</div></div>
-          <div class="stat"><div class="num" id="s-today">—</div><div class="lbl">Сегодня</div></div>
-          <div class="stat"><div class="num" id="s-views">—</div><div class="lbl">Просмотров резюме</div></div>
           <div class="stat"><div class="num" id="s-resp">—</div><div class="lbl">Ответов</div></div>
           <div class="stat"><div class="num" id="s-inv">—</div><div class="lbl">Собеседований</div></div>
+          <div class="stat"><div class="num" id="s-today">—</div><div class="lbl">Откликов сегодня</div></div>
         </div>
         <div class="gtitle">Воронка</div>
         <div id="funnel" class="list pad-list"></div>
@@ -64,9 +68,11 @@
       <!-- ОТКЛИКИ -->
       <section id="tab-dialogs" class="tab">
         <div class="seg period">
-          <button data-p="30">30 дней</button>
-          <button class="active" data-p="90">90 дней</button>
-          <button data-p="0">Всё время</button>
+          <button data-p="today">Сегодня</button>
+          <button data-p="yesterday">Вчера</button>
+          <button class="active" data-p="week">Неделя</button>
+          <button data-p="month">Месяц</button>
+          <button data-p="all">Всё</button>
         </div>
         <div class="chips" id="dlg-filter">
           <button class="chip active" data-f="all">Все</button>

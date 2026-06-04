@@ -309,11 +309,17 @@ async def _sync_dialogs(account: str) -> int:
     return len(rows)
 
 
-def _period_sql(days: int):
-    """-> (доп. условие SQL, параметры) для фильтра по периоду. days<=0 = всё время."""
-    if days and days > 0:
-        return " AND updated >= (current_date - %s)::text", [days]
-    return "", []
+def _range_sql(col: str, dfrom, dto):
+    """-> (доп. условие SQL, параметры) для фильтра по диапазону дат [dfrom..dto].
+    col — имя колонки даты ('updated' text YYYY-MM-DD или 'day' date). Пусто = без границы."""
+    cond, params = "", []
+    if dfrom:
+        cond += f" AND {col} >= %s"
+        params.append(dfrom)
+    if dto:
+        cond += f" AND {col} <= %s"
+        params.append(dto)
+    return cond, params
 
 
 def _dlg_meta(account: str):
@@ -329,8 +335,8 @@ def _dlg_meta(account: str):
         conn.close()
 
 
-def _dlg_read(account: str, limit: int, days: int = 0):
-    cond, params = _period_sql(days)
+def _dlg_read(account: str, limit: int, dfrom=None, dto=None):
+    cond, params = _range_sql("updated", dfrom, dto)
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
@@ -357,8 +363,8 @@ def _dlg_read(account: str, limit: int, days: int = 0):
         conn.close()
 
 
-def _state_counts(account: str, days: int = 0) -> dict:
-    cond, params = _period_sql(days)
+def _state_counts(account: str, dfrom=None, dto=None) -> dict:
+    cond, params = _range_sql("updated", dfrom, dto)
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
@@ -428,11 +434,9 @@ def _trends(account: str) -> list:
         conn.close()
 
 
-def _activity(account: str, days: int = 30) -> dict:
-    """Сумма count по kind за период из activity_daily (days<=0 = всё время)."""
-    cond, params = "", []
-    if days and days > 0:
-        cond, params = " AND day >= current_date - %s", [days]
+def _activity(account: str, dfrom=None, dto=None) -> dict:
+    """Сумма count по kind из activity_daily за диапазон [dfrom..dto]."""
+    cond, params = _range_sql("day", dfrom, dto)
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
@@ -485,8 +489,8 @@ def _funnel(apps: int, invitations: int, interviews: int) -> list:
     return out
 
 
-async def _build_me(account: str, days: int = 90) -> dict:
-    key = (account, days)
+async def _build_me(account: str, dfrom=None, dto=None) -> dict:
+    key = (account, dfrom, dto)
     cached = _me_cache.get(key)
     if cached and time.time() - cached[0] < 60:
         return cached[1]
@@ -494,7 +498,7 @@ async def _build_me(account: str, days: int = 90) -> dict:
     if hh["hh_id"]:  # токен жив -> фиксируем дневной срез для трендов
         await asyncio.to_thread(_snapshot, account, hh["applications_total"],
                                 hh["resume_views"], hh["invitations"])
-    counts = await asyncio.to_thread(_state_counts, account, days)
+    counts = await asyncio.to_thread(_state_counts, account, dfrom, dto)
     cfg = await asyncio.to_thread(pgconn.app_config, account)
     name = (await asyncio.to_thread(
         pgconn.get_setting, "user.full_name", None, account)) or hh["full_name"] or account
@@ -536,7 +540,7 @@ async def _build_me(account: str, days: int = 90) -> dict:
 # ── API ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/me")
-async def api_me(days: int = 90, account: str = None,
+async def api_me(dfrom: str = None, dto: str = None, account: str = None,
                  x_init_data: str = Header(None, alias="X-Init-Data")):
     user = await asyncio.to_thread(_validate_init_data, x_init_data)
     admin = _is_admin(user)
@@ -544,7 +548,7 @@ async def api_me(days: int = 90, account: str = None,
         _account_for_user, user.get("id"))
     if not acc:
         raise HTTPException(404, "not_linked")
-    data = await _build_me(acc, days)
+    data = await _build_me(acc, dfrom, dto)
     data["is_admin"] = admin
     data["account"] = acc
     if admin:
@@ -606,7 +610,8 @@ async def api_settings_set(body: dict, account: str = None,
 
 
 @app.get("/api/dialogs")
-async def api_dialogs(days: int = 90, limit: int = 500, account: str = None,
+async def api_dialogs(dfrom: str = None, dto: str = None, limit: int = 500,
+                      account: str = None,
                       x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data, account)
     total, age = await asyncio.to_thread(_dlg_meta, account)
@@ -614,7 +619,7 @@ async def api_dialogs(days: int = 90, limit: int = 500, account: str = None,
         await _sync_dialogs(account)
     elif age > 900:                    # старше 15 мин -> освежаем в фоне
         asyncio.create_task(_sync_dialogs(account))
-    items, cnt = await asyncio.to_thread(_dlg_read, account, limit, days)
+    items, cnt = await asyncio.to_thread(_dlg_read, account, limit, dfrom, dto)
     return {"items": items, "total": cnt}
 
 
@@ -626,10 +631,10 @@ async def api_dialog(id: str, account: str = None,
 
 
 @app.get("/api/activity")
-async def api_activity(days: int = 30, account: str = None,
+async def api_activity(dfrom: str = None, dto: str = None, account: str = None,
                        x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data, account)
-    return await asyncio.to_thread(_activity, account, days)
+    return await asyncio.to_thread(_activity, account, dfrom, dto)
 
 
 @app.get("/api/actions")

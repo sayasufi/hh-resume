@@ -44,7 +44,6 @@ function renderMe(d) {
   $("#p-status").textContent = p.status || "—";
   $("#s-apps").textContent = s.applications_total;
   $("#s-today").textContent = s.applications_today;
-  $("#s-views").textContent = s.resume_views;
   $("#s-resp").textContent = s.responses;
   $("#s-inv").textContent = s.invitations;
   const max = Math.max(1, ...s.funnel.map((f) => f.value));
@@ -191,7 +190,7 @@ function renderActivity(a) {
   $("#a-browse").textContent = a.browse || 0;
   $("#a-bump").textContent = a.bump || 0;
 }
-const loadActivity = (d) => api("/api/activity?days=" + d).then(renderActivity).catch(() => {});
+const loadActivity = () => api("/api/activity" + qp()).then(renderActivity).catch(() => {});
 
 // дела (что нужно сделать самому)
 function renderActions(items) {
@@ -219,17 +218,43 @@ function renderActions(items) {
 }
 const loadActions = () => api("/api/actions").then((r) => renderActions(r.items || [])).catch(() => {});
 
-// период (30/90/Всё) — общий для статистики, откликов и активности
-let PERIOD = 90;
-const loadStats = (d) => api("/api/me?days=" + d).then(renderMe).catch(() => {});
-const loadDialogs = (d) => api("/api/dialogs?days=" + d)
+// период — диапазон дат {dfrom, dto}; пресеты + произвольные даты
+const _iso = (off) => { const d = new Date(); d.setDate(d.getDate() - off); return d.toISOString().slice(0, 10); };
+function _preset(key) {
+  const t = _iso(0);
+  if (key === "today") return { dfrom: t, dto: t };
+  if (key === "yesterday") { const y = _iso(1); return { dfrom: y, dto: y }; }
+  if (key === "week") return { dfrom: _iso(6), dto: t };
+  if (key === "month") return { dfrom: _iso(29), dto: t };
+  return { dfrom: "", dto: "" };  // all
+}
+let PERIOD = _preset("week");
+const qp = () => {
+  const s = [];
+  if (PERIOD.dfrom) s.push("dfrom=" + PERIOD.dfrom);
+  if (PERIOD.dto) s.push("dto=" + PERIOD.dto);
+  return s.length ? "?" + s.join("&") : "";
+};
+const loadStats = () => api("/api/me" + qp()).then(renderMe).catch(() => {});
+const loadDialogs = () => api("/api/dialogs" + qp())
   .then((r) => { DIALOGS = r.items || []; renderDialogs(); }).catch(() => {});
+const _reloadPeriod = () => { loadStats(); loadDialogs(); loadActivity(); };
 document.querySelectorAll(".period button").forEach((b) => {
   b.onclick = () => {
-    PERIOD = parseInt(b.dataset.p, 10);
+    const key = b.dataset.p;
+    PERIOD = _preset(key);
     document.querySelectorAll(".period button").forEach(
-      (x) => x.classList.toggle("active", x.dataset.p === b.dataset.p));
-    loadStats(PERIOD); loadDialogs(PERIOD); loadActivity(PERIOD); hap("sel");
+      (x) => x.classList.toggle("active", x.dataset.p === key));
+    if ($("#d-from")) { $("#d-from").value = PERIOD.dfrom; $("#d-to").value = PERIOD.dto; }
+    _reloadPeriod(); hap("sel");
+  };
+});
+["#d-from", "#d-to"].forEach((sel) => {
+  const el = $(sel);
+  if (el) el.onchange = () => {
+    PERIOD = { dfrom: $("#d-from").value, dto: $("#d-to").value };
+    document.querySelectorAll(".period button").forEach((x) => x.classList.remove("active"));
+    _reloadPeriod(); hap("sel");
   };
 });
 
@@ -256,13 +281,14 @@ $("#admin-pick").onclick = () => {
 
 async function boot() {
   try {
-    const [me, st] = await Promise.all([api("/api/me?days=" + PERIOD), api("/api/settings")]);
+    if ($("#d-from")) { $("#d-from").value = PERIOD.dfrom; $("#d-to").value = PERIOD.dto; }
+    const [me, st] = await Promise.all([api("/api/me" + qp()), api("/api/settings")]);
     renderMe(me); setupAdmin(me);
     bindToggles(st.features); bindConfig(st.config, st.resumes || []);
     $("#giga-hint").textContent = st.tg_connected
       ? "✅ Telegram подключён — ГигаРекрутер сможет отвечать."
       : "⚠️ ГигаРекрутер требует подключённого Telegram — в боте /connect. (Сам авто-ответчик ещё в разработке.)";
-    loadDialogs(PERIOD); loadActivity(PERIOD); loadActions();
+    loadDialogs(); loadActivity(); loadActions();
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {
     err(String(e.message) === "not_linked"

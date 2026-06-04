@@ -108,7 +108,11 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
   padding: 5px 14px; border-radius: 7px; cursor: pointer; }
 .seg button.active { background: var(--accent); color: var(--accent-t); font-weight: 600; }
 .seg.period { margin: 12px 14px 4px; }
-.seg.period button { flex: 1; padding: 8px 0; font-size: 14px; }
+.seg.period button { flex: 1; padding: 7px 2px; font-size: 13px; }
+.prange { display: flex; align-items: center; gap: 8px; margin: 8px 14px 2px; }
+.prange input[type=date] { flex: 1; background: var(--sec); color: var(--text); border: none;
+  border-radius: 9px; padding: 8px 10px; font: inherit; font-size: 13px; outline: none; }
+.prange span { color: var(--hint); }
 
 .dlg { align-items: stretch; }
 .dlg-main { flex: 1; min-width: 0; }

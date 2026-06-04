@@ -35,11 +35,6 @@
 
       <!-- СТАТИСТИКА -->
       <section id="tab-stats" class="tab">
-        <div class="gtitle">Воронка — всё время</div>
-        <div class="ghint" style="padding:0 18px 8px">Что получилось из твоих откликов (накопительно).</div>
-        <div id="funnel" class="list pad-list"></div>
-
-        <div class="gtitle">Активность бота за период</div>
         <div class="seg period">
           <button data-p="today">Сегодня</button>
           <button data-p="yesterday">Вчера</button>
@@ -50,6 +45,14 @@
         <div class="prange">
           <input type="date" id="d-from"><span>—</span><input type="date" id="d-to">
         </div>
+
+        <div class="gtitle">Воронка за период</div>
+        <div id="funnel" class="list pad-list"></div>
+
+        <div class="gtitle">Детально по статусам</div>
+        <div id="breakdown" class="list"></div>
+
+        <div class="gtitle">Активность бота за период</div>
         <div class="grid">
           <div class="stat"><div class="num" id="a-apply">—</div><div class="lbl">Откликов отправлено</div></div>
           <div class="stat"><div class="num" id="a-tests">—</div><div class="lbl">Тестовых откликов</div></div>

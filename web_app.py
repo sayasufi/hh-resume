@@ -376,18 +376,34 @@ def _state_counts(account: str, dfrom=None, dto=None) -> dict:
 
 
 def _funnel_from_states(c: dict) -> list:
-    """Воронка из реальных статусов hh: Отклики→Ответили→Приглашения→Собеседования."""
-    # invitation (легаси, до 2025) = interview = «Собеседование»; hired = оффер
-    sob = c.get("interview", 0) + c.get("invitation", 0)
-    resp, hir = c.get("response", 0), c.get("hired", 0)
-    stages = [("Отклики", sum(c.values())), ("Ответили", resp + sob + hir),
-              ("Собеседования", sob + hir), ("Оффер", hir)]
+    """Воронка: Отклики → Ответили → Собеседования (invitation легаси = interview,
+    hired считаем в собеседованиях). Без отдельного этапа «Оффер»."""
+    sob = c.get("interview", 0) + c.get("invitation", 0) + c.get("hired", 0)
+    resp = c.get("response", 0)
+    stages = [("Отклики", sum(c.values())), ("Ответили", resp + sob),
+              ("Собеседования", sob)]
     out, prev = [], None
     for label, val in stages:
         out.append({"label": label, "value": val,
                     "conv": round(val / prev * 100) if prev else None})
         prev = val
     return out
+
+
+def _breakdown(c: dict) -> list:
+    """Детальная разбивка по статусам (с % от всех откликов)."""
+    total = sum(c.values()) or 1
+    sob = c.get("interview", 0) + c.get("invitation", 0) + c.get("hired", 0)
+    rows = [
+        ("🤝", "Собеседования", sob),
+        ("💬", "Ответ / на рассмотрении", c.get("response", 0)),
+        ("🔴", "Отказы", c.get("discard", 0) + c.get("discard_by_applicant", 0)),
+    ]
+    other = c.get("hidden", 0)
+    if other:
+        rows.append(("⚪️", "Прочее", other))
+    return [{"emoji": e, "label": lbl, "value": v, "pct": round(v / total * 100)}
+            for e, lbl, v in rows]
 
 
 async def _dialog_messages(account: str, nid: str) -> dict:
@@ -489,8 +505,8 @@ def _funnel(apps: int, invitations: int, interviews: int) -> list:
     return out
 
 
-async def _build_me(account: str) -> dict:
-    key = account
+async def _build_me(account: str, dfrom=None, dto=None) -> dict:
+    key = (account, dfrom, dto)
     cached = _me_cache.get(key)
     if cached and time.time() - cached[0] < 60:
         return cached[1]
@@ -498,7 +514,7 @@ async def _build_me(account: str) -> dict:
     if hh["hh_id"]:  # токен жив -> фиксируем дневной срез для трендов
         await asyncio.to_thread(_snapshot, account, hh["applications_total"],
                                 hh["resume_views"], hh["invitations"])
-    counts = await asyncio.to_thread(_state_counts, account)  # воронка — всё время
+    counts = await asyncio.to_thread(_state_counts, account, dfrom, dto)  # за период
     cfg = await asyncio.to_thread(pgconn.app_config, account)
     name = (await asyncio.to_thread(
         pgconn.get_setting, "user.full_name", None, account)) or hh["full_name"] or account
@@ -509,28 +525,17 @@ async def _build_me(account: str) -> dict:
     status = ("работает" if on == len(flags)
               else "всё на паузе" if on == 0
               else "часть функций на паузе")
-    if sum(counts.values()):  # есть кэш откликов -> точные цифры по статусам за период
-        apps_total = sum(counts.values())
-        responses = counts.get("response", 0)
-        invitations = counts.get("invitation", 0) + counts.get("interview", 0)
-        funnel = _funnel_from_states(counts)
-    else:                     # кэш пуст -> фолбэк на hh-счётчики (всё время)
-        apps_total, responses = hh["applications_total"], hh["responses"]
-        invitations = hh["invitations"]
-        funnel = _funnel(apps_total, invitations, db["interviews"])
+    has_cache = bool(sum(counts.values()))
+    funnel = _funnel_from_states(counts) if has_cache else _funnel(
+        hh["applications_total"], hh["invitations"], db["interviews"])
     payload = {
         "profile": {
             "name": name, "hh_id": hh["hh_id"], "resume": hh["resume_title"],
-            "salary": salary,
-            "status": status,
+            "salary": salary, "status": status,
         },
         "stats": {
-            "applications_total": apps_total,
-            "applications_today": db["applications_today"],
-            "resume_views": hh["resume_views"],
-            "responses": responses,
-            "invitations": invitations,
             "funnel": funnel,
+            "breakdown": _breakdown(counts) if has_cache else [],
         },
     }
     _me_cache[key] = (time.time(), payload)
@@ -540,7 +545,7 @@ async def _build_me(account: str) -> dict:
 # ── API ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/me")
-async def api_me(account: str = None,
+async def api_me(dfrom: str = None, dto: str = None, account: str = None,
                  x_init_data: str = Header(None, alias="X-Init-Data")):
     user = await asyncio.to_thread(_validate_init_data, x_init_data)
     admin = _is_admin(user)
@@ -548,7 +553,7 @@ async def api_me(account: str = None,
         _account_for_user, user.get("id"))
     if not acc:
         raise HTTPException(404, "not_linked")
-    data = await _build_me(acc)
+    data = await _build_me(acc, dfrom, dto)
     data["is_admin"] = admin
     data["account"] = acc
     if admin:

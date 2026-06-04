@@ -47,6 +47,11 @@ function renderMe(d) {
     `<div class="fbar"><div class="fill" style="width:${Math.round(f.value / max * 100)}%"></div>`
     + `<div class="ftext"><span>${esc(f.label)}</span><span class="fval"><b>${f.value}</b>`
     + `${f.conv != null ? `<em>${f.conv}%</em>` : ""}</span></div></div>`).join("");
+  const bd = s.breakdown || [];
+  $("#breakdown").innerHTML = bd.length ? bd.map((b) =>
+    `<div class="cell"><span class="k">${b.emoji} ${esc(b.label)}</span>`
+    + `<span class="v"><b>${b.value}</b><em style="color:var(--hint);font-weight:400;margin-left:6px">${b.pct}%</em></span></div>`).join("")
+    : '<div class="empty">Нет данных за период</div>';
 }
 
 function renderTrend(days) {
@@ -231,11 +236,11 @@ const qp = () => {
   if (PERIOD.dto) s.push("dto=" + PERIOD.dto);
   return s.length ? "?" + s.join("&") : "";
 };
-const loadStats = () => api("/api/me").then(renderMe).catch(() => {});  // воронка — всё время
+const loadStats = () => api("/api/me" + qp()).then(renderMe).catch(() => {});
 const loadDialogs = () => api("/api/dialogs" + qp())
   .then((r) => { DIALOGS = r.items || []; renderDialogs(); }).catch(() => {});
-// период влияет только на активность бота и список откликов; воронка — всё время
-const _reloadPeriod = () => { loadActivity(); loadDialogs(); };
+// период влияет на воронку, детали, активность бота и список откликов
+const _reloadPeriod = () => { loadStats(); loadActivity(); loadDialogs(); };
 document.querySelectorAll(".period button").forEach((b) => {
   b.onclick = () => {
     const key = b.dataset.p;
@@ -279,7 +284,7 @@ $("#admin-pick").onclick = () => {
 async function boot() {
   try {
     if ($("#d-from")) { $("#d-from").value = PERIOD.dfrom; $("#d-to").value = PERIOD.dto; }
-    const [me, st] = await Promise.all([api("/api/me"), api("/api/settings")]);
+    const [me, st] = await Promise.all([api("/api/me" + qp()), api("/api/settings")]);
     renderMe(me); setupAdmin(me);
     bindToggles(st.features); bindConfig(st.config, st.resumes || []);
     $("#giga-hint").textContent = st.tg_connected

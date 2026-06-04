@@ -8,6 +8,13 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const err = (m) => { const e = $("#err"); e.textContent = m; e.classList.remove("hidden"); setTimeout(() => e.classList.add("hidden"), 4000); };
 const hap = (k) => { try { if (!tg || !tg.HapticFeedback) return; k === "sel" ? tg.HapticFeedback.selectionChanged() : tg.HapticFeedback.impactOccurred("light"); } catch (e) {} };
+// состояние ошибки загрузки (отличаем «пусто» от «не загрузилось») + повтор по тапу
+function failBox(boxSel, countSel, retry) {
+  const box = $(boxSel); if (!box) return;
+  if (countSel && $(countSel)) $(countSel).textContent = "!";
+  box.innerHTML = '<div class="empty err-state">Не удалось загрузить · нажмите, чтобы повторить</div>';
+  const e = box.querySelector(".err-state"); if (e) e.onclick = retry;
+}
 
 let VIEW_ACCOUNT = null;  // админ: смотрим выбранный аккаунт (account-override)
 async function api(path, opts = {}) {
@@ -40,7 +47,8 @@ function renderMe(d) {
   $("#hname").textContent = p.name || "—";
   const stt = p.status || "";
   const st = $("#hstatus"); st.textContent = stt;
-  st.className = "pill " + (stt.includes("работает") ? "good" : stt.indexOf("всё") === 0 ? "bad" : "warn");
+  const sk = p.status_kind || (stt.includes("работает") ? "ok" : stt.indexOf("всё") === 0 ? "off" : "paused");
+  st.className = "pill " + (sk === "ok" ? "good" : sk === "off" ? "bad" : "warn");
   $("#p-name").textContent = p.name || "—";
   $("#p-id").textContent = p.hh_id || "—";
   $("#p-resume").textContent = p.resume || "—";
@@ -51,6 +59,11 @@ function renderMe(d) {
     `<div class="fbar"><div class="fill" style="width:${Math.round(f.value / max * 100)}%"></div>`
     + `<div class="ftext"><span>${esc(f.label)}</span><span class="fval"><b>${f.value}</b>`
     + `${f.conv != null ? `<em>${f.conv}%</em>` : ""}</span></div></div>`).join("");
+  const kp = s.kpis || {};
+  $("#kpis").innerHTML = kp.total
+    ? [["Ответили", kp.response_rate], ["Собеседования", kp.interview_rate], ["Офферы", kp.offer_rate]]
+        .map(([l, v]) => `<div class="kpi"><div class="kv">${v}%</div><div class="kl">${esc(l)}</div></div>`).join("")
+    : "";
   const bd = s.breakdown || [];
   $("#breakdown").innerHTML = bd.length ? bd.map((b) =>
     `<div class="cell"><span class="k">${b.emoji} ${esc(b.label)}</span>`
@@ -108,9 +121,13 @@ $("#dlg-sort").querySelectorAll("button").forEach((b) => {
   };
 });
 
-function openSheet(id) { $(id).classList.remove("hidden"); }
-function closeSheet(id) { $(id).classList.add("hidden"); }
+const _anySheet = () => document.querySelector(".sheet-wrap:not(.hidden)");
+function openSheet(id) { $(id).classList.remove("hidden"); try { if (tg && tg.BackButton) tg.BackButton.show(); } catch (e) {} }
+function closeSheet(id) { $(id).classList.add("hidden"); try { if (tg && tg.BackButton && !_anySheet()) tg.BackButton.hide(); } catch (e) {} }
+const closeAllSheets = () => document.querySelectorAll(".sheet-wrap:not(.hidden)").forEach((w) => closeSheet("#" + w.id));
 document.querySelectorAll(".sheet-wrap").forEach((w) => { w.onclick = (e) => { if (e.target === w) closeSheet("#" + w.id); }; });
+document.querySelectorAll("[data-close]").forEach((el) => { el.onclick = (e) => { e.stopPropagation(); closeSheet("#" + el.closest(".sheet-wrap").id); }; });
+try { if (tg && tg.BackButton) tg.BackButton.onClick(closeAllSheets); } catch (e) {}
 
 async function openDialog(id) {
   const d = DIALOGS.find((x) => String(x.id) === String(id));
@@ -118,7 +135,10 @@ async function openDialog(id) {
   $("#m-title").textContent = d.title;
   $("#m-emp").textContent = d.employer + " · " + d.state;
   const hh = $("#m-hh");
-  if (d.url) { hh.href = d.url; hh.classList.remove("hidden"); } else hh.classList.add("hidden");
+  if (d.url) {
+    hh.classList.remove("hidden");
+    hh.onclick = (e) => { e.preventDefault(); hap("sel"); if (tg && tg.openLink) tg.openLink(d.url); else window.open(d.url, "_blank"); };
+  } else hh.classList.add("hidden");
   $("#m-body").innerHTML = '<div class="empty">Загрузка…</div>';
   openSheet("#modal");
   try {
@@ -215,6 +235,22 @@ function renderActivity(a) {
 }
 const loadActivity = () => api("/api/activity" + qp()).then(renderActivity).catch(() => {});
 
+// прогресс авто-ГигаРекрутера (giga_queue) — раньше был полностью невидим
+function renderGiga(g) {
+  const box = $("#giga-card");
+  if (!g || (!g.pending && !g.done && !g.active)) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  const last = g.last && g.last.vacancy
+    ? `<div class="giga-last">Последнее: ${esc(g.last.vacancy)} · ${esc(g.last.at)}</div>` : "";
+  box.innerHTML = '<div class="giga-h">🤖 ГигаРекрутер сам проходит интервью</div>'
+    + '<div class="giga-row">'
+    + `<span class="gnum"><b>${g.done | 0}</b> пройдено</span>`
+    + `<span class="gnum"><b>${g.pending | 0}</b> в очереди</span>`
+    + (g.active ? `<span class="gnum"><b>${g.active | 0}</b> сейчас</span>` : "")
+    + '</div>' + last;
+}
+const loadGiga = () => api("/api/giga").then(renderGiga).catch(() => {});
+
 // дела (что нужно сделать самому)
 function renderActions(items) {
   const box = $("#actions");
@@ -239,7 +275,8 @@ function renderActions(items) {
     };
   });
 }
-const loadActions = () => api("/api/actions").then((r) => renderActions(r.items || [])).catch(() => {});
+const loadActions = () => api("/api/actions").then((r) => renderActions(r.items || []))
+  .catch(() => failBox("#actions", "#act-count", loadActions));
 
 // период — диапазон дат {dfrom, dto}; пресеты + произвольные даты
 const _iso = (off) => { const d = new Date(); d.setDate(d.getDate() - off); return d.toISOString().slice(0, 10); };
@@ -260,7 +297,8 @@ const qp = () => {
 };
 const loadStats = () => api("/api/me" + qp()).then(renderMe).catch(() => {});
 const loadDialogs = () => api("/api/dialogs" + qp())
-  .then((r) => { DIALOGS = r.items || []; renderDialogs(); }).catch(() => {});
+  .then((r) => { DIALOGS = r.items || []; renderDialogs(); })
+  .catch(() => failBox("#dialogs", "#dlg-count", loadDialogs));
 // период влияет на воронку, детали, активность бота и список откликов
 const _reloadPeriod = () => { loadStats(); loadActivity(); loadDialogs(); };
 document.querySelectorAll(".period button").forEach((b) => {
@@ -312,7 +350,7 @@ async function boot() {
     $("#giga-hint").textContent = st.tg_connected
       ? "✅ Telegram подключён — ГигаРекрутер сам проходит интервью за вас."
       : "⚠️ Чтобы включить ГигаРекрутера, подключите Telegram: команда /connect в боте.";
-    loadDialogs(); loadActivity(); loadActions();
+    loadDialogs(); loadActivity(); loadActions(); loadGiga();
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {
     err(String(e.message) === "not_linked"

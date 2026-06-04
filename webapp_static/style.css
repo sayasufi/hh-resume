@@ -183,3 +183,30 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 .abtn.open { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .abtn.done { background: color-mix(in srgb, var(--good) 20%, transparent); color: var(--good); min-width: 36px; }
 .abtn:active { transform: scale(.94); }
+
+/* KPI-конверсии (отклик→ответ/собес/оффер) */
+.kpis:empty { display: none; }
+.kpis { display: flex; gap: 10px; margin: 8px 14px 0; }
+.kpi { flex: 1; background: var(--sec); border-radius: 12px; padding: 12px 8px; text-align: center; }
+.kpi .kv { font-size: 22px; font-weight: 800; letter-spacing: -.5px; color: var(--accent); }
+.kpi .kl { color: var(--hint); font-size: 12px; margin-top: 2px; }
+
+/* карточка прогресса ГигаРекрутера */
+.giga-card { background: var(--sec); border-radius: 14px; margin: 14px 14px 0; padding: 14px 16px; }
+.giga-h { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.giga-row { display: flex; gap: 16px; flex-wrap: wrap; }
+.gnum { color: var(--hint); font-size: 14px; }
+.gnum b { color: var(--text); font-size: 18px; font-weight: 800; margin-right: 3px; }
+.giga-last { color: var(--hint); font-size: 12px; margin-top: 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* кнопка закрытия шторки + кликабельный grip */
+.sheet { position: relative; }
+.sheet-x { position: absolute; top: 10px; right: 12px; z-index: 2; width: 30px; height: 30px;
+  border: none; border-radius: 50%; background: color-mix(in srgb, var(--hint) 22%, transparent);
+  color: var(--text); font-size: 15px; line-height: 1; cursor: pointer; opacity: .75; }
+.sheet-x:active { transform: scale(.9); }
+.sheet-grip[data-close] { cursor: pointer; }
+
+/* состояние ошибки загрузки (тап = повтор) */
+.err-state { cursor: pointer; color: var(--bad); }

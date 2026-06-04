@@ -24,6 +24,8 @@ from hh_applicant_tool.storage import pgconn
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webapp_static")
 FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga")  # тумблеры
+MAX_PER_DAY_CAP = 200   # серверный суточный потолок откликов hh (защита от бана)
+TESTS_PER_DAY_CAP = 30  # практический потолок браузерного тест-флоу
 _INITDATA_MAX_AGE = 86400  # сутки
 
 app = FastAPI(title="hh Mini App")
@@ -212,14 +214,18 @@ async def _hh_stats(account: str) -> dict:
 
 
 def _db_stats(account: str) -> dict:
-    """Цифры из БД: отклики сегодня + интервью/хендофф (notifications HIGH)."""
+    """Цифры из БД: отклики сегодня + приглашения на интервью.
+    Интервью считаем СТРОГО по category='interview' (ставит reply-employers при
+    реальном приглашении), а НЕ по всем HIGH-уведомлениям — туда же падают алерты
+    мониторинга/сбои/contact-дела, которые раздували «Интервью»."""
     today = int(pgconn.get_setting("_applications_count", 0, account=account) or 0)
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT count(*) FROM notifications WHERE account=%s AND priority=%s",
-                (account, pgconn.PRIORITY_HIGH),
+                "SELECT count(*) FROM notifications "
+                "WHERE account=%s AND category='interview'",
+                (account,),
             )
             interviews = cur.fetchone()[0]
     finally:
@@ -407,6 +413,39 @@ def _breakdown(c: dict) -> list:
             for e, lbl, v in rows]
 
 
+def _kpis(c: dict) -> dict:
+    """Ключевые конверсии воронки в абсолютных % (данные уже в counts)."""
+    total = sum(c.values())
+    if not total:
+        return {}
+    sob = c.get("interview", 0) + c.get("invitation", 0) + c.get("hired", 0)
+    answered = c.get("response", 0) + sob  # ответили = ответ + дошли дальше
+    return {
+        "total": total,
+        "response_rate": round(answered / total * 100),  # отклик → ответ
+        "interview_rate": round(sob / total * 100),       # отклик → собеседование
+        "offer_rate": round(c.get("hired", 0) / total * 100),  # отклик → оффер
+    }
+
+
+def _giga_summary(account: str) -> dict:
+    """Сводка авто-ГигаРекрутера из giga_queue (прогресс интервью)."""
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status, count(*) FROM giga_queue WHERE account=%s "
+                        "GROUP BY status", (account,))
+            by = {k: int(v) for k, v in cur.fetchall()}
+            cur.execute("SELECT vacancy, updated_at FROM giga_queue WHERE account=%s "
+                        "AND status='done' ORDER BY updated_at DESC LIMIT 1", (account,))
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    last = {"vacancy": row[0] or "", "at": str(row[1])[:16]} if row else None
+    return {"pending": by.get("pending", 0), "done": by.get("done", 0),
+            "active": by.get("active", 0) + by.get("running", 0), "last": last}
+
+
 async def _dialog_messages(account: str, nid: str) -> dict:
     data = await _hh_call(account, f"/negotiations/{nid}/messages")
     msgs = []
@@ -507,9 +546,10 @@ def _funnel(apps: int, invitations: int, interviews: int) -> list:
 
 
 def _next_apply(apply_on: bool, pause_until: str, today: int, limit: int):
-    """РЕАЛЬНЫЙ следующий запуск обычных откликов. Cron ежечасно 08–22 МСК, НО
-    apply-similar встаёт на паузу до завтра при дневном лимите (`_applications_pause_until`)
-    или серверном LimitExceeded от hh."""
+    """Следующий запуск обычных откликов. apply-similar по расписанию ежечасно в
+    окне 08–22 МСК (Prefect, cron `0 5-19 * * *` UTC, +джиттер ~5 мин), НО встаёт
+    на паузу до завтра при дневном лимите (`_applications_pause_until`) или
+    серверном LimitExceeded от hh. Окно 5–19 UTC — единственный источник часов здесь."""
     if not apply_on:
         return None
     now = datetime.utcnow()
@@ -552,8 +592,9 @@ async def _build_me(account: str, dfrom=None, dto=None) -> dict:
     flags = [await asyncio.to_thread(pgconn.feature_enabled, f, account)
              for f in FEATURES]
     on = sum(1 for f in flags if f)
-    status = ("работает" if on == len(flags)
-              else "всё на паузе" if on == 0
+    status_kind = "ok" if on == len(flags) else "off" if on == 0 else "paused"
+    status = ("работает" if status_kind == "ok"
+              else "всё на паузе" if status_kind == "off"
               else "часть функций на паузе")
     has_cache = bool(sum(counts.values()))
     funnel = _funnel_from_states(counts) if has_cache else _funnel(
@@ -561,11 +602,12 @@ async def _build_me(account: str, dfrom=None, dto=None) -> dict:
     payload = {
         "profile": {
             "name": name, "hh_id": hh["hh_id"], "resume": hh["resume_title"],
-            "salary": salary, "status": status,
+            "salary": salary, "status": status, "status_kind": status_kind,
         },
         "stats": {
             "funnel": funnel,
             "breakdown": _breakdown(counts) if has_cache else [],
+            "kpis": _kpis(counts) if has_cache else {},
         },
         "next_apply": _next_apply(
             flags[0],
@@ -615,8 +657,8 @@ async def api_settings(account: str = None,
             pgconn.get_setting, "apply.resume_id", "", account),
         "civil_law_only": bool(await asyncio.to_thread(
             pgconn.get_setting, "apply.civil_law_only", False, account)),
-        "max_per_day_cap": 200,   # серверный суточный потолок hh
-        "tests_per_day_cap": 30,  # практический потолок браузерного флоу
+        "max_per_day_cap": MAX_PER_DAY_CAP,   # серверный суточный потолок hh
+        "tests_per_day_cap": TESTS_PER_DAY_CAP,  # практический потолок тест-флоу
     }
     return {"features": features, "config": config,
             "resumes": await _resume_list(account),
@@ -641,7 +683,9 @@ async def _set_config(account: str, key: str, value) -> None:
         prefs["salary"] = str(value).strip()
         await asyncio.to_thread(pgconn.set_app_config, "preferences", prefs, account)
     elif key in ("apply.max_per_day", "apply.tests_per_day"):
-        await asyncio.to_thread(pgconn.set_setting, key, max(0, int(value)), account)
+        cap = MAX_PER_DAY_CAP if key == "apply.max_per_day" else TESTS_PER_DAY_CAP
+        await asyncio.to_thread(
+            pgconn.set_setting, key, min(cap, max(0, int(value))), account)
     elif key == "apply.resume_id":
         await asyncio.to_thread(pgconn.set_setting, "apply.resume_id", str(value), account)
     elif key == "apply.civil_law_only":
@@ -659,7 +703,8 @@ async def api_settings_set(body: dict, account: str = None,
         await _set_config(account, key, body.get("value"))
     except (ValueError, TypeError):
         raise HTTPException(400, "bad value")
-    _me_cache.pop(account, None)
+    for k in [k for k in _me_cache if k[0] == account]:  # ключ — кортеж (acc,dfrom,dto)
+        _me_cache.pop(k, None)
     return {"ok": True, "key": key}
 
 
@@ -715,6 +760,13 @@ async def api_trends(account: str = None,
                      x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data, account)
     return {"days": await asyncio.to_thread(_trends, account)}
+
+
+@app.get("/api/giga")
+async def api_giga(account: str = None,
+                   x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data, account)
+    return await asyncio.to_thread(_giga_summary, account)
 
 
 @app.get("/healthz")

@@ -28,7 +28,7 @@ from hh_applicant_tool.storage import pgconn
 DRY = "--dry" in sys.argv
 
 DEFAULT_BOT = "Giga_recruiter_bot"
-SCAN_NEGOTIATIONS = 50        # сколько последних переписок сканировать на ссылку
+SCAN_CAP = 120                # сколько НЕпросмотренных переписок сканировать за прогон
 RUN_BUDGET_SEC = 240          # бюджет на прогон (несколько интервью за раз)
 MAX_TURNS = 30                # потолок ходов на одно интервью
 REPLY_TIMEOUT = 45            # сколько ждать ответ бота (сек)
@@ -115,34 +115,58 @@ def _set_status(account, token, status, turns=None):
         conn.close()
 
 
-async def _discover(token, account):
-    """Сканировать hh-переписки на giga-ссылки, новые токены -> очередь. -> кол-во новых."""
+async def _discover(token, account, cap=SCAN_CAP):
+    """Глубокий скан hh-переписок на giga-ссылки -> очередь. Дедуп просмотренных
+    через seen_keys('giga_scanned') (помечаем переписку, где работодатель уже
+    ответил или нашли токен — чтобы не пересканировать). -> кол-во новых токенов."""
     api = ApiClient(
         access_token=token["access_token"], refresh_token=token.get("refresh_token", ""),
         access_expires_at=token.get("access_expires_at", 0),
         user_agent=generate_android_useragent(),
         refresh_hook=pgconn.locked_token_refresh,
     )
-    found = 0
+    scanned = pgconn.seen_keys("giga_scanned")
+    found, checked, mark = 0, 0, []
     try:
-        neg = await api.get("/negotiations", per_page=SCAN_NEGOTIATIONS,
-                            order_by="updated_at")
-        for n in neg.get("items", []):
-            if ((n.get("state") or {}).get("id") or "") == "discard":
-                continue
-            nid = n.get("id")
-            vac = (n.get("vacancy") or {}).get("name") or ""
-            try:
-                msgs = await api.get(f"/negotiations/{nid}/messages")
-            except Exception:
-                continue
-            for m in msgs.get("items", []):
-                for tok in GIGA_LINK_RE.findall(m.get("text") or ""):
-                    found += _queue_add(account, tok, vac, nid)
+        page = 0
+        while checked < cap and page < 12:
+            neg = await api.get("/negotiations", per_page=100, page=page,
+                                order_by="updated_at")
+            items = neg.get("items", [])
+            if not items:
+                break
+            for n in items:
+                if checked >= cap:
+                    break
+                if ((n.get("state") or {}).get("id") or "") == "discard":
+                    continue
+                nid = n.get("id")
+                if str(nid) in scanned:
+                    continue
+                checked += 1
+                vac = (n.get("vacancy") or {}).get("name") or ""
+                try:
+                    msgs = (await api.get(f"/negotiations/{nid}/messages")).get("items", [])
+                except Exception:
+                    continue
+                got = False
+                for m in msgs:
+                    for tok in GIGA_LINK_RE.findall(m.get("text") or ""):
+                        found += _queue_add(account, tok, vac, nid)
+                        got = True
+                emp = any((m.get("author") or {}).get("participant_type") == "employer"
+                          for m in msgs)
+                if got or emp:  # переписка «осела» -> не сканируем повторно
+                    mark.append(nid)
+            if page + 1 >= neg.get("pages", 1):
+                break
+            page += 1
     except Exception as e:
         print(f"giga discover: {repr(e)[:140]}")
     finally:
         await api.aclose()
+    if mark:
+        pgconn.add_seen("giga_scanned", mark)
     return found
 
 

@@ -294,8 +294,13 @@ async def start_connect(message: Message, state: FSMContext):
 async def cb_conn_code(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
     await state.set_state(Connect.phone)
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📱 Поделиться своим номером", request_contact=True)]],
+        resize_keyboard=True, one_time_keyboard=True,
+    )
     await cq.message.answer(
-        "Введи номер телефона ЭТОГО Telegram (с кодом страны, напр. +79991234567):"
+        "Нажми кнопку ниже 👇 или введи номер этого Telegram вручную "
+        "(с кодом страны, напр. +79991234567):", reply_markup=kb,
     )
 
 
@@ -307,13 +312,20 @@ async def cb_conn_qr(cq: CallbackQuery, state: FSMContext):
 
 @dp.message(Connect.phone)
 async def conn_got_phone(message: Message, state: FSMContext):
-    raw = (message.text or "").strip()
+    if message.contact:  # поделился номером кнопкой
+        if message.contact.user_id and message.contact.user_id != message.from_user.id:
+            await message.answer("Это чужой контакт. Поделись СВОИМ номером.")
+            return
+        raw = message.contact.phone_number or ""
+    else:
+        raw = (message.text or "").strip()
     digits = re.sub(r"\D", "", raw)
     if not (10 <= len(digits) <= 15):
         await message.answer("❌ Не похоже на номер. Введи в формате +79991234567:")
         return
     phone = "+" + digits
-    await message.answer("⏳ Отправляю запрос в Telegram…")
+    await message.answer("⏳ Отправляю запрос в Telegram…",
+                         reply_markup=ReplyKeyboardRemove())
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     try:
         await client.connect()

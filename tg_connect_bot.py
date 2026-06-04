@@ -360,9 +360,22 @@ async def _send_link_prompt(message: Message):
     )
 
 
+def _already_linked_text(user_id):
+    acc = _account_by("tg_user_id", user_id)
+    if not acc:
+        return None
+    name = pgconn.get_setting("user.full_name", None, account=acc) or acc
+    return (f"✅ Профиль уже привязан к «{name}». Открывай кабинет кнопкой "
+            "«📊 Профиль» (слева от поля ввода) или /start.")
+
+
 @dp.message(Command("link"))
 async def cmd_link(message: Message):
     if message.chat.type != "private":
+        return
+    txt = _already_linked_text(message.from_user.id)
+    if txt:
+        await message.answer(txt)
         return
     await _send_link_prompt(message)
 
@@ -370,6 +383,10 @@ async def cmd_link(message: Message):
 @dp.callback_query(F.data == "link")
 async def cb_link(cq: CallbackQuery):
     await cq.answer()
+    txt = _already_linked_text(cq.from_user.id)
+    if txt:
+        await cq.message.answer(txt)
+        return
     await _send_link_prompt(cq.message)
 
 

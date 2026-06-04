@@ -101,8 +101,8 @@ async def tg_send(token: str, chat_id, text: str, topic_id=None) -> bool:
 
 
 async def main() -> None:
-    if not pgconn.feature_enabled("giga"):
-        print("feat.giga выключен в Mini App — дайджест пропущен")
+    if not pgconn.feature_enabled("notify"):
+        print("feat.notify выключен в Mini App — дайджест пропущен")
         return
     rows = fetch_unsent()
     if not rows:
@@ -118,13 +118,16 @@ async def main() -> None:
 
     cfg = pgconn.app_config()
     tg = cfg.get("telegram") or {}
-    if not (tg.get("token") and tg.get("chat_id")):
-        print("Telegram не настроен — дайджест не отправлен (останется в очереди).")
+    token = tg.get("token")
+    # шлём в ЛИЧКУ привязанному пользователю (tg_user_id), не в группу/топик
+    dm = cfg.get("tg_user_id")
+    if not (token and dm):
+        print("Пользователь не привязан (/link) или нет токена — дайджест в очереди.")
         return
 
-    if await tg_send(tg["token"], tg["chat_id"], msg, tg.get("topic_id")):
+    if await tg_send(token, dm, msg, None):
         mark_sent(ids)
-        print(f"дайджест отправлен ({len(rows)} уведомл.), помечено sent.")
+        print(f"дайджест отправлен в личку ({len(rows)} уведомл.), помечено sent.")
     else:
         print("дайджест НЕ отправлен (ошибка TG) — останется в очереди.")
 

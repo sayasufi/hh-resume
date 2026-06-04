@@ -93,3 +93,4 @@ docker/
 /audit_dialogs.py
 *.bak.*
 *.naumenko.bak
+nginx/.htpasswd

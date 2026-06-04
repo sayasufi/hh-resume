@@ -29,9 +29,6 @@ services:
       PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://hh:hh_local_pw@db:5432/prefect
       PREFECT_SERVER_API_HOST: 0.0.0.0
       PREFECT_UI_API_URL: /api
-      PREFECT_SERVER_API_AUTH_STRING: ${PREFECT_AUTH}
-    ports:
-      - "4200:4200"
     networks:
       - default
 
@@ -56,11 +53,24 @@ services:
       - HH_DB_DSN=postgresql://hh:hh_local_pw@db:5432/hh
       - HH_DB_SCHEMA=public
       - PREFECT_API_URL=http://prefect-server:4200/api
-      - PREFECT_API_AUTH_STRING=${PREFECT_AUTH}
       - ORCH_ENABLED=all
     networks:
       - default
       - test-llm
+
+  prefect-proxy:
+    container_name: prefect_proxy
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      - prefect-server
+    volumes:
+      - ./nginx/prefect.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+    ports:
+      - "4200:4200"
+    networks:
+      - default
 
   hh-web:
     container_name: hh_web

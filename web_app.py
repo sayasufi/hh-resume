@@ -506,22 +506,28 @@ def _funnel(apps: int, invitations: int, interviews: int) -> list:
     return out
 
 
-def _next_apply(apply_on: bool):
-    """Когда следующий запуск обычных откликов (cron `0 5-19 UTC` = ежечасно 08–22 МСК)."""
+def _next_apply(apply_on: bool, today: int, limit: int):
+    """РЕАЛЬНЫЙ следующий запуск обычных откликов. Cron ежечасно 08–22 МСК, НО
+    apply-similar встаёт на паузу до завтра, когда выбран дневной лимит."""
     if not apply_on:
         return None
     now = datetime.utcnow()
+    now_msk = now + timedelta(hours=3)
+    if limit and today >= limit:  # лимит на сегодня исчерпан -> завтра в начале окна
+        return f"завтра ~08:00 МСК · лимит на сегодня {today}/{limit} выбран"
     nxt = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
     for _ in range(48):
         if 5 <= nxt.hour <= 19:
             break
         nxt += timedelta(hours=1)
     msk = nxt + timedelta(hours=3)
-    tomorrow = msk.date() != (now + timedelta(hours=3)).date()
+    tomorrow = msk.date() != now_msk.date()
     mins = max(0, int((nxt - now).total_seconds() // 60))
     label = ("завтра " if tomorrow else "") + "~" + msk.strftime("%H:%M") + " МСК"
     if not tomorrow and mins <= 90:
         label += f" (через {mins} мин)"
+    if limit:
+        label += f" · сегодня {today}/{limit}"
     return label
 
 
@@ -557,7 +563,10 @@ async def _build_me(account: str, dfrom=None, dto=None) -> dict:
             "funnel": funnel,
             "breakdown": _breakdown(counts) if has_cache else [],
         },
-        "next_apply": _next_apply(flags[0]),  # flags[0] = feat.apply
+        "next_apply": _next_apply(
+            flags[0], db["applications_today"],
+            int(await asyncio.to_thread(
+                pgconn.get_setting, "apply.max_per_day", 15, account) or 0)),
     }
     _me_cache[key] = (time.time(), payload)
     return payload

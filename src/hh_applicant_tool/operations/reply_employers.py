@@ -493,22 +493,29 @@ class Operation(BaseOperation):
                             continue
 
                         if send_message.startswith("/ban"):
-                            await self.api_client.put(
-                                f"/employers/blacklisted/{employer['id']}"
-                            )
-                            blacklist.add(employer["id"])
+                            if not self.dry_run:
+                                await self.api_client.put(
+                                    f"/employers/blacklisted/{employer['id']}"
+                                )
+                                blacklist.add(employer["id"])
                             print(
-                                "🚫 Работодатель заблокирован",
+                                "🚫 Работодатель заблокирован"
+                                + (" (dry-run)" if self.dry_run else ""),
                                 employer.get("alternate_url"),
                             )
                             continue
                         elif send_message.startswith("/cancel"):
                             _, decline_msg = send_message.split("/cancel", 1)
-                            await self.api_client.delete(
-                                f"/negotiations/active/{nid}",
-                                with_decline_message=decline_msg.strip(),
+                            if not self.dry_run:
+                                await self.api_client.delete(
+                                    f"/negotiations/active/{nid}",
+                                    with_decline_message=decline_msg.strip(),
+                                )
+                            print(
+                                "❌ Отмена заявки"
+                                + (" (dry-run)" if self.dry_run else ""),
+                                vacancy["alternate_url"],
                             )
-                            print("❌ Отмена заявки", vacancy["alternate_url"])
                             continue
 
                     # Финальная отправка текста

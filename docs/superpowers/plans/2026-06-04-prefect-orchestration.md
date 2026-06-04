@@ -30,11 +30,13 @@
 
 This table is the single source of truth; it is encoded literally in `orchestration/flows.py` (Task 6).
 
+**Platform dimension (spec §4.5):** every JOBS row also carries `platform="hh"` (the only platform today). Deployment/flow names are `"<platform>-<name>"` — i.e. `hh-refresh-token`, `hh-apply-similar`, … When a second source/handler is added later it appears as new rows with its own `platform` (e.g. `habr`, `tg`) and its own command; the orchestrator code does not change. In the verification commands below, deployment names therefore take the form `hh-<job>` (e.g. `prefect deployment run "hh-apply-similar/hh-apply-similar"`).
+
 ## File structure (what gets created/modified)
 
 - Create `orchestration/__init__.py` — package marker.
-- Create `orchestration/accounts.py` — `active_accounts(feature)`.
-- Create `orchestration/runner.py` — `run_op(command, account, timeout)` subprocess wrapper streaming to Prefect logs.
+- Create `orchestration/targets.py` — `active_targets(platform, feature)` + `PLATFORM_ENV` map (platform → context env var; `hh → HH_ACCOUNT`). Platform-generic per spec §4.5.
+- Create `orchestration/runner.py` — `run_op(command, platform, target, timeout)` subprocess wrapper that sets the per-platform context env, streaming to Prefect logs.
 - Create `orchestration/jitter.py` — `human_jitter(max_seconds)`.
 - Create `orchestration/alerts.py` — `notify_failure(flow, flow_run, state)` → `pgconn.notify`.
 - Create `orchestration/flows.py` — the JOBS table + `make_dispatcher(...)` factory + `build_deployments(names)`.
@@ -216,45 +218,58 @@ git commit -m "feat(orchestration): add prefect-server (postgres-backed) alongsi
 ### Task 5: `accounts.py`, `runner.py`, `jitter.py`, `alerts.py`
 
 **Files:**
-- Create: `orchestration/accounts.py`
+- Create: `orchestration/targets.py`
 - Create: `orchestration/runner.py`
 - Create: `orchestration/jitter.py`
 - Create: `orchestration/alerts.py`
 - Modify: `tests/test_orchestration.py`
 
-- [ ] **Step 1: Write `accounts.py`**
+- [ ] **Step 1: Write `targets.py`**
 
-`orchestration/accounts.py`:
+`orchestration/targets.py`:
 ```python
-"""Активные аккаунты для fan-out, с фильтром по feature-флагу."""
+"""Активные цели для fan-out, обобщённо по платформам (spec §4.5).
+Сейчас единственная платформа — hh (маппится на public.app_users)."""
 from hh_applicant_tool.storage import pgconn
 
+# Платформа -> переменная окружения контекста для сабпроцесса операции.
+PLATFORM_ENV: dict[str, str] = {"hh": "HH_ACCOUNT"}
 
-def active_accounts(feature: str | None = None) -> list[str]:
-    """Аккаунты из public.app_users. Если задан feature — оставляем только те,
-    у кого feat.<feature> включён (по умолчанию в pgconn — True)."""
-    accounts = [account for _name, account in pgconn.list_users()]
-    if feature:
-        accounts = [a for a in accounts if pgconn.feature_enabled(feature, account=a)]
-    return accounts
+
+def active_targets(platform: str, feature: str | None = None) -> list[str]:
+    """Идентификаторы целей для (платформа, фича). Для hh — аккаунты из app_users,
+    отфильтрованные по feat.<feature> (default True). Новые платформы добавляют
+    свою ветку, не трогая остальной оркестратор."""
+    if platform == "hh":
+        targets = [account for _name, account in pgconn.list_users()]
+        if feature:
+            targets = [t for t in targets if pgconn.feature_enabled(feature, account=t)]
+        return targets
+    raise ValueError(f"unknown platform: {platform}")
 ```
 
 - [ ] **Step 2: Write `runner.py`**
 
 `orchestration/runner.py`:
 ```python
-"""Запуск существующей операции hh как subprocess для одного аккаунта,
-со стримингом вывода в логи Prefect и пробросом ненулевого кода как ошибки."""
+"""Запуск существующей операции как subprocess для одной цели (платформа+target),
+со стримингом вывода в логи Prefect и пробросом ненулевого кода как ошибки.
+Контекст цели выставляется через PLATFORM_ENV (hh -> HH_ACCOUNT)."""
 import asyncio
 import os
 
 from prefect import get_run_logger
 
+from .targets import PLATFORM_ENV
 
-async def run_op(command: list[str], account: str, timeout: int = 1800) -> int:
+
+async def run_op(command: list[str], platform: str, target: str, timeout: int = 1800) -> int:
     logger = get_run_logger()
-    env = {**os.environ, "HH_ACCOUNT": account}
-    env.pop("HH_DB_SCHEMA", None)  # единая схема: изоляция по HH_ACCOUNT
+    ctx_env = PLATFORM_ENV.get(platform)
+    if not ctx_env:
+        raise ValueError(f"no context env mapping for platform: {platform}")
+    env = {**os.environ, ctx_env: target}
+    env.pop("HH_DB_SCHEMA", None)  # единая схема: изоляция по контексту цели
     proc = await asyncio.create_subprocess_exec(
         *command,
         env=env,
@@ -265,16 +280,20 @@ async def run_op(command: list[str], account: str, timeout: int = 1800) -> int:
 
     async def _pump() -> None:
         async for raw in proc.stdout:
-            logger.info("[%s] %s", account, raw.decode("utf-8", "replace").rstrip())
+            logger.info("[%s/%s] %s", platform, target, raw.decode("utf-8", "replace").rstrip())
 
     try:
         await asyncio.wait_for(asyncio.gather(_pump(), proc.wait()), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
-        raise RuntimeError(f"{' '.join(command)} (account={account}) timed out after {timeout}s")
+        raise RuntimeError(
+            f"{' '.join(command)} (platform={platform} target={target}) timed out after {timeout}s"
+        )
     rc = proc.returncode or 0
     if rc != 0:
-        raise RuntimeError(f"{' '.join(command)} (account={account}) exited rc={rc}")
+        raise RuntimeError(
+            f"{' '.join(command)} (platform={platform} target={target}) exited rc={rc}"
+        )
     return rc
 ```
 
@@ -320,24 +339,32 @@ def notify_failure(flow, flow_run, state) -> None:
 Replace `tests/test_orchestration.py` with:
 ```python
 import asyncio
+import logging
 
-import orchestration.accounts as accounts
+import pytest
+
+import orchestration.targets as targets
 from orchestration.jitter import human_jitter
 from orchestration.runner import run_op
 
 
-def test_active_accounts_no_feature(monkeypatch):
-    monkeypatch.setattr(accounts.pgconn, "list_users", lambda: [("A", "a"), ("B", "b")])
-    assert accounts.active_accounts() == ["a", "b"]
+def test_active_targets_hh_no_feature(monkeypatch):
+    monkeypatch.setattr(targets.pgconn, "list_users", lambda: [("A", "a"), ("B", "b")])
+    assert targets.active_targets("hh") == ["a", "b"]
 
 
-def test_active_accounts_feature_filter(monkeypatch):
-    monkeypatch.setattr(accounts.pgconn, "list_users", lambda: [("A", "a"), ("B", "b")])
+def test_active_targets_hh_feature_filter(monkeypatch):
+    monkeypatch.setattr(targets.pgconn, "list_users", lambda: [("A", "a"), ("B", "b")])
     monkeypatch.setattr(
-        accounts.pgconn, "feature_enabled",
+        targets.pgconn, "feature_enabled",
         lambda feat, account=None: account == "a",
     )
-    assert accounts.active_accounts("apply") == ["a"]
+    assert targets.active_targets("hh", "apply") == ["a"]
+
+
+def test_active_targets_unknown_platform_raises():
+    with pytest.raises(ValueError):
+        targets.active_targets("habr")
 
 
 def test_human_jitter_zero_is_instant():
@@ -347,17 +374,15 @@ def test_human_jitter_zero_is_instant():
 def test_run_op_nonzero_raises(monkeypatch):
     # get_run_logger requires a run context; patch it to a stub logger.
     import orchestration.runner as runner
-    import logging
     monkeypatch.setattr(runner, "get_run_logger", lambda: logging.getLogger("test"))
-    with __import__("pytest").raises(RuntimeError):
-        asyncio.run(run_op(["python", "-c", "import sys; sys.exit(3)"], "acct", timeout=30))
+    with pytest.raises(RuntimeError):
+        asyncio.run(run_op(["python", "-c", "import sys; sys.exit(3)"], "hh", "acct", timeout=30))
 
 
 def test_run_op_success(monkeypatch):
     import orchestration.runner as runner
-    import logging
     monkeypatch.setattr(runner, "get_run_logger", lambda: logging.getLogger("test"))
-    rc = asyncio.run(run_op(["python", "-c", "print('hi')"], "acct", timeout=30))
+    rc = asyncio.run(run_op(["python", "-c", "print('hi')"], "hh", "acct", timeout=30))
     assert rc == 0
 ```
 
@@ -396,10 +421,10 @@ per-account задаче, которая запускает существующ
 JOBS — единственный источник правды по задачам (см. таблицу в плане/спеке)."""
 from prefect import flow, task
 
-from .accounts import active_accounts
 from .alerts import notify_failure
 from .jitter import human_jitter
 from .runner import run_op
+from .targets import active_targets
 
 JOBS: list[dict] = [
     dict(name="refresh-token",  command=["python", "-m", "hh_applicant_tool", "refresh-token"],
@@ -429,28 +454,34 @@ JOBS: list[dict] = [
 
 def _make_dispatcher(job: dict):
     name = job["name"]
+    platform = job.get("platform", "hh")          # spec §4.5; hh — единственная сейчас
+    flow_name = f"{platform}-{name}"               # e.g. hh-apply-similar
     command = job["command"]
     feature = job["feature"]
     jitter = job["jitter"]
     timeout = job["timeout"]
-    task_tags = ["hh", *job["tags"]]
+    task_tags = [platform, *job["tags"]]
 
-    @task(name=f"{name}:account", retries=job["retries"],
+    @task(name=f"{flow_name}:target", retries=job["retries"],
           retry_delay_seconds=[30, 120], tags=task_tags)
-    async def _account_task(account: str):
-        await run_op(command, account, timeout=timeout)
+    async def _target_task(target: str):
+        await run_op(command, platform, target, timeout=timeout)
 
-    @flow(name=name, on_failure=[notify_failure])
+    @flow(name=flow_name, on_failure=[notify_failure])
     async def _dispatch():
         await human_jitter(jitter)
-        accounts = active_accounts(feature)
-        futures = [_account_task.submit(a) for a in accounts]
-        # Изолируем падения: один аккаунт упал — остальные идут, флоу не валится из-за одного.
+        targets = active_targets(platform, feature)
+        futures = [_target_task.submit(t) for t in targets]
+        # Изолируем падения: одна цель упала — остальные идут, флоу не валится из-за одной.
         for fut in futures:
             fut.result(raise_on_failure=False)
 
-    _dispatch.__name__ = name.replace("-", "_")
+    _dispatch.__name__ = flow_name.replace("-", "_")
     return _dispatch
+
+
+def _flow_name(job: dict) -> str:
+    return f"{job.get('platform', 'hh')}-{job['name']}"
 
 
 FLOWS = {job["name"]: _make_dispatcher(job) for job in JOBS}
@@ -458,16 +489,21 @@ JOBS_BY_NAME = {job["name"]: job for job in JOBS}
 
 
 def build_deployments(names: set[str] | None):
-    """Список deployments для serve(). names=None -> все."""
+    """Список deployments для serve(). names — короткие имена задач (как в ORCH_ENABLED);
+    None -> все. Имя деплоймента — '<platform>-<name>'."""
     deployments = []
     for job in JOBS:
         if names is not None and job["name"] not in names:
             continue
         f = FLOWS[job["name"]]
         deployments.append(
-            f.to_deployment(name=job["name"], cron=job["cron"], tags=["hh", *job["tags"]])
+            f.to_deployment(name=_flow_name(job), cron=job["cron"],
+                            tags=[job.get("platform", "hh"), *job["tags"]])
         )
     return deployments
+```
+
+> Note: `ORCH_ENABLED` and `build_deployments(names)` use the **short** job name (`refresh-token`); the resulting Prefect **deployment name** is `hh-refresh-token`. Verification commands use the deployment name, e.g. `prefect deployment run "hh-refresh-token/hh-refresh-token"`.
 ```
 
 - [ ] **Step 2: Write `serve.py`**
@@ -519,7 +555,7 @@ def test_jobs_table_complete():
 def test_build_deployments_filters_by_name():
     from orchestration.flows import build_deployments
     deps = build_deployments({"refresh-token"})
-    assert len(deps) == 1 and deps[0].name == "refresh-token"
+    assert len(deps) == 1 and deps[0].name == "hh-refresh-token"
     assert len(build_deployments(None)) == 11
 ```
 
@@ -590,7 +626,7 @@ Run (wait ~70s for the first 1-min schedule to fire):
 docker compose exec prefect-server prefect deployment ls
 docker compose exec prefect-server prefect flow-run ls --limit 5
 ```
-Expected: a `refresh-token/refresh-token` deployment; at least one `Completed` flow run.
+Expected: a `hh-refresh-token/hh-refresh-token` deployment; at least one `Completed` flow run.
 
 - [ ] **Step 4: Disable the cron `refresh-token` line (parity reached → remove duplicate)**
 
@@ -885,7 +921,7 @@ Expected: prints a row like `('Оркестрация: задача «unit-test-
 
 `send-digest` (already migrated) will pick up the 🔴 notification on its next run. Optionally trigger:
 ```bash
-docker compose exec prefect-server prefect deployment run "send-digest/send-digest"
+docker compose exec prefect-server prefect deployment run "hh-send-digest/hh-send-digest"
 ```
 Expected: the orchestration-failure line appears in the Telegram digest (for notify-enabled accounts).
 
@@ -920,8 +956,8 @@ In `giga_recruiter.py`, above the `_lock(account)` call in `main()`, add a comme
 
 Run two manual giga runs back-to-back; the second must no-op on the held lock for any account already running:
 ```bash
-docker compose exec prefect-server prefect deployment run "giga/giga"
-docker compose exec prefect-server prefect deployment run "giga/giga"
+docker compose exec prefect-server prefect deployment run "hh-giga/hh-giga"
+docker compose exec prefect-server prefect deployment run "hh-giga/hh-giga"
 docker compose exec hh-orchestrator sh -lc 'grep -a "уже выполняется" /proc/1/fd/1 | tail -2 || true'
 docker compose exec prefect-server prefect flow-run ls --limit 6
 ```
@@ -1077,6 +1113,7 @@ git commit -m "docs(ops): prefect runbook; concurrency limits for vLLM/browser p
 - Spec §4.2 dispatcher→per-account → Task 6 (factory) + Tasks 8–10 (jobs).
 - Spec §4.3 schedules / work window / jitter → JOBS table (Task 6), preserved cron expressions + `human_jitter`.
 - Spec §4.4 giga → Task 10 (port). **Deviation (documented):** per-account single-flight stays on the Postgres advisory lock (Task 14) rather than a Prefect concurrency limit — advisory locks are per-account and infra-free; Prefect tag limits are global. Spec intent (no overlap, vLLM protection) is fully met: no-overlap via the lock, vLLM/browser protection via Prefect `llm`/`browser` tag limits (Task 17).
+- Spec §4.5 platform-genericity → `targets.active_targets(platform, feature)` + `PLATFORM_ENV` (Task 5), `platform` in JOBS + `<platform>-<name>` deployments (Task 6). hh is the only platform today; new sources/handlers (parent umbrella spec) plug in as JOBS rows with no orchestrator change.
 - Spec §5 reliability → task retries (Task 6), global `llm`/`browser` concurrency limits (Task 17), per-account giga single-flight via advisory lock (Task 14), `on_failure` alerts (Tasks 6, 13), `restart: always` services (Tasks 11, 12).
 - Spec §6 observability → Prefect UI throughout; runbook (Task 17). (Cabinet widget intentionally out of scope.)
 - Spec §7 management → `ORCH_ENABLED` + JOBS table + per-account settings read each run (`active_accounts`).

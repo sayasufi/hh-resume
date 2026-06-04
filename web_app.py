@@ -489,8 +489,8 @@ def _funnel(apps: int, invitations: int, interviews: int) -> list:
     return out
 
 
-async def _build_me(account: str, dfrom=None, dto=None) -> dict:
-    key = (account, dfrom, dto)
+async def _build_me(account: str) -> dict:
+    key = account
     cached = _me_cache.get(key)
     if cached and time.time() - cached[0] < 60:
         return cached[1]
@@ -498,7 +498,7 @@ async def _build_me(account: str, dfrom=None, dto=None) -> dict:
     if hh["hh_id"]:  # токен жив -> фиксируем дневной срез для трендов
         await asyncio.to_thread(_snapshot, account, hh["applications_total"],
                                 hh["resume_views"], hh["invitations"])
-    counts = await asyncio.to_thread(_state_counts, account, dfrom, dto)
+    counts = await asyncio.to_thread(_state_counts, account)  # воронка — всё время
     cfg = await asyncio.to_thread(pgconn.app_config, account)
     name = (await asyncio.to_thread(
         pgconn.get_setting, "user.full_name", None, account)) or hh["full_name"] or account
@@ -540,7 +540,7 @@ async def _build_me(account: str, dfrom=None, dto=None) -> dict:
 # ── API ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/me")
-async def api_me(dfrom: str = None, dto: str = None, account: str = None,
+async def api_me(account: str = None,
                  x_init_data: str = Header(None, alias="X-Init-Data")):
     user = await asyncio.to_thread(_validate_init_data, x_init_data)
     admin = _is_admin(user)
@@ -548,7 +548,7 @@ async def api_me(dfrom: str = None, dto: str = None, account: str = None,
         _account_for_user, user.get("id"))
     if not acc:
         raise HTTPException(404, "not_linked")
-    data = await _build_me(acc, dfrom, dto)
+    data = await _build_me(acc)
     data["is_admin"] = admin
     data["account"] = acc
     if admin:

@@ -42,10 +42,6 @@ function renderMe(d) {
   $("#p-resume").textContent = p.resume || "—";
   $("#p-salary").textContent = p.salary ? (p.salary + " ₽") : "—";
   $("#p-status").textContent = p.status || "—";
-  $("#s-apps").textContent = s.applications_total;
-  $("#s-today").textContent = s.applications_today;
-  $("#s-resp").textContent = s.responses;
-  $("#s-inv").textContent = s.invitations;
   const max = Math.max(1, ...s.funnel.map((f) => f.value));
   $("#funnel").innerHTML = s.funnel.map((f) =>
     `<div class="fbar"><div class="fill" style="width:${Math.round(f.value / max * 100)}%"></div>`
@@ -235,10 +231,11 @@ const qp = () => {
   if (PERIOD.dto) s.push("dto=" + PERIOD.dto);
   return s.length ? "?" + s.join("&") : "";
 };
-const loadStats = () => api("/api/me" + qp()).then(renderMe).catch(() => {});
+const loadStats = () => api("/api/me").then(renderMe).catch(() => {});  // воронка — всё время
 const loadDialogs = () => api("/api/dialogs" + qp())
   .then((r) => { DIALOGS = r.items || []; renderDialogs(); }).catch(() => {});
-const _reloadPeriod = () => { loadStats(); loadDialogs(); loadActivity(); };
+// период влияет только на активность бота и список откликов; воронка — всё время
+const _reloadPeriod = () => { loadActivity(); loadDialogs(); };
 document.querySelectorAll(".period button").forEach((b) => {
   b.onclick = () => {
     const key = b.dataset.p;
@@ -282,7 +279,7 @@ $("#admin-pick").onclick = () => {
 async function boot() {
   try {
     if ($("#d-from")) { $("#d-from").value = PERIOD.dfrom; $("#d-to").value = PERIOD.dto; }
-    const [me, st] = await Promise.all([api("/api/me" + qp()), api("/api/settings")]);
+    const [me, st] = await Promise.all([api("/api/me"), api("/api/settings")]);
     renderMe(me); setupAdmin(me);
     bindToggles(st.features); bindConfig(st.config, st.resumes || []);
     $("#giga-hint").textContent = st.tg_connected

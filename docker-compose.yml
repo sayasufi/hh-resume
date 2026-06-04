@@ -52,7 +52,7 @@ services:
       - HH_DB_DSN=postgresql://hh:hh_local_pw@db:5432/hh
       - HH_DB_SCHEMA=public
       - PREFECT_API_URL=http://prefect-server:4200/api
-      - ORCH_ENABLED=refresh-token,update-resumes,funnel,monitor
+      - ORCH_ENABLED=all
     networks:
       - default
       - test-llm

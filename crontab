@@ -19,24 +19,24 @@ SHELL=/bin/bash
 # Человекоподобный просмотр вакансий: засветиться в «кто смотрел вакансию» у
 # работодателей + живость аккаунта. Только GET, без откликов. Каждые 2 часа в
 # рабочее окно 08:00–22:00 МСК (05–19 UTC, шаг 2ч) + случайный джиттер 0–25 мин.
-23 5-19/2 * * * /bin/bash -c 'sleep $((RANDOM \% 1500))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/browse_activity.py >> /var/log/cron.log 2>&1
+# MIGRATED-TO-PREFECT: 23 5-19/2 * * * /bin/bash -c 'sleep $((RANDOM \% 1500))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/browse_activity.py >> /var/log/cron.log 2>&1
 
 # Рассылка откликов (настройки из БД: resume_id и use_ai). 08:00–22:00 МСК
-0 5-19 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool apply-similar >> /var/log/cron.log 2>&1
+# MIGRATED-TO-PREFECT: 0 5-19 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool apply-similar >> /var/log/cron.log 2>&1
 
 # Уведомления о "делах" из диалогов -> Telegram. 08:20–22:20 МСК
-20 5-19 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/notify_actions.py >> /var/log/cron.log 2>&1
+# MIGRATED-TO-PREFECT: 20 5-19 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/notify_actions.py >> /var/log/cron.log 2>&1
 
 # Авто-ответы в диалогах (AI через локальную LLM). 08:30–22:30 МСК
-30 5-19 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool reply-employers --use-ai >> /var/log/cron.log 2>&1
+# MIGRATED-TO-PREFECT: 30 5-19 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool reply-employers --use-ai >> /var/log/cron.log 2>&1
 
 # Авто-отклик на вакансии с ТЕСТОМ через браузер. Каждые 3ч: 09,12,15,18,21 МСК, до 10 за прогон.
-0 6-18/3 * * * /bin/bash -c 'sleep $((RANDOM \% 90))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/apply_tests.py --apply --limit 10 >> /var/log/cron.log 2>&1
+# MIGRATED-TO-PREFECT: 0 6-18/3 * * * /bin/bash -c 'sleep $((RANDOM \% 90))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/apply_tests.py --apply --limit 10 >> /var/log/cron.log 2>&1
 
 # ГигаРекрутер-автоответчик: читает чат @Giga_recruiter_bot через user-сессию и
 # отвечает на новые вопросы интервью (LLM). Каждые 3 мин в рабочее окно 08–22 МСК
 # (05–19 UTC) + джиттер до 60с. Гейт: feat.giga + привязанная сессия.
-*/3 5-19 * * * /bin/bash -c 'sleep $((RANDOM \% 60))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/giga_recruiter.py >> /var/log/cron.log 2>&1
+# MIGRATED-TO-PREFECT: */3 5-19 * * * /bin/bash -c 'sleep $((RANDOM \% 60))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/giga_recruiter.py >> /var/log/cron.log 2>&1
 
 # Обновление токена каждую минуту (для всех юзеров)
 # MIGRATED-TO-PREFECT: */1 * * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool refresh-token >> /dev/null 2>&1
@@ -62,4 +62,4 @@ SHELL=/bin/bash
 
 # Единый приоритизированный дайджест уведомлений -> TG (🔴→🟡→🟢). Каждые 30 мин
 # в рабочее окно 08:00–22:00 МСК (05–19 UTC), в :15 и :45 — после задач-источников.
-15,45 5-19 * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/send_digest.py >> /var/log/cron.log 2>&1
+# MIGRATED-TO-PREFECT: 15,45 5-19 * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/send_digest.py >> /var/log/cron.log 2>&1

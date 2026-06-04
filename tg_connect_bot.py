@@ -494,11 +494,38 @@ async def cmd_help(message: Message):
     await message.answer(HELP_TEXT, parse_mode="HTML")
 
 
+def _connected_account(user_id):
+    """Аккаунт, у которого уже есть Telethon-сессия для этого TG-пользователя."""
+    acc = _account_by("tg_user_id", user_id)
+    if acc and (pgconn.app_config(account=acc).get("tg_user_session")):
+        return acc
+    return None
+
+
+async def _connect_entry(message: Message, state: FSMContext, user_id: int):
+    acc = _connected_account(user_id)
+    if acc:
+        name = pgconn.get_setting("user.full_name", None, account=acc) or acc
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="🔄 Переподключить", callback_data="conn:reconnect")]])
+        await message.answer(
+            f"✅ Telegram уже подключён для ГигаРекрутера (аккаунт «{name}»).\n"
+            "Если сессия слетела — жми «Переподключить».", reply_markup=kb)
+        return
+    await start_connect(message, state)
+
+
+@dp.callback_query(F.data == "conn:reconnect")
+async def cb_conn_reconnect(cq: CallbackQuery, state: FSMContext):
+    await cq.answer()
+    await start_connect(cq.message, state)
+
+
 @dp.message(Command("connect"))
 async def cmd_connect(message: Message, state: FSMContext):
     if message.chat.type != "private":
         return
-    await start_connect(message, state)
+    await _connect_entry(message, state, message.from_user.id)
 
 
 # ── лёгкая привязка для Mini App (по номеру телефона, без Telethon-сессии) ──
@@ -794,7 +821,7 @@ async def cb_addacc(cq: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "connect")
 async def cb_connect(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
-    await start_connect(cq.message, state)
+    await _connect_entry(cq.message, state, cq.from_user.id)
 
 
 @dp.callback_query(F.data == "status")

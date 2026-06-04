@@ -50,8 +50,13 @@ main { padding: 0 0 10px; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cell.tap { cursor: pointer; }
 .cell.tap:active { background: var(--sep); }
+button.cell { width: 100%; background: transparent; border: none; color: var(--text);
+  font: inherit; text-align: left; }
 .cell input[type=number] { background: transparent; border: none; color: var(--accent);
-  font: inherit; font-weight: 600; text-align: right; width: 45%; outline: none; }
+  font: inherit; font-weight: 600; text-align: right; width: 45%; outline: none;
+  -moz-appearance: textfield; appearance: textfield; }
+.cell input[type=number]::-webkit-outer-spin-button,
+.cell input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .chevron::after, .chev { color: var(--hint); }
 .v.chevron::after { content: " ›"; color: var(--hint); }
 .ok { color: var(--accent); font-weight: 700; }

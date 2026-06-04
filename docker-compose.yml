@@ -57,6 +57,47 @@ services:
       - default
       - test-llm
 
+  hh-web:
+    container_name: hh_web
+    image: hh_applicant_tool:latest
+    restart: always
+    command: python -u -m uvicorn web_app:app --host 0.0.0.0 --port 60080
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - CONFIG_DIR=/app/config
+      - HH_DB_DSN=postgresql://hh:hh_local_pw@db:5432/hh
+      - HH_DB_SCHEMA=public
+    ports:
+      - "127.0.0.1:60080:60080"
+    networks:
+      - default
+      - test-llm
+
+  hh-listener:
+    container_name: hh_listener
+    image: hh_applicant_tool:latest
+    restart: always
+    command: python -u /app/tg_connect_bot.py
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - CONFIG_DIR=/app/config
+      - HH_DB_DSN=postgresql://hh:hh_local_pw@db:5432/hh
+      - HH_DB_SCHEMA=public
+      - HH_ACCOUNT=egor
+    networks:
+      - default
+      - test-llm
+
   hh_applicant_tool:
     container_name: hh_applicant_tool
     image: hh_applicant_tool:latest

@@ -46,11 +46,11 @@ SHELL=/bin/bash
 # чтения общего telegram-токена; сам матчинг идёт по всем юзерам.
 # pgrep-паттерн [t]g... не матчит собственную команду watchdog'а; запуск — в
 # run_listener.sh (чтобы «tg_connect_bot.py» не попадало в строку watchdog'а).
-* * * * * /bin/bash -c 'pgrep -f "[t]g_connect_bot.py" >/dev/null || /bin/bash /app/run_listener.sh'
+# MIGRATED-TO-COMPOSE: * * * * * /bin/bash -c 'pgrep -f "[t]g_connect_bot.py" >/dev/null || /bin/bash /app/run_listener.sh'
 
 # Watchdog Mini App бэкенда (uvicorn на 127.0.0.1:60080). Раз в минуту поднять,
 # если не запущен. Паттерн [u]vicorn не матчит саму команду watchdog'а.
-* * * * * /bin/bash -c 'pgrep -f "[u]vicorn web_app" >/dev/null || /bin/bash /app/run_webapp.sh'
+# MIGRATED-TO-COMPOSE: * * * * * /bin/bash -c 'pgrep -f "[u]vicorn web_app" >/dev/null || /bin/bash /app/run_webapp.sh'
 
 # Ежедневный heartbeat/мониторинг (токен, vLLM, активность) -> очередь уведомлений.
 # Dead-man-switch: не пришла сводка утром = что-то сломалось. 08:00 МСК (старт дня).

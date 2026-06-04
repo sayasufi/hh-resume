@@ -17,6 +17,6 @@ crontab -u docker /app/crontab 2>/dev/null || true
 
 # Слушатель /connect (привязка Telegram кандидата по QR) — стартуем сразу;
 # watchdog в cron поднимет, если упадёт.
-/bin/bash /app/run_listener.sh
+# /bin/bash /app/run_listener.sh
 
 echo "[$(date)] Startup tasks finished."

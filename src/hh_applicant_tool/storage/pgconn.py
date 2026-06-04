@@ -1,0 +1,437 @@
+"""Postgres: ОДНА общая схема (public). Строки разделяются колонкой `account`
+(имя аккаунта из env HH_ACCOUNT; run_all задаёт его per-аккаунт). DSN из HH_DB_DSN.
+
+Per-account таблицы (с колонкой account): app_config, settings, seen_keys,
+action_items, notifications. Кэш-таблицы (employers, vacancy_contacts, vacancies,
+negotiations, resumes) — ОБЩИЕ (PK = hh-глобальные id, между аккаунтами не
+пересекаются), без account. Реестр аккаунтов — public.app_users(name, account).
+"""
+from __future__ import annotations
+
+import os
+
+import psycopg
+
+TABLES_DDL = """
+CREATE TABLE IF NOT EXISTS employers (
+    id bigint PRIMARY KEY, name text NOT NULL, type text, description text,
+    site_url text, area_id bigint, area_name text, alternate_url text,
+    created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS vacancy_contacts (
+    id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    vacancy_id bigint NOT NULL, vacancy_alternate_url text, vacancy_name text,
+    vacancy_area_id bigint, vacancy_area_name text, vacancy_salary_from bigint,
+    vacancy_salary_to bigint, vacancy_currency varchar(3), vacancy_gross boolean,
+    employer_id bigint, employer_name text, name text, email text,
+    phone_numbers text NOT NULL,
+    created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
+    UNIQUE (vacancy_id, email)
+);
+CREATE TABLE IF NOT EXISTS vacancies (
+    id bigint PRIMARY KEY, name text NOT NULL, area_id bigint, area_name text,
+    salary_from bigint, salary_to bigint, currency varchar(3), gross boolean,
+    published_at timestamptz, created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(), remote boolean, experience text,
+    professional_roles text, alternate_url text
+);
+CREATE TABLE IF NOT EXISTS negotiations (
+    id bigint PRIMARY KEY, state text NOT NULL, vacancy_id bigint NOT NULL,
+    employer_id bigint, chat_id bigint NOT NULL, resume_id text,
+    created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS resumes (
+    id text PRIMARY KEY, title text NOT NULL, url text, alternate_url text,
+    status_id text, status_name text, can_publish_or_update boolean,
+    total_views integer DEFAULT 0, new_views integer DEFAULT 0,
+    created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
+);
+-- per-account
+CREATE TABLE IF NOT EXISTS settings (
+    account text NOT NULL DEFAULT '', key text NOT NULL, value text NOT NULL,
+    PRIMARY KEY (account, key)
+);
+CREATE TABLE IF NOT EXISTS app_config (
+    account text NOT NULL DEFAULT '', key text NOT NULL, value jsonb NOT NULL,
+    updated_at timestamptz DEFAULT now(), PRIMARY KEY (account, key)
+);
+CREATE TABLE IF NOT EXISTS seen_keys (
+    account text NOT NULL DEFAULT '', kind text NOT NULL, key text NOT NULL,
+    created_at timestamptz DEFAULT now(), PRIMARY KEY (account, kind, key)
+);
+CREATE TABLE IF NOT EXISTS action_items (
+    id bigserial PRIMARY KEY, account text NOT NULL DEFAULT '',
+    nid bigint, chat_id bigint, vacancy text, action text NOT NULL,
+    chat_url text, vacancy_url text, created_at timestamptz DEFAULT now(),
+    done boolean NOT NULL DEFAULT false
+);
+CREATE TABLE IF NOT EXISTS notifications (
+    id bigserial PRIMARY KEY, account text NOT NULL DEFAULT '',
+    priority int NOT NULL DEFAULT 2, category text, text text NOT NULL,
+    link text, dedup_key text, created_at timestamptz DEFAULT now(),
+    sent_at timestamptz, UNIQUE (account, dedup_key)
+);
+CREATE TABLE IF NOT EXISTS activity_daily (
+    account text NOT NULL, day date NOT NULL, kind text NOT NULL,
+    count int NOT NULL DEFAULT 0, PRIMARY KEY (account, day, kind)
+);
+CREATE TABLE IF NOT EXISTS giga_queue (
+    account text NOT NULL, token text NOT NULL, vacancy text, nid bigint,
+    status text NOT NULL DEFAULT 'pending', turns int NOT NULL DEFAULT 0,
+    created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
+    PRIMARY KEY (account, token)
+);
+CREATE INDEX IF NOT EXISTS idx_notif_unsent
+    ON notifications(account, sent_at, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_vac_upd ON vacancies(updated_at);
+CREATE INDEX IF NOT EXISTS idx_emp_upd ON employers(updated_at);
+CREATE INDEX IF NOT EXISTS idx_neg_upd ON negotiations(updated_at);
+CREATE TABLE IF NOT EXISTS app_users (
+    id serial PRIMARY KEY, name text, account text UNIQUE NOT NULL,
+    active boolean DEFAULT true, created_at timestamptz DEFAULT now()
+);
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $func$
+BEGIN NEW.updated_at = now(); RETURN NEW; END;
+$func$ LANGUAGE plpgsql;
+DO $do$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['employers','vacancy_contacts','vacancies','negotiations','resumes']
+  LOOP
+    EXECUTE format(
+      'CREATE OR REPLACE TRIGGER trg_%1$s_updated BEFORE UPDATE ON %1$s
+       FOR EACH ROW EXECUTE FUNCTION set_updated_at();', t);
+  END LOOP;
+END $do$;
+"""
+
+
+def get_account() -> str:
+    """Имя аккаунта (раздел данных). Из HH_ACCOUNT; фолбэк — старый HH_DB_SCHEMA
+    (со снятым префиксом u_) для обратной совместимости."""
+    acc = os.environ.get("HH_ACCOUNT")
+    if acc:
+        return acc
+    s = os.environ.get("HH_DB_SCHEMA", "")
+    return s[2:] if s.startswith("u_") else (s or "default")
+
+
+def get_schema() -> str:  # back-compat: теперь = account
+    return get_account()
+
+
+def get_dsn() -> str:
+    dsn = os.environ.get("HH_DB_DSN")
+    if not dsn:
+        raise RuntimeError("HH_DB_DSN не задан")
+    return dsn
+
+
+def connect(ensure: bool = False) -> psycopg.Connection:
+    conn = psycopg.connect(get_dsn())
+    with conn.cursor() as cur:
+        cur.execute("SET search_path TO public")
+        if ensure:
+            cur.execute(TABLES_DDL)
+    conn.commit()
+    return conn
+
+
+async def aconnect(ensure: bool = False) -> psycopg.AsyncConnection:
+    conn = await psycopg.AsyncConnection.connect(get_dsn())
+    async with conn.cursor() as cur:
+        await cur.execute("SET search_path TO public")
+        if ensure:
+            await cur.execute(TABLES_DDL)
+    await conn.commit()
+    return conn
+
+
+async def locked_token_refresh(api_client) -> bool:
+    """Обновление OAuth-токена под advisory-lock (по аккаунту). См. историю #4."""
+    import json as _json
+    import time as _time
+
+    acc = get_account()
+    conn = await psycopg.AsyncConnection.connect(get_dsn())
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute("SET search_path TO public")
+            await cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))", (acc + ":token",)
+            )
+            await cur.execute(
+                "SELECT value FROM app_config WHERE account=%s AND key='token'",
+                (acc,),
+            )
+            row = await cur.fetchone()
+            pg_tok = row[0] if row else None
+            if pg_tok and pg_tok.get("access_expires_at", 0) > _time.time() + 30:
+                api_client.handle_access_token(pg_tok)
+                await conn.commit()
+                api_client._token_persisted = True
+                return True
+            new = await api_client.oauth_client.refresh_access_token(
+                api_client.refresh_token
+            )
+            api_client.handle_access_token(new)
+            await cur.execute(
+                "INSERT INTO app_config(account, key, value) "
+                "VALUES (%s, 'token', %s::jsonb) ON CONFLICT(account, key) "
+                "DO UPDATE SET value=excluded.value, updated_at=now()",
+                (acc, _json.dumps(new, ensure_ascii=False)),
+            )
+            await conn.commit()
+            api_client._token_persisted = True
+            return True
+    finally:
+        await conn.close()
+
+
+# --- Sync-хелперы (account-aware) ---
+
+def app_config(account: str | None = None) -> dict:
+    acc = account or get_account()
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT key, value FROM app_config WHERE account=%s", (acc,))
+            return {k: v for k, v in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def set_app_config(key: str, value, account: str | None = None) -> None:
+    import json as _json
+    acc = account or get_account()
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO app_config(account, key, value) VALUES (%s, %s, %s::jsonb) "
+                "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value, "
+                "updated_at=now()",
+                (acc, key, _json.dumps(value, ensure_ascii=False)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_users() -> list[tuple[str, str]]:
+    """Активные аккаунты -> [(name, account), ...]."""
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, account FROM app_users WHERE active ORDER BY id"
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def register_user(name: str, account: str) -> None:
+    conn = connect(ensure=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO app_users(name, account) VALUES (%s, %s) "
+                "ON CONFLICT(account) DO UPDATE SET name=excluded.name, active=true",
+                (name, account),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_setting(key: str, default=None, account: str | None = None):
+    import json as _json
+    acc = account or get_account()
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT value FROM settings WHERE account=%s AND key=%s", (acc, key)
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return default
+    try:
+        return _json.loads(row[0])
+    except (ValueError, TypeError):
+        return row[0]
+
+
+def set_setting(key: str, value, account: str | None = None) -> None:
+    """Запись settings (значение json-кодируется, как читает get_setting)."""
+    import json as _json
+    acc = account or get_account()
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO settings(account, key, value) VALUES (%s, %s, %s) "
+                "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value",
+                (acc, key, _json.dumps(value, ensure_ascii=False)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def feature_enabled(feat: str, account: str | None = None) -> bool:
+    """Тумблер функции из Mini App. Ключ settings `feat.<feat>`, по умолчанию ВКЛ."""
+    return bool(get_setting(f"feat.{feat}", True, account=account))
+
+
+def seen_keys(kind: str) -> set:
+    acc = get_account()
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT key FROM seen_keys WHERE account=%s AND kind=%s", (acc, kind)
+            )
+            return {r[0] for r in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def add_seen(kind: str, keys) -> None:
+    acc = get_account()
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            for key in keys:
+                cur.execute(
+                    "INSERT INTO seen_keys(account, kind, key) VALUES (%s, %s, %s) "
+                    "ON CONFLICT DO NOTHING",
+                    (acc, kind, str(key)),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def add_action_items(items: list[dict]) -> None:
+    acc = get_account()
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            for it in items:
+                cur.execute(
+                    "INSERT INTO action_items(account, nid, chat_id, vacancy, action, "
+                    "chat_url, vacancy_url) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (acc, it.get("nid"), it.get("chat_id"), it.get("vacancy"),
+                     it.get("action"), it.get("chat_url"), it.get("vacancy_url")),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def bump_activity(kind: str, n: int = 1, account: str | None = None) -> None:
+    """Инкремент дневного счётчика активности (account, today, kind) += n.
+    Зовётся из воркеров (HH_ACCOUNT в env задаёт run_all). Best-effort —
+    сбой счётчика не должен ронять основной флоу (отправку отклика и т.п.)."""
+    if n <= 0:
+        return
+    acc = account or get_account()
+    try:
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO activity_daily(account, day, kind, count) "
+                    "VALUES (%s, current_date, %s, %s) "
+                    "ON CONFLICT(account, day, kind) "
+                    "DO UPDATE SET count = activity_daily.count + excluded.count",
+                    (acc, kind, n),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+# --- Уведомления ---
+PRIORITY_HIGH = 1
+PRIORITY_MED = 2
+PRIORITY_LOW = 3
+
+
+def notify(priority: int, text: str, category: str | None = None,
+           link: str | None = None, dedup_key: str | None = None,
+           account: str | None = None) -> None:
+    acc = account or get_account()
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO notifications(account, priority, category, text, link, dedup_key) "
+                "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (account, dedup_key) DO NOTHING",
+                (acc, priority, category, text, link, dedup_key),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# --- Телефон/шифрование/TG-api (без изменений) ---
+
+def _norm_phone(p) -> str:
+    d = "".join(ch for ch in str(p or "") if ch.isdigit())
+    return d[-10:]
+
+
+def _session_key() -> bytes:
+    from cryptography.fernet import Fernet
+    k = os.environ.get("HH_SESSION_KEY")
+    if k:
+        return k.encode()
+    path = os.path.join(os.environ.get("CONFIG_DIR", "/app/config"), ".session_key")
+    try:
+        with open(path, "rb") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        key = Fernet.generate_key()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(key)
+        try:
+            os.chmod(path, 0o600)
+        except Exception:
+            pass
+        return key
+
+
+def tg_api() -> tuple[int, str]:
+    import json as _json
+    path = os.path.join(os.environ.get("CONFIG_DIR", "/app/config"), ".tg_api")
+    try:
+        with open(path) as f:
+            d = _json.load(f)
+            return int(d["api_id"]), str(d["api_hash"])
+    except Exception:
+        pass
+    aid = os.environ.get("HH_TG_API_ID")
+    if aid:
+        return int(aid), os.environ.get("HH_TG_API_HASH", "")
+    return 2040, "b18441a1ff607e10a989891a5462e627"
+
+
+def enc_session(s: str) -> str:
+    from cryptography.fernet import Fernet
+    return Fernet(_session_key()).encrypt(s.encode()).decode()
+
+
+def dec_session(s: str) -> str:
+    from cryptography.fernet import Fernet
+    try:
+        return Fernet(_session_key()).decrypt(s.encode()).decode()
+    except Exception:
+        return s

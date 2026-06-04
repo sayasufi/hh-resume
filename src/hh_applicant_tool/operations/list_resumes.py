@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import argparse
+import logging
+from typing import TYPE_CHECKING
+
+from prettytable import PrettyTable
+
+from ..api.datatypes import PaginatedItems
+from ..main import BaseNamespace, BaseOperation
+from ..utils.string import shorten
+
+if TYPE_CHECKING:
+    from ..api import datatypes
+    from ..main import HHApplicantTool
+
+
+logger = logging.getLogger(__package__)
+
+
+class Namespace(BaseNamespace):
+    pass
+
+
+class Operation(BaseOperation):
+    """Список резюме"""
+
+    __aliases__ = ("ls-resumes", "resumes")
+
+    def setup_parser(self, parser: argparse.ArgumentParser) -> None:
+        pass
+
+    async def run(self, tool: HHApplicantTool) -> None:
+        resumes: PaginatedItems[datatypes.Resume] = await tool.get_resumes()
+        logger.debug(resumes)
+        await tool.storage.resumes.save_batch(resumes)
+
+        t = PrettyTable(
+            field_names=["ID", "Название", "Статус"], align="l", valign="t"
+        )
+        t.add_rows(
+            [
+                (
+                    x["id"],
+                    shorten(x["title"]),
+                    x["status"]["name"].title(),
+                )
+                for x in resumes
+            ]
+        )
+        print(t)

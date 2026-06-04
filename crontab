@@ -1,0 +1,65 @@
+# shellcheck disable=all
+PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+SHELL=/bin/bash
+
+# Мультиюзер: ОДИН контейнер обслуживает всех активных юзеров из public.app_users.
+# run_all.py проходит по юзерам и запускает команду для каждого со своей PG-схемой.
+#
+# ВРЕМЯ: контейнер живёт по UTC (берёт /etc/localtime с хоста). Часы ниже — в UTC,
+# рядом в комментарии указано МСК (= UTC+3). Рабочее окно бота: 08:00–22:00 МСК.
+
+# При старте системы/контейнера
+@reboot /bin/bash /app/startup.sh >> /var/log/cron.log 2>&1
+
+# Автоподнятие резюме 24/7. Попытка каждые 2ч: hh даёт бесплатный бамп раз в ~4ч,
+# поэтому половина попыток получит «Не могу обновить» (безвредно), зато момент
+# готовности ловим без 8-часовых дыр -> максимум 6 реальных поднятий/сутки.
+0 */2 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool update-resumes >> /var/log/cron.log 2>&1
+
+# Человекоподобный просмотр вакансий: засветиться в «кто смотрел вакансию» у
+# работодателей + живость аккаунта. Только GET, без откликов. Каждые 2 часа в
+# рабочее окно 08:00–22:00 МСК (05–19 UTC, шаг 2ч) + случайный джиттер 0–25 мин.
+23 5-19/2 * * * /bin/bash -c 'sleep $((RANDOM \% 1500))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/browse_activity.py >> /var/log/cron.log 2>&1
+
+# Рассылка откликов (настройки из БД: resume_id и use_ai). 08:00–22:00 МСК
+0 5-19 * * * /bin/bash -c 'sleep $((60 + RANDOM \% 241))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool apply-similar >> /var/log/cron.log 2>&1
+
+# Уведомления о "делах" из диалогов -> Telegram. 08:20–22:20 МСК
+20 5-19 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/notify_actions.py >> /var/log/cron.log 2>&1
+
+# Авто-ответы в диалогах (AI через локальную LLM). 08:30–22:30 МСК
+30 5-19 * * * /bin/bash -c 'sleep $((10 + RANDOM \% 120))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool reply-employers --use-ai >> /var/log/cron.log 2>&1
+
+# Авто-отклик на вакансии с ТЕСТОМ через браузер. Каждые 3ч: 09,12,15,18,21 МСК, до 10 за прогон.
+0 6-18/3 * * * /bin/bash -c 'sleep $((RANDOM \% 90))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/apply_tests.py --apply --limit 10 >> /var/log/cron.log 2>&1
+
+# ГигаРекрутер-автоответчик: читает чат @Giga_recruiter_bot через user-сессию и
+# отвечает на новые вопросы интервью (LLM). Каждые 3 мин в рабочее окно 08–22 МСК
+# (05–19 UTC) + джиттер до 60с. Гейт: feat.giga + привязанная сессия.
+*/3 5-19 * * * /bin/bash -c 'sleep $((RANDOM \% 60))' && /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/giga_recruiter.py >> /var/log/cron.log 2>&1
+
+# Обновление токена каждую минуту (для всех юзеров)
+*/1 * * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python -m hh_applicant_tool refresh-token >> /dev/null 2>&1
+
+# Watchdog слушателя /connect (привязка Telegram кандидата по QR в ЛС). Раз в
+# минуту: если процесс не запущен — поднять. HH_DB_SCHEMA=u_egor только ради
+# чтения общего telegram-токена; сам матчинг идёт по всем юзерам.
+# pgrep-паттерн [t]g... не матчит собственную команду watchdog'а; запуск — в
+# run_listener.sh (чтобы «tg_connect_bot.py» не попадало в строку watchdog'а).
+* * * * * /bin/bash -c 'pgrep -f "[t]g_connect_bot.py" >/dev/null || /bin/bash /app/run_listener.sh'
+
+# Watchdog Mini App бэкенда (uvicorn на 127.0.0.1:60080). Раз в минуту поднять,
+# если не запущен. Паттерн [u]vicorn не матчит саму команду watchdog'а.
+* * * * * /bin/bash -c 'pgrep -f "[u]vicorn web_app" >/dev/null || /bin/bash /app/run_webapp.sh'
+
+# Ежедневный heartbeat/мониторинг (токен, vLLM, активность) -> очередь уведомлений.
+# Dead-man-switch: не пришла сводка утром = что-то сломалось. 08:00 МСК (старт дня).
+0 5 * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/monitor.py >> /var/log/cron.log 2>&1
+
+# Воронка откликов (отклики→ответы→интервью→отказы, по резюме) -> 🟢 в дайджест.
+# Аналитика для глаз, ничего не фильтрует. Раз в день, 08:05 МСК (05:05 UTC).
+5 5 * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/funnel.py >> /var/log/cron.log 2>&1
+
+# Единый приоритизированный дайджест уведомлений -> TG (🔴→🟡→🟢). Каждые 30 мин
+# в рабочее окно 08:00–22:00 МСК (05–19 UTC), в :15 и :45 — после задач-источников.
+15,45 5-19 * * * /usr/local/bin/python /app/run_all.py -- /usr/local/bin/python /app/send_digest.py >> /var/log/cron.log 2>&1

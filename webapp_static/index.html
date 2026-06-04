@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>hh · Кабинет</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="head">
+      <div id="avatar">·</div>
+      <div class="head-info">
+        <div id="hname">Загрузка…</div>
+        <div id="hstatus" class="pill"></div>
+      </div>
+    </header>
+
+    <div id="admin-bar" class="hidden">
+      <button id="admin-pick">👁 Просмотр аккаунта: <b id="admin-acc">—</b> <span class="chev">▾</span></button>
+    </div>
+
+    <main>
+      <!-- ПРОФИЛЬ -->
+      <section id="tab-profile" class="tab active">
+        <div class="list">
+          <div class="cell"><span class="k">Имя</span><span class="v" id="p-name">—</span></div>
+          <div class="cell"><span class="k">hh ID</span><span class="v" id="p-id">—</span></div>
+          <div class="cell"><span class="k">Резюме</span><span class="v" id="p-resume">—</span></div>
+          <div class="cell"><span class="k">Желаемая зарплата</span><span class="v" id="p-salary">—</span></div>
+          <div class="cell"><span class="k">Статус</span><span class="v" id="p-status">—</span></div>
+        </div>
+      </section>
+
+      <!-- СТАТИСТИКА -->
+      <section id="tab-stats" class="tab">
+        <div class="seg period">
+          <button data-p="today">Сегодня</button>
+          <button data-p="yesterday">Вчера</button>
+          <button class="active" data-p="week">Неделя</button>
+          <button data-p="month">Месяц</button>
+          <button data-p="all">Всё</button>
+        </div>
+        <div class="prange">
+          <input type="date" id="d-from"><span>—</span><input type="date" id="d-to">
+        </div>
+
+        <div class="gtitle">Воронка за период</div>
+        <div id="funnel" class="list pad-list"></div>
+
+        <div class="gtitle">Детально по статусам</div>
+        <div id="breakdown" class="list"></div>
+
+        <div class="gtitle">Активность бота за период</div>
+        <div class="grid">
+          <div class="stat"><div class="num" id="a-apply">—</div><div class="lbl">Откликов отправлено</div></div>
+          <div class="stat"><div class="num" id="a-tests">—</div><div class="lbl">Тестовых откликов</div></div>
+          <div class="stat"><div class="num" id="a-reply">—</div><div class="lbl">Ответов работодателям</div></div>
+          <div class="stat"><div class="num" id="a-browse">—</div><div class="lbl">Просмотров вакансий</div></div>
+          <div class="stat"><div class="num" id="a-bump">—</div><div class="lbl">Поднятий резюме</div></div>
+        </div>
+        <div class="ghint" id="next-apply" style="padding:10px 18px 0"></div>
+        <div class="gtitle">Динамика откликов</div>
+        <div id="trend" class="list pad-list"></div>
+      </section>
+
+      <!-- ОТКЛИКИ -->
+      <section id="tab-dialogs" class="tab">
+        <div class="seg period">
+          <button data-p="today">Сегодня</button>
+          <button data-p="yesterday">Вчера</button>
+          <button class="active" data-p="week">Неделя</button>
+          <button data-p="month">Месяц</button>
+          <button data-p="all">Всё</button>
+        </div>
+        <div class="chips" id="dlg-filter">
+          <button class="chip active" data-f="all">Все</button>
+          <button class="chip" data-f="sob">🤝 Собеседования</button>
+          <button class="chip" data-f="response">💬 Ответы</button>
+          <button class="chip" data-f="discard">🔴 Отказы</button>
+        </div>
+        <div class="subbar">
+          <span class="hint"><b id="dlg-count">—</b> откликов</span>
+          <div class="seg" id="dlg-sort">
+            <button class="active" data-s="date">Новые</button>
+            <button data-s="status">Статус</button>
+          </div>
+        </div>
+        <div id="dialogs"></div>
+      </section>
+
+      <!-- ФУНКЦИИ -->
+      <section id="tab-feat" class="tab">
+        <div class="gtitle">Профиль откликов</div>
+        <div class="list">
+          <label class="cell tap"><span class="k">Желаемая зарплата, ₽</span>
+            <input type="number" id="cfg-salary" inputmode="numeric" placeholder="250000"></label>
+          <button class="cell tap" id="resume-row"><span class="k">Активное резюме</span>
+            <span class="v chevron" id="resume-val">—</span></button>
+        </div>
+
+        <div class="gtitle">Фильтры вакансий</div>
+        <div class="list">
+          <label class="cell toggle"><span class="t"><b>Только по договору ГПХ</b><small>лишь вакансии с оформлением ГПХ</small></span>
+            <input type="checkbox" id="cfg-gph"><i></i></label>
+        </div>
+        <div class="ghint">Применяется ко всем откликам — обычным и тестовым. Раздел будем расширять.</div>
+
+        <div class="gtitle">Обычные отклики</div>
+        <div class="list">
+          <label class="cell toggle"><span class="t"><b>Авто-отклики</b><small>на подходящие вакансии</small></span>
+            <input type="checkbox" data-feat="apply"><i></i></label>
+          <label class="cell tap"><span class="k">Лимит в день <em id="cap-limit">(макс 200)</em></span>
+            <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></label>
+        </div>
+        <div class="ghint">Серверный потолок hh — 200 откликов в сутки.</div>
+
+        <div class="gtitle">Отклики с тестами</div>
+        <div class="list">
+          <label class="cell toggle"><span class="t"><b>Авто-тесты</b><small>отклик + тест через браузер</small></span>
+            <input type="checkbox" data-feat="tests"><i></i></label>
+          <label class="cell tap"><span class="k">Лимит в день <em id="cap-tlimit">(макс 30)</em></span>
+            <input type="number" id="cfg-tlimit" inputmode="numeric" min="0" max="30"></label>
+        </div>
+        <div class="ghint">Медленный браузерный флоу — рекомендуем 10–20.</div>
+
+        <div class="gtitle">Прочее</div>
+        <div class="list">
+          <label class="cell toggle"><span class="t"><b>Ответы работодателям</b><small>авто-ответы на сообщения</small></span>
+            <input type="checkbox" data-feat="reply"><i></i></label>
+          <label class="cell toggle"><span class="t"><b>Активность + поднятие</b><small>просмотр вакансий, авто-bump</small></span>
+            <input type="checkbox" data-feat="browse"><i></i></label>
+          <label class="cell toggle"><span class="t"><b>Уведомления и дайджест</b><small>важное в личку: интервью, контакты</small></span>
+            <input type="checkbox" data-feat="notify"><i></i></label>
+          <label class="cell toggle"><span class="t"><b>ГигаРекрутер</b><small>авто-ответы в чате ГР</small></span>
+            <input type="checkbox" data-feat="giga"><i></i></label>
+        </div>
+        <div class="ghint" id="giga-hint"></div>
+      </section>
+
+      <!-- ДЕЛА -->
+      <section id="tab-actions" class="tab">
+        <div class="subbar"><span class="hint"><b id="act-count">—</b> дел — нужно сделать самому</span></div>
+        <div id="actions"></div>
+      </section>
+    </main>
+
+    <nav id="tabs">
+      <button class="active" data-tab="profile"><span class="ic">👤</span><span>Профиль</span></button>
+      <button data-tab="stats"><span class="ic">📊</span><span>Стата</span></button>
+      <button data-tab="dialogs"><span class="ic">📋</span><span>Отклики</span></button>
+      <button data-tab="actions"><span class="ic">✅</span><span>Дела</span></button>
+      <button data-tab="feat"><span class="ic">⚙️</span><span>Функции</span></button>
+    </nav>
+  </div>
+
+  <!-- переписка -->
+  <div id="modal" class="sheet-wrap hidden">
+    <div class="sheet">
+      <div class="sheet-grip"></div>
+      <div class="sheet-head"><div class="sheet-title" id="m-title">—</div>
+        <div class="hint" id="m-emp"></div></div>
+      <div id="m-body" class="sheet-body"></div>
+      <a id="m-hh" class="sheet-action hidden" target="_blank">Открыть на hh.ru ↗</a>
+    </div>
+  </div>
+
+  <!-- пикер (резюме) -->
+  <div id="picker" class="sheet-wrap hidden">
+    <div class="sheet">
+      <div class="sheet-grip"></div>
+      <div class="sheet-head"><div class="sheet-title" id="pk-title">Выбор</div></div>
+      <div id="pk-body" class="sheet-body"></div>
+    </div>
+  </div>
+
+  <div id="err" class="hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

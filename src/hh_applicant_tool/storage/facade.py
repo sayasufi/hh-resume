@@ -1,0 +1,24 @@
+from __future__ import annotations
+
+import psycopg
+
+from .repositories.contacts import VacancyContactsRepository
+from .repositories.employers import EmployersRepository
+from .repositories.negotiations import NegotiationRepository
+from .repositories.resumes import ResumesRepository
+from .repositories.settings import SettingsRepository
+from .repositories.vacancies import VacanciesRepository
+from .utils import init_db
+
+
+class StorageFacade:
+    """Единая точка доступа к persistence-слою."""
+
+    def __init__(self, conn: psycopg.AsyncConnection):
+        init_db(conn)
+        self.employers = EmployersRepository(conn)
+        self.vacancies = VacanciesRepository(conn)
+        self.vacancy_contacts = VacancyContactsRepository(conn)
+        self.negotiations = NegotiationRepository(conn)
+        self.settings = SettingsRepository(conn)
+        self.resumes = ResumesRepository(conn)

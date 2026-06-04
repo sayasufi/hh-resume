@@ -1,0 +1,8 @@
+{
+  "editor.wordWrap": "on",
+  "python.analysis.autoImportCompletions": true,
+  "[shellscript]": {
+    "editor.defaultFormatter": null,
+    "editor.formatOnSave": false
+  }
+}

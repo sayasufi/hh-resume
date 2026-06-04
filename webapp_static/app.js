@@ -52,6 +52,9 @@ function renderMe(d) {
     `<div class="cell"><span class="k">${b.emoji} ${esc(b.label)}</span>`
     + `<span class="v"><b>${b.value}</b><em style="color:var(--hint);font-weight:400;margin-left:6px">${b.pct}%</em></span></div>`).join("")
     : '<div class="empty">Нет данных за период</div>';
+  $("#next-apply").textContent = d.next_apply
+    ? "⏱ Следующие обычные отклики: " + d.next_apply
+    : "⏸ Обычные отклики на паузе — включи «Авто-отклики» в Функциях.";
 }
 
 function renderTrend(days) {

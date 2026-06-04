@@ -11,6 +11,7 @@ import hmac
 import json
 import os
 import time
+from datetime import datetime, timedelta
 from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, Header, HTTPException
@@ -505,6 +506,25 @@ def _funnel(apps: int, invitations: int, interviews: int) -> list:
     return out
 
 
+def _next_apply(apply_on: bool):
+    """Когда следующий запуск обычных откликов (cron `0 5-19 UTC` = ежечасно 08–22 МСК)."""
+    if not apply_on:
+        return None
+    now = datetime.utcnow()
+    nxt = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    for _ in range(48):
+        if 5 <= nxt.hour <= 19:
+            break
+        nxt += timedelta(hours=1)
+    msk = nxt + timedelta(hours=3)
+    tomorrow = msk.date() != (now + timedelta(hours=3)).date()
+    mins = max(0, int((nxt - now).total_seconds() // 60))
+    label = ("завтра " if tomorrow else "") + "~" + msk.strftime("%H:%M") + " МСК"
+    if not tomorrow and mins <= 90:
+        label += f" (через {mins} мин)"
+    return label
+
+
 async def _build_me(account: str, dfrom=None, dto=None) -> dict:
     key = (account, dfrom, dto)
     cached = _me_cache.get(key)
@@ -537,6 +557,7 @@ async def _build_me(account: str, dfrom=None, dto=None) -> dict:
             "funnel": funnel,
             "breakdown": _breakdown(counts) if has_cache else [],
         },
+        "next_apply": _next_apply(flags[0]),  # flags[0] = feat.apply
     }
     _me_cache[key] = (time.time(), payload)
     return payload

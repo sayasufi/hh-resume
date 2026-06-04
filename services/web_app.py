@@ -22,7 +22,7 @@ from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
 
-STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webapp_static")
+STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webapp_static")
 FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga")  # тумблеры
 _INITDATA_MAX_AGE = 86400  # сутки
 

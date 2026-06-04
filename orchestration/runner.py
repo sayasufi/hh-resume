@@ -16,6 +16,9 @@ async def run_op(command: list[str], platform: str, target: str, timeout: int = 
         raise ValueError(f"no context env mapping for platform: {platform}")
     env = {**os.environ, ctx_env: target}
     env.pop("HH_DB_SCHEMA", None)  # единая схема: изоляция по контексту цели
+    # /app/services на пути — для сиблинг-импортов перенесённых скриптов
+    env["PYTHONPATH"] = "/app/services" + (
+        ":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     proc = await asyncio.create_subprocess_exec(
         *command,
         env=env,

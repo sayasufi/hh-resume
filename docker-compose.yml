@@ -64,7 +64,7 @@ services:
     container_name: hh_web
     image: hh_applicant_tool:latest
     restart: always
-    command: python -u -m uvicorn web_app:app --host 0.0.0.0 --port 60080
+    command: python -u -m uvicorn services.web_app:app --host 0.0.0.0 --port 60080
     depends_on:
       db:
         condition: service_healthy
@@ -85,7 +85,7 @@ services:
     container_name: hh_listener
     image: hh_applicant_tool:latest
     restart: always
-    command: python -u /app/tg_connect_bot.py
+    command: python -u /app/services/tg_connect_bot.py
     depends_on:
       db:
         condition: service_healthy
@@ -97,6 +97,7 @@ services:
       - HH_DB_DSN=postgresql://hh:hh_local_pw@db:5432/hh
       - HH_DB_SCHEMA=public
       - HH_ACCOUNT=egor
+      - PYTHONPATH=/app/services
     networks:
       - default
       - test-llm

@@ -59,6 +59,13 @@ def _ensure_tables() -> None:
                 "account text NOT NULL, day date NOT NULL, kind text NOT NULL, "
                 "count int NOT NULL DEFAULT 0, PRIMARY KEY (account, day, kind))"
             )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS giga_queue ("
+                "account text NOT NULL, token text NOT NULL, vacancy text, nid bigint, "
+                "status text NOT NULL DEFAULT 'pending', turns int NOT NULL DEFAULT 0, "
+                "created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(), "
+                "PRIMARY KEY (account, token))"
+            )
             # действия-«дела»: колонка done могла отсутствовать в старой таблице
             cur.execute("ALTER TABLE action_items "
                         "ADD COLUMN IF NOT EXISTS done boolean NOT NULL DEFAULT false")

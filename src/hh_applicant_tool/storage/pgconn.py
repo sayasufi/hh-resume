@@ -75,6 +75,12 @@ CREATE TABLE IF NOT EXISTS activity_daily (
     account text NOT NULL, day date NOT NULL, kind text NOT NULL,
     count int NOT NULL DEFAULT 0, PRIMARY KEY (account, day, kind)
 );
+CREATE TABLE IF NOT EXISTS giga_queue (
+    account text NOT NULL, token text NOT NULL, vacancy text, nid bigint,
+    status text NOT NULL DEFAULT 'pending', turns int NOT NULL DEFAULT 0,
+    created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
+    PRIMARY KEY (account, token)
+);
 CREATE INDEX IF NOT EXISTS idx_notif_unsent
     ON notifications(account, sent_at, priority, created_at);
 CREATE INDEX IF NOT EXISTS idx_vac_upd ON vacancies(updated_at);

@@ -290,9 +290,52 @@ async def start_connect(message: Message, state: FSMContext):
     )
 
 
+def _e164(phone) -> str | None:
+    """Нормализовать номер в формат +<код><номер> (РФ-эвристика)."""
+    d = re.sub(r"\D", "", str(phone or ""))
+    if len(d) == 10:
+        d = "7" + d
+    elif len(d) == 11 and d[0] == "8":
+        d = "7" + d[1:]
+    return "+" + d if 11 <= len(d) <= 15 else None
+
+
+async def _connect_send_code(message: Message, state: FSMContext, phone: str) -> None:
+    """Запросить у Telegram код входа для phone, перейти к вводу кода."""
+    await message.answer(f"⏳ Отправляю код входа на {phone}…",
+                         reply_markup=ReplyKeyboardRemove())
+    client = TelegramClient(StringSession(), API_ID, API_HASH)
+    try:
+        await client.connect()
+        sent = await client.send_code_request(phone)
+    except PhoneNumberInvalidError:
+        await client.disconnect()
+        await state.set_state(Connect.phone)
+        await message.answer("❌ Telegram не знает такой номер. Введи номер этого "
+                             "Telegram вручную (напр. +79991234567):")
+        return
+    except Exception as e:
+        await client.disconnect()
+        await message.answer(f"❌ Не удалось отправить код ({type(e).__name__}). Повтори /connect.")
+        return
+    _pending[message.chat.id] = {"client": client, "phone": phone,
+                                 "hash": sent.phone_code_hash}
+    await state.set_state(Connect.code)
+    await message.answer(
+        "📲 Telegram прислал тебе <b>код для входа</b> (в чат «Telegram», "
+        "служебное сообщение). Введи его сюда (только цифры):", parse_mode="HTML",
+    )
+
+
 @dp.callback_query(F.data == "conn:code")
 async def cb_conn_code(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
+    # уже привязан /link -> номер известен (hh_phone), не спрашиваем
+    linked = _account_by("tg_user_id", cq.from_user.id)
+    phone = _e164((pgconn.app_config(account=linked).get("hh_phone"))) if linked else None
+    if phone:
+        await _connect_send_code(cq.message, state, phone)
+        return
     await state.set_state(Connect.phone)
     kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="📱 Поделиться своим номером", request_contact=True)]],
@@ -319,32 +362,11 @@ async def conn_got_phone(message: Message, state: FSMContext):
         raw = message.contact.phone_number or ""
     else:
         raw = (message.text or "").strip()
-    digits = re.sub(r"\D", "", raw)
-    if not (10 <= len(digits) <= 15):
+    phone = _e164(raw)
+    if not phone:
         await message.answer("❌ Не похоже на номер. Введи в формате +79991234567:")
         return
-    phone = "+" + digits
-    await message.answer("⏳ Отправляю запрос в Telegram…",
-                         reply_markup=ReplyKeyboardRemove())
-    client = TelegramClient(StringSession(), API_ID, API_HASH)
-    try:
-        await client.connect()
-        sent = await client.send_code_request(phone)
-    except PhoneNumberInvalidError:
-        await client.disconnect()
-        await message.answer("❌ Telegram не знает такой номер. Проверь и повтори.")
-        return
-    except Exception as e:
-        await client.disconnect()
-        await message.answer(f"❌ Не удалось отправить код ({type(e).__name__}). Повтори /connect.")
-        return
-    _pending[message.chat.id] = {"client": client, "phone": phone,
-                                 "hash": sent.phone_code_hash}
-    await state.set_state(Connect.code)
-    await message.answer(
-        "📲 Telegram прислал тебе <b>код для входа</b> (в чат «Telegram», "
-        "служебное сообщение). Введи его сюда (только цифры):", parse_mode="HTML",
-    )
+    await _connect_send_code(message, state, phone)
 
 
 @dp.message(Connect.code)

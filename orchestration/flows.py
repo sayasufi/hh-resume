@@ -39,6 +39,8 @@ JOBS: list[dict] = [
          feature="notify", cron="15,45 5-19 * * *", jitter=0,    tags=[],          timeout=300),
     dict(name="health-check",   command=["python", "/app/services/health_check.py"],
          feature=None,     cron="0 9,17 * * *",     jitter=0,    tags=[],          timeout=300),
+    dict(name="auto-screen",    command=["python", "/app/services/auto_screen.py", "--live"],
+         feature="giga",   cron="50 9-18/3 * * *",  jitter=400,  tags=["llm"],     timeout=1900),
 ]
 JOBS_BY_NAME: dict[str, dict] = {j["name"]: j for j in JOBS}
 

@@ -148,14 +148,68 @@ async function openDialog(id) {
 
 // ── функции / настройки ──
 let RESUMES = [], RESUME_ID = "";
-function bindToggles(features, tgConnected) {
+// привязка GetMatch без Telegram (логин + код — как hh OTP)
+function renderGmLink(st) {
+  const box = $("#gm-link"), hint = $("#gm-link-hint");
+  if (!box) return;
+  if (st.getmatch_linked) {
+    box.style.display = "";
+    hint.textContent = "✅ GetMatch привязан" +
+      (st.getmatch_username ? " (" + st.getmatch_username + ")" : "") + " — можно включать тумблер.";
+    $("#gm-login-row").style.display = "none";
+    $("#gm-code-row").style.display = "none";
+    return;
+  }
+  if (st.tg_connected) { box.style.display = "none"; return; }
+  box.style.display = "";
+  hint.textContent = "Привязать GetMatch без Telegram: логин (email/username) → код → привязать.";
+  $("#gm-login-row").style.display = "";
+}
+let GM_LOGIN = "";
+function wireGmLink() {
+  const otpBtn = $("#gm-otp-btn"), linkBtn = $("#gm-link-btn"), msg = $("#gm-link-msg");
+  if (!otpBtn || otpBtn._wired) return;
+  otpBtn._wired = true;
+  otpBtn.onclick = async () => {
+    const login = ($("#gm-login").value || "").trim();
+    if (!login) { msg.textContent = "Введите логин"; return; }
+    otpBtn.disabled = true; msg.textContent = "Отправляю код…";
+    try {
+      const r = await api("/api/getmatch/otp", { method: "POST", body: JSON.stringify({ login }) });
+      GM_LOGIN = login;
+      $("#gm-code-row").style.display = "";
+      msg.textContent = "Код отправлен" + (r.sent_email ? " на email" : "") +
+        (r.sent_tg ? " и в Telegram" : "") + " — впишите его.";
+      hap("light");
+    } catch (e) { msg.textContent = (e && e.message) || "Не удалось отправить код"; }
+    finally { otpBtn.disabled = false; }
+  };
+  linkBtn.onclick = async () => {
+    const code = ($("#gm-code").value || "").trim();
+    if (!code) { msg.textContent = "Введите код"; return; }
+    linkBtn.disabled = true; msg.textContent = "Привязываю…";
+    try {
+      const r = await api("/api/getmatch/link",
+        { method: "POST", body: JSON.stringify({ login: GM_LOGIN, code }) });
+      msg.textContent = "✅ Привязано" + (r.name ? ": " + r.name : "") + " — включаю тумблер…";
+      hap("light");
+      const st = await api("/api/settings");
+      bindToggles(st.features, st.tg_connected, st.getmatch_linked);
+      renderGmLink(st);
+    } catch (e) { msg.textContent = (e && e.message) || "Не удалось привязать"; }
+    finally { linkBtn.disabled = false; }
+  };
+}
+function bindToggles(features, tgConnected, gmLinked) {
   document.querySelectorAll(".toggle input[data-feat]").forEach((inp) => {
     inp.checked = !!features[inp.dataset.feat];
-    // ГигаРекрутер нельзя включить без подключённого Telegram
-    const lockTg = (inp.dataset.feat === "giga" || inp.dataset.feat === "getmatch") && !tgConnected;
-    inp.disabled = lockTg;
-    if (lockTg) inp.checked = false;
-    inp.closest(".toggle").classList.toggle("disabled", lockTg);
+    // giga нужен Telegram; getmatch — Telegram ИЛИ привязка логином+кодом
+    const lockGiga = inp.dataset.feat === "giga" && !tgConnected;
+    const lockGm = inp.dataset.feat === "getmatch" && !tgConnected && !gmLinked;
+    const lock = lockGiga || lockGm;
+    inp.disabled = lock;
+    if (lock) inp.checked = false;
+    inp.closest(".toggle").classList.toggle("disabled", lock);
     inp.onchange = async () => {
       const row = inp.closest(".toggle"); row.classList.add("busy");
       try { await save(inp.dataset.feat, inp.checked); hap("light"); }
@@ -383,7 +437,8 @@ async function boot() {
     if ($("#d-from")) { $("#d-from").value = PERIOD.dfrom; $("#d-to").value = PERIOD.dto; }
     const [me, st] = await Promise.all([api("/api/me" + qp()), api("/api/settings")]);
     renderMe(me); setupAdmin(me);
-    bindToggles(st.features, st.tg_connected); bindConfig(st.config, st.resumes || []);
+    bindToggles(st.features, st.tg_connected, st.getmatch_linked); bindConfig(st.config, st.resumes || []);
+    renderGmLink(st); wireGmLink();
     $("#giga-hint").textContent = st.tg_connected
       ? "✅ Telegram подключён — ГигаРекрутер сам проходит интервью за вас."
       : "⚠️ Чтобы включить ГигаРекрутера, подключите Telegram: команда /connect в боте.";

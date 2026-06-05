@@ -224,3 +224,12 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 .gm-st.ok{background:#1c3a26;color:#5fdc8b}
 .gm-st.bad{background:#3a1c1f;color:#ff8b8b}
 .gm-st.wait{background:#2a2c33;color:#9aa3b2}
+
+/* getmatch привязка без Telegram */
+.gm-link{margin-top:10px;padding:10px;background:#1b1d24;border-radius:12px}
+.gm-link-hint{font-size:12px;color:#9aa3b2;margin-bottom:8px}
+.gm-link-row{display:flex;gap:8px;margin-bottom:8px}
+.gm-link-row input{flex:1;min-width:0;padding:8px 10px;border-radius:9px;border:1px solid #2a2c33;background:#13151a;color:#e7eaf0;font-size:14px}
+.gm-link-row button{padding:8px 12px;border-radius:9px;border:0;background:#3d6df0;color:#fff;font-size:13px;font-weight:600;white-space:nowrap}
+.gm-link-row button:disabled{opacity:.5}
+.gm-link-msg{font-size:12px;color:#cfd6e2;min-height:14px}

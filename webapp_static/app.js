@@ -50,7 +50,6 @@ function renderMe(d) {
   const sk = p.status_kind || (stt.includes("работает") ? "ok" : stt.indexOf("всё") === 0 ? "off" : "paused");
   st.className = "pill " + (sk === "ok" ? "good" : sk === "off" ? "bad" : "warn");
   $("#p-name").textContent = p.name || "—";
-  $("#p-id").textContent = p.hh_id || "—";
   const max = Math.max(1, ...s.funnel.map((f) => f.value));
   $("#funnel").innerHTML = s.funnel.map((f) =>
     `<div class="fbar"><div class="fill" style="width:${Math.round(f.value / max * 100)}%"></div>`
@@ -161,15 +160,8 @@ let RESUMES = [], RESUME_ID = "";
 function renderGmLink(st) {
   const box = $("#gm-link"), hint = $("#gm-link-hint");
   if (!box) return;
-  if (st.getmatch_linked) {
-    box.style.display = "";
-    hint.textContent = "✅ GetMatch привязан" +
-      (st.getmatch_username ? " (" + st.getmatch_username + ")" : "") + " — можно включать тумблер.";
-    $("#gm-login-row").style.display = "none";
-    $("#gm-code-row").style.display = "none";
-    return;
-  }
-  if (st.tg_connected) { box.style.display = "none"; return; }
+  // привязано — статус показывается на вкладке «Профиль», здесь форму прячем
+  if (st.getmatch_linked || st.tg_connected) { box.style.display = "none"; return; }
   box.style.display = "";
   // username берём из самого Telegram (Mini App его знает) — поле ввода только fallback
   const u = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.username) || "";
@@ -499,8 +491,8 @@ async function boot() {
     bindToggles(st.features, st.tg_connected, st.getmatch_linked); bindConfig(st.config, st.resumes || []);
     renderLinks(st); renderGmLink(st); wireGmLink();
     $("#giga-hint").textContent = st.tg_connected
-      ? "✅ Telegram подключён — ГигаРекрутер сам проходит интервью за вас."
-      : "⚠️ Чтобы включить ГигаРекрутера, подключите Telegram: команда /connect в боте.";
+      ? ""
+      : "⚠️ Чтобы включить ГигаРекрутера, дайте доступ к Telegram: команда /connect в боте.";
     loadDialogs(); loadActivity(); loadActions(); loadGiga(); loadGetmatchApps();
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {

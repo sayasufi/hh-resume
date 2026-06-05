@@ -508,8 +508,9 @@ def _source_health(account: str) -> list:
     else:
         out.append(row("hh.ru", *by_run(h_apply), h_apply))
 
+    # GetMatch и ГигаРекрутер — opt-in (нужна привязка): смотрим ЯВНУЮ настройку, не дефолт-True
     h_gm = pgconn.read_health("getmatch", account)
-    if not pgconn.feature_enabled("getmatch", account):
+    if not pgconn.get_setting("feat.getmatch", None, account):
         out.append(row("GetMatch", "off", "выключено", "", h_gm))
     elif not (pgconn.get_setting("getmatch.session", "", account) or cfg.get("tg_user_session")):
         out.append(row("GetMatch", "down", "не привязан", "привяжи в Функциях", None))
@@ -517,7 +518,7 @@ def _source_health(account: str) -> list:
         out.append(row("GetMatch", *by_run(h_gm), h_gm))
 
     h_g = pgconn.read_health("giga", account)
-    if not pgconn.feature_enabled("giga", account):
+    if not pgconn.get_setting("feat.giga", None, account):
         out.append(row("ГигаРекрутер", "off", "выключено", "", h_g))
     elif not cfg.get("tg_user_session"):
         out.append(row("ГигаРекрутер", "down", "нет доступа к Telegram", "сделай /connect в боте", None))

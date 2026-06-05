@@ -144,9 +144,11 @@ class GetMatchAPI:
         r.raise_for_status()
         return r.json().get("offers", [])
 
-    async def apply(self, offer: dict, me: dict) -> httpx.Response:
-        """Откликнуться на вакансию (multipart, данные из профиля + локация вакансии)."""
+    async def apply(self, offer: dict, me: dict, cover_letter: str = "") -> httpx.Response:
+        """Откликнуться (multipart: профиль + локация + опц. сопроводительное письмо)."""
         form = {k: (None, v) for k, v in apply_form(offer, me).items()}
+        if cover_letter:
+            form["cover_letter"] = (None, cover_letter)
         return await self.hc.post(f"/api/offers/{offer['id']}/apply", files=form)
 
     async def applications(self, limit: int = 100) -> list:

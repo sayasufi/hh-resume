@@ -1,7 +1,8 @@
 """Авто-отклик и статусы GetMatch через API (getmatch.ru). Клиент — services/getmatch_api.py.
 
 Отклик: GET /api/offers (exclude_applied) → POST /api/offers/{id}/apply. Дедуп seen('getmatch'),
-дневной лимит, человеческие паузы. Вакансии с обязательным сопроводительным письмом пока пропускаем.
+дневной лимит, человеческие паузы. Сопроводительное письмо генерируется LLM (резюме кандидата +
+вакансия) и шлётся при каждом отклике; обяз.-письмо без LLM пропускаем.
 Статусы: после откликов синхронизируем все наши отклики (GET /api/applications/candidate) в таблицу
 getmatch_apps (status/status_readable/reject_reason/company) — это источник для кабинета.
 
@@ -71,6 +72,42 @@ def _sync_statuses(account: str, apps: list) -> int:
     return n
 
 
+LETTER_SYS = (
+    "Ты пишешь короткое сопроводительное письмо на русском от первого лица для отклика на "
+    "IT-вакансию. 3-5 предложений, по делу, без воды, клише и плейсхолдеров; не упоминай, что ты "
+    "ИИ. Опирайся только на факты резюме. Без темы и заголовка — только текст письма."
+)
+
+
+def _letter_llm(cfg):
+    """LLM для сопроводительных писем (как в apply_tests). None если LLM не настроена."""
+    oa = cfg.get("openai") or {}
+    if not oa.get("token"):
+        return None
+    from hh_applicant_tool.ai import ChatOpenAI
+    resume = (cfg.get("resume_text") or "").strip()
+    sysp = LETTER_SYS + (("\n\nРезюме:\n" + resume) if resume else "")
+    return ChatOpenAI(token=oa["token"], model=oa.get("model"),
+                      completion_endpoint=oa.get("completion_endpoint"),
+                      system_prompt=sysp, temperature=0.5, max_completion_tokens=300)
+
+
+async def _gen_letter(llm, offer) -> str:
+    """Сгенерировать сопроводительное под вакансию (пусто при сбое/без LLM)."""
+    if not llm:
+        return ""
+    pos = offer.get("position") or ""
+    comp = (offer.get("company") or {}).get("name") or ""
+    try:
+        t = (await llm.send_message(
+            f"Вакансия: «{pos}»" + (f" в {comp}" if comp else "") +
+            ". Напиши сопроводительное письмо.")).strip()
+        return t if len(t) >= 20 else ""
+    except Exception as e:
+        print(f"getmatch: письмо не сгенерировано: {repr(e)[:60]}")
+        return ""
+
+
 async def run():
     account = pgconn.get_account()
     if not pgconn.feature_enabled("getmatch"):
@@ -98,6 +135,7 @@ async def run():
             return
         print(f"getmatch: вошли как {me.get('first_name')} {me.get('last_name')}")
 
+        letter_llm = _letter_llm(cfg)
         limit = int(pgconn.get_setting("getmatch.max_per_day", DEFAULT_MAX) or DEFAULT_MAX)
         sent_today = _today_count(account)
         seen = pgconn.seen_keys(SEEN_KIND)
@@ -113,16 +151,17 @@ async def run():
                 vid = str(o.get("id") or "")
                 if not vid or vid in seen:
                     continue
-                if o.get("cover_letter_required"):
-                    print(f"getmatch: vac {vid} требует сопроводительное — пропуск (v1)")
-                    continue
                 pos = (o.get("position") or "")[:42]
+                letter = await _gen_letter(letter_llm, o)
+                if o.get("cover_letter_required") and not letter:
+                    print(f"getmatch: vac {vid} требует письмо, LLM недоступна — пропуск")
+                    continue
                 if DRY:
-                    print(f"getmatch[dry]: откликнулся бы на {pos} (vac {vid})")
+                    print(f"getmatch[dry]: откликнулся бы на {pos} (vac {vid}); письмо={len(letter)} симв.")
                     seen.add(vid); applied += 1
                     continue
                 try:
-                    r = await api.apply(o, me)
+                    r = await api.apply(o, me, cover_letter=letter)
                 except Exception as e:
                     print(f"getmatch: apply vac {vid} ошибка: {repr(e)[:70]}")
                     continue

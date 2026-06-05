@@ -51,9 +51,6 @@ function renderMe(d) {
   st.className = "pill " + (sk === "ok" ? "good" : sk === "off" ? "bad" : "warn");
   $("#p-name").textContent = p.name || "—";
   $("#p-id").textContent = p.hh_id || "—";
-  $("#p-resume").textContent = p.resume || "—";
-  $("#p-salary").textContent = p.salary ? (p.salary + " ₽") : "—";
-  $("#p-status").textContent = p.status || "—";
   const max = Math.max(1, ...s.funnel.map((f) => f.value));
   $("#funnel").innerHTML = s.funnel.map((f) =>
     `<div class="fbar"><div class="fill" style="width:${Math.round(f.value / max * 100)}%"></div>`
@@ -67,6 +64,18 @@ function renderMe(d) {
   $("#next-apply").textContent = d.next_apply
     ? "⏱ Следующие обычные отклики: " + d.next_apply
     : "⏸ Обычные отклики на паузе — включи «Авто-отклики» в Функциях.";
+}
+
+// статусы привязок на вкладке «Профиль» (из /api/settings)
+function renderLinks(st) {
+  const set = (id, ok, yes, no) => {
+    const el = $(id); if (!el) return;
+    el.textContent = ok ? yes : no;
+    el.style.color = ok ? "#5fdc8b" : "#9aa3b2";
+  };
+  set("#p-hh", st.hh_linked, "✅ привязан", "— не привязан");
+  set("#p-gm", st.getmatch_linked, "✅ привязан", "— не привязан");
+  set("#p-tg", st.tg_connected, "✅ есть доступ", "— нет доступа");
 }
 
 function renderTrend(days) {
@@ -204,7 +213,7 @@ function wireGmLink() {
       hap("light");
       const st = await api("/api/settings");
       bindToggles(st.features, st.tg_connected, st.getmatch_linked);
-      renderGmLink(st);
+      renderGmLink(st); renderLinks(st);
     } catch (e) { msg.textContent = (e && e.message) || "Не удалось привязать"; }
     finally { linkBtn.disabled = false; }
   };
@@ -488,7 +497,7 @@ async function boot() {
     const [me, st] = await Promise.all([api("/api/me" + qp()), api("/api/settings")]);
     renderMe(me); setupAdmin(me);
     bindToggles(st.features, st.tg_connected, st.getmatch_linked); bindConfig(st.config, st.resumes || []);
-    renderGmLink(st); wireGmLink();
+    renderLinks(st); renderGmLink(st); wireGmLink();
     $("#giga-hint").textContent = st.tg_connected
       ? "✅ Telegram подключён — ГигаРекрутер сам проходит интервью за вас."
       : "⚠️ Чтобы включить ГигаРекрутера, подключите Telegram: команда /connect в боте.";

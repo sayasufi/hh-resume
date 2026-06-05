@@ -692,20 +692,33 @@ async def api_settings(account: str = None,
     }
     return {"features": features, "config": config,
             "resumes": await _resume_list(account),
+            # привязан ли hh (есть токен)
+            "hh_linked": bool(cfg.get("token")),
             # подключён ли Telegram-юзербот (нужен для авто-ГигаРекрутера)
-            "tg_connected": bool(cfg.get("tg_user_session"))}
+            "tg_connected": bool(cfg.get("tg_user_session")),
+            # привязан ли GetMatch (по сессии) — можно включать без Telegram
+            "getmatch_linked": bool(await asyncio.to_thread(
+                pgconn.get_setting, "getmatch.session", "", account)),
+            "getmatch_username": await asyncio.to_thread(
+                pgconn.get_setting, "getmatch.username", "", account) or ""}
 
 
 async def _set_config(account: str, key: str, value) -> None:
     if key in FEATURES:
         # ГигаРекрутер нельзя включить без подключённого Telegram (user-сессии):
         # бот действует от лица пользователя в чате @Giga_recruiter_bot.
-        if key in ("giga", "getmatch") and bool(value):
+        if key == "giga" and bool(value):
             cfg = await asyncio.to_thread(pgconn.app_config, account)
             if not cfg.get("tg_user_session"):
                 raise HTTPException(
                     400, "Подключите Telegram (кнопка «Подключить» / команда /connect "
                          "в боте), чтобы включить ГигаРекрутера.")
+        if key == "getmatch" and bool(value):
+            cfg = await asyncio.to_thread(pgconn.app_config, account)
+            linked = await asyncio.to_thread(pgconn.get_setting, "getmatch.session", "", account)
+            if not cfg.get("tg_user_session") and not linked:
+                raise HTTPException(
+                    400, "Сначала привяжите GetMatch (логин + код) или подключите Telegram.")
         await asyncio.to_thread(pgconn.set_setting, f"feat.{key}", bool(value), account)
     elif key == "salary":
         cfg = await asyncio.to_thread(pgconn.app_config, account)
@@ -806,6 +819,40 @@ async def api_getmatch(account: str = None,
                        x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data, account)
     return {"applications": await asyncio.to_thread(_getmatch_apps, account)}
+
+
+@app.post("/api/getmatch/otp")
+async def api_getmatch_otp(body: dict, account: str = None,
+                           x_init_data: str = Header(None, alias="X-Init-Data")):
+    """Шаг 1 привязки: запросить код входа GetMatch (на email/Telegram)."""
+    account = await _auth(x_init_data, account)
+    login = (body.get("login") or "").strip()
+    if not login:
+        raise HTTPException(400, "Укажите логин GetMatch (email или username)")
+    from services.getmatch_api import request_otp, GetMatchError
+    try:
+        res = await request_otp(login)
+    except GetMatchError as e:
+        raise HTTPException(400, str(e))
+    return {"sent_email": bool(res.get("sent_email")), "sent_tg": bool(res.get("sent_tg"))}
+
+
+@app.post("/api/getmatch/link")
+async def api_getmatch_link(body: dict, account: str = None,
+                            x_init_data: str = Header(None, alias="X-Init-Data")):
+    """Шаг 2 привязки: подтвердить код → сохранить сессию (без Telegram /connect)."""
+    account = await _auth(x_init_data, account)
+    login = (body.get("login") or "").strip()
+    code = (body.get("code") or "").strip()
+    if not login or not code:
+        raise HTTPException(400, "Нужны логин и код")
+    from services.getmatch_api import authorize_with_code, GetMatchError
+    try:
+        me = await authorize_with_code(account, login, code)
+    except GetMatchError as e:
+        raise HTTPException(400, str(e))
+    name = ((me.get("first_name") or "") + " " + (me.get("last_name") or "")).strip()
+    return {"ok": True, "name": name}
 
 
 @app.get("/healthz")

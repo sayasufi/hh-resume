@@ -192,6 +192,9 @@ def save_link(account, enc_sess, tg_id):
         conn.commit()
     finally:
         conn.close()
+    # Telegram подключён = кандидат хочет авто-интервью → сразу включаем ГигаРекрутера,
+    # иначе ГР не запустится (нужен feat.giga) и приглашения-скрининги зависнут.
+    pgconn.set_setting("feat.giga", True, account=account)
 
 
 # --- QR-привязка ---

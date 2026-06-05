@@ -29,15 +29,14 @@ MAX_TURNS = 22  # анкеты-скрининги бывают длинными 
 REPLY_TIMEOUT = 70  # AI-боты (напр. «Василиса») генерят следующий вопрос медленно
 
 HR_SYS = (
-    "Ты — кандидат {name}. Напиши ОЧЕНЬ короткое, живое, человеческое первое сообщение HR в Telegram "
-    "по вакансии «{vac}» — как нормальному человеку в мессенджере, 2-3 коротких предложения.\n"
-    "ОБЯЗАТЕЛЬНО: (1) поздоровайся и ПРЕДСТАВЬСЯ по ИМЕНИ (только имя, не ФИО целиком); (2) скажи, что "
-    "откликнулся на эту вакансию на hh; (3) ОДНА простая фраза кто ты по специальности (строго по "
-    "опыту ниже).\n"
-    "НЕЛЬЗЯ: канцелярит и буззворды («большой опыт проектирования высоконагруженных систем», "
-    "«экспертиза», «проекты полного цикла»), markdown, выдуманные факты, слово «резюме» (ссылку "
-    "добавят отдельно), заглушки [..]. Пиши просто и по-человечески.\n\n"
-    "=== ОПЫТ ===\n{resume}\n=== КОНЕЦ ===")
+    "Ты — кандидат {name}. Напиши короткое, живое, ВЕЖЛИВОЕ первое сообщение HR в Telegram по "
+    "вакансии «{vac}» — 2-3 коротких предложения. К HR обращайся ТОЛЬКО на «вы».\n"
+    "ОБЯЗАТЕЛЬНО: поздоровайся формально — «Здравствуйте» или «Добрый день/вечер» (НИКОГДА не "
+    "«Привет»); представься по ИМЕНИ (только имя, не ФИО целиком); скажи, что откликнулся на эту "
+    "вакансию на hh; ОДНА простая фраза кто ты по специальности (строго по опыту ниже).\n"
+    "НЕЛЬЗЯ: «Привет», тыканье HR («ты»), канцелярит и буззворды («большой опыт проектирования "
+    "высоконагруженных систем», «экспертиза», «полного цикла»), markdown, выдуманные факты, слово "
+    "«резюме» (ссылку добавят отдельно), заглушки [..].\n\n=== ОПЫТ ===\n{resume}\n=== КОНЕЦ ===")
 
 
 def _hh_api(cfg):
@@ -66,11 +65,12 @@ def _pending(account):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, action, action_url, vacancy, nid FROM action_items "
+                "SELECT id, action, action_url, vacancy, nid, vacancy_url FROM action_items "
                 "WHERE account=%s AND coalesce(done,false)=false AND nid IS NOT NULL "
                 "ORDER BY created_at DESC", (account,))
             return [{"id": r[0], "action": r[1] or "", "action_url": r[2] or "",
-                     "vac": r[3] or "", "nid": r[4]} for r in cur.fetchall()]
+                     "vac": r[3] or "", "nid": r[4], "vac_url": r[5] or ""}
+                    for r in cur.fetchall()]
     finally:
         conn.close()
 
@@ -206,7 +206,7 @@ async def _pick_button(oa, sys_prompt, question, options):
     return ((await chat.send_message(prompt)) or "").strip()
 
 
-async def _do_hr(client, oa, name, resume, hh_url, user, vac, dry):
+async def _do_hr(client, oa, name, resume, hh_url, vac_url, user, vac, dry):
     chat = ChatOpenAI(
         token=oa["token"], model=oa.get("model"),
         completion_endpoint=oa.get("completion_endpoint"),
@@ -215,8 +215,9 @@ async def _do_hr(client, oa, name, resume, hh_url, user, vac, dry):
     intro = ((await chat.send_message(f"Вакансия: {vac}. Напиши первое сообщение HR.")) or "").strip()
     if not intro:
         return False
-    # резюме кидаем СРАЗУ, отдельной строкой — чтобы HR сразу нашла отклик и поняла, кто пишет
-    msg = intro + (f"\nВот моё резюме на hh: {hh_url}" if hh_url else "")
+    # сразу даём ссылку на вакансию (откуда пришёл) и резюме — чтобы HR нашла отклик и поняла кто пишет
+    msg = intro + (f"\nВакансия: {vac_url}" if vac_url else "") \
+              + (f"\nМоё резюме: {hh_url}" if hh_url else "")
     print(f"    @{user} (вакансия «{vac[:40]}»)\n      СООБЩЕНИЕ: «{msg[:300]}»")
     if dry:
         print(f"    @{user}: DRY — сообщение НЕ отправлено")
@@ -246,6 +247,9 @@ async def main():
     salary_str = (f"{sal} рублей на руки" if sal.replace(" ", "").isdigit()
                   else (sal or "обсуждается, открыт к предложениям"))
     sys_prompt = gr.SYS_TMPL.format(name=name, salary=salary_str, resume=resume)
+    # тон: к рекрутёру/боту всегда на «вы», вежливо; здороваться «Здравствуйте»/«Добрый день», не «Привет»
+    sys_prompt += ("\n\nТОН: обращайся к рекрутёру/боту всегда на «вы», вежливо. Если здороваешься — "
+                   "«Здравствуйте» или «Добрый день/вечер», НИКОГДА не «Привет».")
 
     tasks = _pending(account)
     print(f"auto_screen[{account}] режим={'LIVE' if LIVE else 'DRY (ничего не шлётся)'}: "
@@ -295,7 +299,7 @@ async def main():
                 if ma and ("напиш" in low or "telegram" in low or "@" in t["action"]):
                     user = ma.group(1)
                     print(f"\n  [HR] дело #{t['id']} «{t['vac'][:42]}» -> @{user}")
-                    r = await _do_hr(client, oa, name, resume, hh_url, user, t["vac"], DRY)
+                    r = await _do_hr(client, oa, name, resume, hh_url, t["vac_url"], user, t["vac"], DRY)
                     if r is True and LIVE:
                         _mark_done(t["id"])
                     nh += 1

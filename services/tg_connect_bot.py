@@ -108,11 +108,9 @@ HELP_TEXT = (
     "📊 <b>Личный кабинет</b> — кнопка «Профиль» слева от поля ввода (или "
     "/start → «Открыть кабинет»): профиль, статистика и тумблеры функций.\n\n"
     "<b>Команды:</b>\n"
-    "/link — привязать профиль к hh по номеру телефона\n"
-    "/addaccount — добавить новый hh-аккаунт (один раз логин+пароль hh)\n"
-    "/connect — подключить Telegram для ГигаРекрутера (авто-интервью)\n"
-    "/status — короткий статус: отклики, приглашения, токен\n"
-    "/start — главное меню\n\n"
+    "/start — открыть кабинет / привязать профиль по номеру\n"
+    "/addaccount — привязать hh-аккаунт (логин+пароль; GetMatch — скоро)\n"
+    "/connect — дать доступ к Telegram для авто-функций (интервью, коды GetMatch)\n\n"
     "Важное (интервью, контакты работодателей) приходит автоматически "
     "дайджестом 🔴🟡🟢."
 )
@@ -123,8 +121,8 @@ def _kb():
         [InlineKeyboardButton(text="🚀 Открыть кабинет",
                               web_app=WebAppInfo(url=WEBAPP_URL))],
         [InlineKeyboardButton(text="🔗 Привязать профиль", callback_data="link")],
-        [InlineKeyboardButton(text="➕ Добавить hh-аккаунт", callback_data="addacc")],
-        [InlineKeyboardButton(text="🧩 ГигаРекрутер", callback_data="connect"),
+        [InlineKeyboardButton(text="➕ Привязать hh-аккаунт", callback_data="addacc")],
+        [InlineKeyboardButton(text="🔗 Доступ к Telegram", callback_data="connect"),
          InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
     ])
 
@@ -133,8 +131,8 @@ def _kb_linked():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 Открыть кабинет",
                               web_app=WebAppInfo(url=WEBAPP_URL))],
-        [InlineKeyboardButton(text="📊 Статус", callback_data="status"),
-         InlineKeyboardButton(text="🧩 ГигаРекрутер", callback_data="connect")],
+        [InlineKeyboardButton(text="➕ Привязать аккаунт", callback_data="addacc"),
+         InlineKeyboardButton(text="🔗 Доступ к Telegram", callback_data="connect")],
         [InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
     ])
 
@@ -281,12 +279,18 @@ def _connect_kb():
 async def start_connect(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "🔗 <b>Подключение Telegram</b> (для авто-ГигаРекрутера).\n\n"
-        "Как удобнее войти?\n"
-        "• <b>По коду</b> — прямо с этого телефона: пришлю запрос, Telegram даст "
-        "код, введёшь его.\n"
-        "• <b>По QR</b> — если открываешь бота на телефоне, а сканировать будешь "
-        "с компа/планшета.", reply_markup=_connect_kb(), parse_mode="HTML",
+        "🔗 <b>Доступ к твоему Telegram</b> (по желанию).\n\n"
+        "<b>Зачем:</b> чтобы я сам читал твои чаты с ботами и действовал за тебя —\n"
+        "• проходил собеседования в чате ГигаРекрутера;\n"
+        "• забирал коды входа GetMatch из @g_jobbot автоматически.\n\n"
+        "<b>Что это:</b> вход в твой Telegram как новое устройство — я смогу читать и "
+        "писать сообщения от твоего имени. Сессия хранится в зашифрованном виде; "
+        "доступ в любой момент отзываешь сам: Telegram → Настройки → Устройства.\n"
+        "Без этого основные функции (отклики hh, GetMatch по коду) работают и так.\n\n"
+        "<b>Как войти?</b>\n"
+        "• <b>По коду</b> — с этого телефона: пришлю запрос, Telegram даст код.\n"
+        "• <b>По QR</b> — если сканируешь с другого устройства (комп/планшет).",
+        reply_markup=_connect_kb(), parse_mode="HTML",
     )
 
 
@@ -486,7 +490,8 @@ async def cmd_start(message: Message, state: FSMContext):
         await message.answer(START_LINKED.format(name=name),
                              reply_markup=_kb_linked(), parse_mode="HTML")
     else:
-        await message.answer(START_TEXT, reply_markup=_kb(), parse_mode="HTML")
+        await message.answer(START_TEXT, parse_mode="HTML")
+        await _send_link_prompt(message)
 
 
 @dp.message(Command("help"))
@@ -553,17 +558,6 @@ def _already_linked_text(user_id):
             "«📊 Профиль» (слева от поля ввода) или /start.")
 
 
-@dp.message(Command("link"))
-async def cmd_link(message: Message):
-    if message.chat.type != "private":
-        return
-    txt = _already_linked_text(message.from_user.id)
-    if txt:
-        await message.answer(txt)
-        return
-    await _send_link_prompt(message)
-
-
 @dp.callback_query(F.data == "link")
 async def cb_link(cq: CallbackQuery):
     await cq.answer()
@@ -604,17 +598,6 @@ async def on_contact(message: Message):
         "✅ Привязано! Открывай профиль кнопкой «📊 Профиль» (слева от поля ввода).",
         reply_markup=ReplyKeyboardRemove(),
     )
-
-
-@dp.message(Command("status"))
-async def cmd_status(message: Message):
-    if message.chat.type != "private":
-        return
-    schema = _account_by("tg_user_id", message.from_user.id)
-    if not schema:
-        await message.answer("Твой Telegram пока не привязан. Нажми /link.")
-        return
-    await message.answer(status_text(schema))
 
 
 @dp.message(Connect.password)
@@ -797,7 +780,7 @@ async def acc_salary(message: Message, state: FSMContext):
     await message.answer(
         f"✅ Аккаунт {full_name} добавлен — работает и API, и браузер.\n"
         f"Резюме: {pub[0].get('title','')}. Отклики пойдут по расписанию.\n\n"
-        "Теперь /link — привязать профиль и открыть личный кабинет."
+        "Теперь /start — привязать профиль и открыть личный кабинет."
     )
 
 
@@ -824,16 +807,6 @@ async def cb_connect(cq: CallbackQuery, state: FSMContext):
     await _connect_entry(cq.message, state, cq.from_user.id)
 
 
-@dp.callback_query(F.data == "status")
-async def cb_status(cq: CallbackQuery):
-    await cq.answer()
-    schema = _account_by("tg_user_id", cq.from_user.id)
-    if not schema:
-        await cq.message.answer("Твой Telegram пока не привязан. Нажми /link.")
-        return
-    await cq.message.answer(status_text(schema))
-
-
 @dp.callback_query(F.data == "help")
 async def cb_help(cq: CallbackQuery):
     await cq.answer()
@@ -847,11 +820,9 @@ async def main():
         return
     bot = Bot(token)
     await bot.set_my_commands([
-        BotCommand(command="start", description="О боте и быстрые действия"),
-        BotCommand(command="link", description="Привязать профиль (по номеру)"),
-        BotCommand(command="addaccount", description="Добавить новый hh-аккаунт"),
-        BotCommand(command="connect", description="Подключить Telegram для ГигаРекрутера (QR)"),
-        BotCommand(command="status", description="Статус: отклики, приглашения, токен"),
+        BotCommand(command="start", description="Открыть кабинет / привязать профиль"),
+        BotCommand(command="addaccount", description="Привязать аккаунт (hh, скоро GetMatch)"),
+        BotCommand(command="connect", description="Дать доступ к Telegram (для авто-функций)"),
         BotCommand(command="help", description="Помощь"),
     ])
     try:

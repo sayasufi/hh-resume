@@ -162,7 +162,7 @@ function renderGmLink(st) {
   }
   if (st.tg_connected) { box.style.display = "none"; return; }
   box.style.display = "";
-  hint.textContent = "Привязать GetMatch без Telegram: логин (email/username) → код → привязать.";
+  hint.textContent = "Привязка GetMatch: впиши свой Telegram-username — код придёт в бот @g_jobbot, скопируй его сюда. (Если сделан /connect — код прочитаю сам.)";
   $("#gm-login-row").style.display = "";
 }
 let GM_LOGIN = "";
@@ -178,8 +178,7 @@ function wireGmLink() {
       const r = await api("/api/getmatch/otp", { method: "POST", body: JSON.stringify({ login }) });
       GM_LOGIN = login;
       $("#gm-code-row").style.display = "";
-      msg.textContent = "Код отправлен" + (r.sent_email ? " на email" : "") +
-        (r.sent_tg ? " и в Telegram" : "") + " — впишите его.";
+      msg.textContent = "Код пришёл в бот @g_jobbot (Telegram) — открой его и впиши код сюда.";
       hap("light");
     } catch (e) { msg.textContent = (e && e.message) || "Не удалось отправить код"; }
     finally { otpBtn.disabled = false; }

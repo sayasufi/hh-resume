@@ -62,6 +62,10 @@ class AddAcc(StatesGroup):
     salary = State()
 
 
+class GmLink(StatesGroup):  # привязка GetMatch по коду из @g_jobbot
+    code = State()
+
+
 _login_sessions: dict = {}  # chat_id -> onboard.LoginSession (живой браузер)
 
 
@@ -109,7 +113,7 @@ HELP_TEXT = (
     "/start → «Открыть кабинет»): профиль, статистика и тумблеры функций.\n\n"
     "<b>Команды:</b>\n"
     "/start — открыть кабинет / привязать профиль по номеру\n"
-    "/addaccount — привязать hh-аккаунт (логин+пароль; GetMatch — скоро)\n"
+    "/addaccount — привязать аккаунт: hh (логин+пароль) или GetMatch (код)\n"
     "/connect — дать доступ к Telegram для авто-функций (интервью, коды GetMatch)\n\n"
     "Важное (интервью, контакты работодателей) приходит автоматически "
     "дайджестом 🔴🟡🟢."
@@ -617,7 +621,7 @@ async def on_contact(message: Message):
         f"✅ Профиль создан, <b>{full_name}</b>!\n\n"
         "Теперь привяжи аккаунты для поиска работы:\n"
         "• /addaccount → hh.ru (логин + пароль)\n"
-        "• GetMatch — скоро\n\n"
+        "• /addaccount → GetMatch (код из @g_jobbot)\n\n"
         "Или открой кабинет кнопкой «📊 Профиль».",
         reply_markup=ReplyKeyboardRemove(), parse_mode="HTML")
 
@@ -672,11 +676,86 @@ async def _start_addaccount(reply: Message, user_id: int, state: FSMContext) -> 
     return True
 
 
+def _addaccount_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🟦 hh.ru — логин + пароль", callback_data="addacc:hh")],
+        [InlineKeyboardButton(text="🟩 GetMatch — код из @g_jobbot", callback_data="addacc:gm")],
+    ])
+
+
+async def _addaccount_menu(reply: Message, user_id: int):
+    if not _account_by("tg_user_id", user_id):
+        await reply.answer("Сначала создай профиль: /start → поделись номером.")
+        return
+    await reply.answer("➕ Что привязать к профилю?", reply_markup=_addaccount_kb())
+
+
+async def _start_getmatch(reply: Message, user, state: FSMContext):
+    """GetMatch: запросить код (username из Telegram) → попросить код из @g_jobbot."""
+    account = _account_by("tg_user_id", user.id)
+    if not account:
+        await reply.answer("Сначала создай профиль: /start → поделись номером.")
+        return
+    if pgconn.get_setting("getmatch.session", None, account=account):
+        await reply.answer("GetMatch уже привязан. Управляй в кабинете «📊 Профиль».")
+        return
+    username = (user.username or "").lstrip("@")
+    if not username:
+        await reply.answer("У твоего Telegram нет username — задай его в настройках Telegram "
+                           "(это логин для GetMatch), потом повтори /addaccount.")
+        return
+    from getmatch_api import request_otp, GetMatchError
+    await reply.answer("⏳ Запрашиваю код входа GetMatch…")
+    try:
+        await request_otp(username)
+    except GetMatchError as e:
+        await reply.answer(f"❌ Не удалось запросить код: {e}\n"
+                           "Проверь, что у тебя есть аккаунт кандидата на GetMatch.")
+        return
+    await state.clear()
+    await state.set_state(GmLink.code)
+    await state.update_data(gm_user=username, gm_account=account)
+    await reply.answer(
+        "📩 GetMatch прислал <b>код для входа</b> в бот @g_jobbot.\n"
+        "Открой @g_jobbot, скопируй код и пришли его сюда:", parse_mode="HTML")
+
+
+@dp.message(GmLink.code)
+async def gm_code(message: Message, state: FSMContext):
+    code = (message.text or "").strip()
+    d = await state.get_data()
+    await state.clear()
+    from getmatch_api import authorize_with_code, GetMatchError
+    await message.answer("⏳ Привязываю GetMatch…")
+    try:
+        me = await authorize_with_code(d["gm_account"], d["gm_user"], code)
+    except GetMatchError as e:
+        await message.answer(f"❌ {e}\nПовтори: /addaccount → GetMatch.")
+        return
+    pgconn.set_setting("feat.getmatch", True, account=d["gm_account"])
+    name = ((me.get("first_name") or "") + " " + (me.get("last_name") or "")).strip()
+    await message.answer(
+        f"✅ GetMatch привязан{(' (' + name + ')') if name else ''}! "
+        "Авто-отклики через GetMatch включены — управляй в кабинете «📊 Профиль».")
+
+
 @dp.message(Command("addaccount"))
 async def cmd_addaccount(message: Message, state: FSMContext):
     if message.chat.type != "private":
         return
-    await _start_addaccount(message, message.from_user.id, state)
+    await _addaccount_menu(message, message.from_user.id)
+
+
+@dp.callback_query(F.data == "addacc:hh")
+async def cb_addacc_hh(cq: CallbackQuery, state: FSMContext):
+    await cq.answer()
+    await _start_addaccount(cq.message, cq.from_user.id, state)
+
+
+@dp.callback_query(F.data == "addacc:gm")
+async def cb_addacc_gm(cq: CallbackQuery, state: FSMContext):
+    await cq.answer()
+    await _start_getmatch(cq.message, cq.from_user, state)
 
 
 @dp.message(AddAcc.login)
@@ -816,7 +895,7 @@ async def acc_salary(message: Message, state: FSMContext):
 @dp.callback_query(F.data == "addacc")
 async def cb_addacc(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
-    await _start_addaccount(cq.message, cq.from_user.id, state)
+    await _addaccount_menu(cq.message, cq.from_user.id)
 
 
 @dp.callback_query(F.data == "connect")
@@ -839,7 +918,7 @@ async def main():
     bot = Bot(token)
     await bot.set_my_commands([
         BotCommand(command="start", description="Открыть кабинет / привязать профиль"),
-        BotCommand(command="addaccount", description="Привязать аккаунт (hh, скоро GetMatch)"),
+        BotCommand(command="addaccount", description="Привязать аккаунт (hh / GetMatch)"),
         BotCommand(command="connect", description="Дать доступ к Telegram (для авто-функций)"),
         BotCommand(command="help", description="Помощь"),
     ])

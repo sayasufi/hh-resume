@@ -148,7 +148,7 @@ async def run():
                 continue
             if DRY:
                 print(f"getmatch[dry]: откликнулся бы на vac {vid}")
-                pgconn.add_seen(SEEN_KIND, [vid]); seen.add(vid)
+                seen.add(vid)  # только в памяти — dry НЕ помечает seen в БД
                 applied += 1
                 continue
             before_click = (await client.get_messages(ent, limit=1))[0].id

@@ -161,60 +161,16 @@ async function openDialog(id) {
 
 // ── функции / настройки ──
 let RESUMES = [], RESUME_ID = "";
-// привязка GetMatch без Telegram (логин + код — как hh OTP)
+// подсказка по привязке GetMatch (сама привязка — в боте: /addaccount → GetMatch)
 function renderGmLink(st) {
-  const box = $("#gm-link"), hint = $("#gm-link-hint");
+  const box = $("#gm-link");
   if (!box) return;
-  // привязано — статус показывается на вкладке «Профиль», здесь форму прячем
   if (st.getmatch_linked || st.tg_connected) { box.style.display = "none"; return; }
   box.style.display = "";
-  // username берём из самого Telegram (Mini App его знает) — поле ввода только fallback
-  const u = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.username) || "";
-  GM_LOGIN = u;
-  if (u) {
-    hint.textContent = "Привязка GetMatch (@" + u + "): нажми «Получить код» — он придёт в бот " +
-      "@g_jobbot, впиши его сюда. (Если сделан /connect — прочитаю код сам.)";
-    $("#gm-login-row").style.display = "none";
-  } else {
-    hint.textContent = "Привязка GetMatch: впиши свой Telegram-username — код придёт в бот " +
-      "@g_jobbot, скопируй его сюда.";
-    $("#gm-login-row").style.display = "";
-  }
+  box.textContent = "Чтобы подключить GetMatch — открой бота и набери /addaccount → GetMatch "
+    + "(код придёт в @g_jobbot).";
 }
-let GM_LOGIN = "";
-function wireGmLink() {
-  const otpBtn = $("#gm-otp-btn"), linkBtn = $("#gm-link-btn"), msg = $("#gm-link-msg");
-  if (!otpBtn || otpBtn._wired) return;
-  otpBtn._wired = true;
-  otpBtn.onclick = async () => {
-    const login = (GM_LOGIN || ($("#gm-login") && $("#gm-login").value) || "").trim();
-    if (!login) { msg.textContent = "Не удалось определить Telegram-username"; return; }
-    otpBtn.disabled = true; msg.textContent = "Отправляю код…";
-    try {
-      const r = await api("/api/getmatch/otp", { method: "POST", body: JSON.stringify({ login }) });
-      GM_LOGIN = login;
-      $("#gm-code-row").style.display = "";
-      msg.textContent = "Код пришёл в бот @g_jobbot (Telegram) — открой его и впиши код сюда.";
-      hap("light");
-    } catch (e) { msg.textContent = (e && e.message) || "Не удалось отправить код"; }
-    finally { otpBtn.disabled = false; }
-  };
-  linkBtn.onclick = async () => {
-    const code = ($("#gm-code").value || "").trim();
-    if (!code) { msg.textContent = "Введите код"; return; }
-    linkBtn.disabled = true; msg.textContent = "Привязываю…";
-    try {
-      const r = await api("/api/getmatch/link",
-        { method: "POST", body: JSON.stringify({ login: GM_LOGIN, code }) });
-      msg.textContent = "✅ Привязано" + (r.name ? ": " + r.name : "") + " — включаю тумблер…";
-      hap("light");
-      const st = await api("/api/settings");
-      bindToggles(st.features, st.tg_connected, st.getmatch_linked);
-      renderGmLink(st); renderSources(st.sources);
-    } catch (e) { msg.textContent = (e && e.message) || "Не удалось привязать"; }
-    finally { linkBtn.disabled = false; }
-  };
-}
+function wireGmLink() {}  // привязка перенесена в бот, инлайн-форма убрана
 function bindToggles(features, tgConnected, gmLinked) {
   document.querySelectorAll(".toggle input[data-feat]").forEach((inp) => {
     inp.checked = !!features[inp.dataset.feat];
@@ -383,6 +339,7 @@ if ($("#dlg-src")) $("#dlg-src").querySelectorAll("button").forEach((b) => {
     const gm = b.dataset.src === "getmatch";
     $("#src-hh").style.display = gm ? "none" : "";
     $("#src-getmatch").style.display = gm ? "" : "none";
+    if (gm) loadGetmatchApps();  // подтянуть свежие отклики GetMatch (надёжно, не по тайму boot)
     hap("sel");
   };
 });
@@ -452,7 +409,7 @@ const loadDialogs = () => api("/api/dialogs" + qp())
 // ручное обновление (кнопка в шапке) — перетягивает всё актуальное
 function refreshAll() {
   hap("light");
-  loadStats(); loadActivity(); loadDialogs(); loadActions(); loadGiga();
+  loadStats(); loadActivity(); loadDialogs(); loadActions(); loadGiga(); loadGetmatchApps();
   api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
 }
 if ($("#refresh")) $("#refresh").onclick = refreshAll;

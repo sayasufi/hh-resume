@@ -253,10 +253,21 @@ function renderGmApps(items) {
   const box = $("#gm-apps"), title = $("#gm-apps-title");
   if (!items || !items.length) { box.innerHTML = ""; if (title) title.style.display = "none"; return; }
   if (title) title.style.display = "";
-  box.innerHTML = '<div class="list">' + items.map((a) =>
-    '<div class="cell act"><div class="dlg-main">'
-    + `<div class="dlg-title">${esc(a.title)}</div><div class="dlg-date">${esc(a.at)}</div></div>`
-    + `<button class="abtn open" data-url="${esc(a.url)}">Открыть ↗</button></div>`).join("") + "</div>";
+  const cls = (a) => {
+    const s = (a.status_readable || "").toLowerCase();
+    if (s.includes("одобр") || s.includes("приглаш") || s.includes("оффер")) return "ok";
+    if (s.includes("отказ")) return "bad";
+    return "wait";
+  };
+  box.innerHTML = '<div class="list">' + items.map((a) => {
+    const sub = [a.company, a.at].filter(Boolean).join(" · ");
+    const st = a.status_readable ? `<span class="gm-st ${cls(a)}">${esc(a.status_readable)}</span>` : "";
+    const rej = a.reject_reason ? ` · ${esc(a.reject_reason)}` : "";
+    return '<div class="cell act"><div class="dlg-main">'
+      + `<div class="dlg-title">${esc(a.title)} ${st}</div>`
+      + `<div class="dlg-date">${esc(sub)}${rej}</div></div>`
+      + `<button class="abtn open" data-url="${esc(a.url)}">↗</button></div>`;
+  }).join("") + "</div>";
   box.querySelectorAll(".abtn[data-url]").forEach((el) => {
     el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
   });

@@ -80,6 +80,8 @@ def _ensure_tables() -> None:
                 "CREATE TABLE IF NOT EXISTS getmatch_apps ("
                 "account text NOT NULL, vacancy_id text NOT NULL, title text, url text, "
                 "applied_at timestamptz DEFAULT now(), PRIMARY KEY (account, vacancy_id))")
+            for _gc in ("status text", "status_readable text", "company text", "reject_reason text"):
+                cur.execute(f"ALTER TABLE getmatch_apps ADD COLUMN IF NOT EXISTS {_gc}")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -451,10 +453,13 @@ def _getmatch_apps(account: str, limit: int = 100) -> list:
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT vacancy_id, title, url, applied_at FROM getmatch_apps "
-                        "WHERE account=%s ORDER BY applied_at DESC LIMIT %s", (account, limit))
+            cur.execute("SELECT vacancy_id, title, url, applied_at, status, status_readable, "
+                        "company, reject_reason FROM getmatch_apps WHERE account=%s "
+                        "ORDER BY applied_at DESC NULLS LAST LIMIT %s", (account, limit))
             return [{"id": r[0], "title": r[1] or "", "url": r[2] or "",
-                     "at": (str(r[3])[:16] if r[3] else "")} for r in cur.fetchall()]
+                     "at": (str(r[3])[:10] if r[3] else ""), "status": r[4] or "",
+                     "status_readable": r[5] or "", "company": r[6] or "",
+                     "reject_reason": r[7] or ""} for r in cur.fetchall()]
     finally:
         conn.close()
 

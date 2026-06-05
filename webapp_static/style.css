@@ -218,3 +218,9 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 #refresh:active { transform: rotate(90deg) scale(.92); }
 .fresh { font-size: 12px; color: var(--hint); margin-left: 4px; }
 .abtn.chat { background: color-mix(in srgb, var(--hint) 16%, transparent); color: var(--text); }
+
+/* getmatch статусы */
+.gm-st{font-size:11px;padding:1px 7px;border-radius:10px;white-space:nowrap;vertical-align:middle;font-weight:600}
+.gm-st.ok{background:#1c3a26;color:#5fdc8b}
+.gm-st.bad{background:#3a1c1f;color:#ff8b8b}
+.gm-st.wait{background:#2a2c33;color:#9aa3b2}

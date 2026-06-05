@@ -707,10 +707,17 @@ async def _start_getmatch(reply: Message, user, state: FSMContext):
     from getmatch_api import request_otp, GetMatchError
     await reply.answer("⏳ Запрашиваю код входа GetMatch…")
     try:
-        await request_otp(username)
+        res = await request_otp(username)
     except GetMatchError as e:
         await reply.answer(f"❌ Не удалось запросить код: {e}\n"
                            "Проверь, что у тебя есть аккаунт кандидата на GetMatch.")
+        return
+    if not res.get("sent_tg"):
+        await reply.answer(
+            "❌ GetMatch не отправил код в Telegram для @" + username + ". "
+            "Похоже, у этого username нет аккаунта кандидата на GetMatch с подключённым "
+            "Telegram. Сначала зарегистрируйся: открой @g_jobbot, пройди короткую регистрацию "
+            "(специальность, зарплата), потом снова /addaccount → GetMatch.")
         return
     await state.clear()
     await state.set_state(GmLink.code)

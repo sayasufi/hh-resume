@@ -834,6 +834,10 @@ async def api_getmatch_otp(body: dict, account: str = None,
         res = await request_otp(login)
     except GetMatchError as e:
         raise HTTPException(400, str(e))
+    if not res.get("sent_tg"):
+        raise HTTPException(400, "GetMatch не отправил код в Telegram. У этого username нет "
+                                 "аккаунта на GetMatch с подключённым Telegram — зарегистрируйся "
+                                 "через @g_jobbot и попробуй снова.")
     return {"sent_email": bool(res.get("sent_email")), "sent_tg": bool(res.get("sent_tg"))}
 
 

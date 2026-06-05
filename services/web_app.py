@@ -399,15 +399,16 @@ def _state_counts(account: str, dfrom=None, dto=None) -> dict:
 
 
 def _funnel_from_states(c: dict) -> list:
-    """Воронка: Отклики → Ответили → Собеседования → Офферы.
+    """Воронка: Отклики → Ответили → Собеседования.
     % у каждого этапа — доля от ВСЕХ откликов (единый знаменатель, как в деталях,
     чтобы «Собеседования» давали одно и то же число и тут, и в разбивке).
-    invitation легаси = interview; hired = оффер (и входит в собеседования)."""
+    invitation легаси = interview; hired сливается в «Собеседования» (отдельная стадия
+    «Офферы» убрана — hh-метка оффера ненадёжна, давала ложную воронку)."""
     total = sum(c.values())
     sob = c.get("interview", 0) + c.get("invitation", 0) + c.get("hired", 0)
     resp = c.get("response", 0)
     stages = [("Отклики", total), ("Ответили", resp + sob),
-              ("Собеседования", sob), ("Офферы", c.get("hired", 0))]
+              ("Собеседования", sob)]
     out = []
     for i, (label, val) in enumerate(stages):
         out.append({"label": label, "value": val,
@@ -632,7 +633,7 @@ def _action_done(account: str, aid: int) -> None:
 def _funnel(apps: int, invitations: int, interviews: int) -> list:
     """Воронка-фолбэк (когда кэш диалогов пуст): % у этапов — доля от всех откликов."""
     sob = max(invitations, interviews)
-    stages = [("Отклики", apps), ("Собеседования", sob), ("Офферы", 0)]
+    stages = [("Отклики", apps), ("Собеседования", sob)]
     out = []
     for i, (label, val) in enumerate(stages):
         out.append({"label": label, "value": val,

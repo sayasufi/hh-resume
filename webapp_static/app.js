@@ -311,20 +311,27 @@ function renderGiga(g) {
 }
 const loadGiga = () => api("/api/giga").then(renderGiga).catch(() => {});
 
-// реестр откликов GetMatch (что бот отправил)
-function renderGmApps(items) {
-  const box = $("#gm-apps"), title = $("#gm-apps-title");
-  if (!items || !items.length) { box.innerHTML = ""; if (title) title.style.display = "none"; return; }
-  if (title) title.style.display = "";
-  const cls = (a) => {
-    const s = (a.status_readable || "").toLowerCase();
-    if (s.includes("одобр") || s.includes("приглаш") || s.includes("оффер")) return "ok";
-    if (s.includes("отказ")) return "bad";
-    return "wait";
-  };
+// отклики GetMatch со статусами: список во вкладке «Отклики» + разбивка в «Стате»
+let GM_APPS = [], GM_FILTER = "all";
+const gmCls = (a) => {
+  const s = (a.status_readable || "").toLowerCase();
+  if (s.includes("одобр") || s.includes("приглаш") || s.includes("оффер")) return "ok";
+  if (s.includes("отказ")) return "bad";
+  return "wait";
+};
+function renderGmApps() {
+  const box = $("#gm-apps"), cnt = $("#gm-count");
+  if (!box) return;
+  const items = GM_FILTER === "all" ? GM_APPS : GM_APPS.filter((a) => gmCls(a) === GM_FILTER);
+  if (cnt) cnt.textContent = items.length;
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">' +
+      (GM_APPS.length ? "Нет откликов в этом фильтре" : "Пока нет откликов через GetMatch") + "</div>";
+    return;
+  }
   box.innerHTML = '<div class="list">' + items.map((a) => {
     const sub = [a.company, a.at].filter(Boolean).join(" · ");
-    const st = a.status_readable ? `<span class="gm-st ${cls(a)}">${esc(a.status_readable)}</span>` : "";
+    const st = a.status_readable ? `<span class="gm-st ${gmCls(a)}">${esc(a.status_readable)}</span>` : "";
     const rej = a.reject_reason ? ` · ${esc(a.reject_reason)}` : "";
     return '<div class="cell act"><div class="dlg-main">'
       + `<div class="dlg-title">${esc(a.title)} ${st}</div>`
@@ -335,7 +342,41 @@ function renderGmApps(items) {
     el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
   });
 }
-const loadGetmatchApps = () => api("/api/getmatch").then((r) => renderGmApps(r.applications || [])).catch(() => {});
+function renderGmStats() {
+  const box = $("#gm-stats"), title = $("#gm-stats-title");
+  if (!box) return;
+  if (!GM_APPS.length) { box.innerHTML = ""; if (title) title.style.display = "none"; return; }
+  if (title) title.style.display = "";
+  const c = { wait: 0, ok: 0, bad: 0 };
+  GM_APPS.forEach((a) => { c[gmCls(a)]++; });
+  const row = (lbl, n, kind) =>
+    `<div class="cell"><span class="dlg-title">${lbl}</span><span class="gm-st ${kind}">${n}</span></div>`;
+  box.innerHTML = row("Всего отправлено", GM_APPS.length, "wait")
+    + row("⏳ Ждём ответа", c.wait, "wait")
+    + row("✅ Одобрены / приглашения", c.ok, "ok")
+    + row("🔴 Отказы", c.bad, "bad");
+}
+const loadGetmatchApps = () => api("/api/getmatch").then((r) => {
+  GM_APPS = r.applications || []; renderGmApps(); renderGmStats();
+}).catch(() => {});
+// переключатель источника в «Откликах» (hh / GetMatch)
+if ($("#dlg-src")) $("#dlg-src").querySelectorAll("button").forEach((b) => {
+  b.onclick = () => {
+    $("#dlg-src").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    const gm = b.dataset.src === "getmatch";
+    $("#src-hh").style.display = gm ? "none" : "";
+    $("#src-getmatch").style.display = gm ? "" : "none";
+    hap("sel");
+  };
+});
+// фильтр по статусу в GetMatch
+if ($("#gm-filter")) $("#gm-filter").querySelectorAll(".chip").forEach((c) => {
+  c.onclick = () => {
+    $("#gm-filter").querySelectorAll(".chip").forEach((x) => x.classList.remove("active"));
+    c.classList.add("active"); GM_FILTER = c.dataset.gf; renderGmApps(); hap("sel");
+  };
+});
 
 // дела (что нужно сделать самому)
 function renderActions(items) {

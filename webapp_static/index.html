@@ -67,33 +67,49 @@
         <div class="ghint" id="next-apply" style="padding:10px 18px 0"></div>
         <div class="gtitle">Динамика откликов · 30 дней</div>
         <div id="trend" class="list pad-list"></div>
-        <div class="gtitle" id="gm-apps-title" style="display:none">GetMatch — наши отклики</div>
-        <div id="gm-apps"></div>
+        <div class="gtitle" id="gm-stats-title" style="display:none">GetMatch — по статусам</div>
+        <div id="gm-stats" class="list"></div>
       </section>
 
       <!-- ОТКЛИКИ -->
       <section id="tab-dialogs" class="tab">
-        <div class="seg period">
-          <button data-p="today">Сегодня</button>
-          <button data-p="yesterday">Вчера</button>
-          <button class="active" data-p="week">Неделя</button>
-          <button data-p="month">Месяц</button>
-          <button data-p="all">Всё</button>
+        <div class="seg src" id="dlg-src">
+          <button class="active" data-src="hh">hh.ru</button>
+          <button data-src="getmatch">GetMatch</button>
         </div>
-        <div class="chips" id="dlg-filter">
-          <button class="chip active" data-f="all">Все</button>
-          <button class="chip" data-f="sob">🤝 Собеседования</button>
-          <button class="chip" data-f="response">💬 Ответы</button>
-          <button class="chip" data-f="discard">🔴 Отказы</button>
-        </div>
-        <div class="subbar">
-          <span class="hint"><b id="dlg-count">—</b> откликов <span id="dlg-fresh" class="fresh"></span></span>
-          <div class="seg" id="dlg-sort">
-            <button class="active" data-s="date">Новые</button>
-            <button data-s="status">Статус</button>
+        <div id="src-hh">
+          <div class="seg period">
+            <button data-p="today">Сегодня</button>
+            <button data-p="yesterday">Вчера</button>
+            <button class="active" data-p="week">Неделя</button>
+            <button data-p="month">Месяц</button>
+            <button data-p="all">Всё</button>
           </div>
+          <div class="chips" id="dlg-filter">
+            <button class="chip active" data-f="all">Все</button>
+            <button class="chip" data-f="sob">🤝 Собеседования</button>
+            <button class="chip" data-f="response">💬 Ответы</button>
+            <button class="chip" data-f="discard">🔴 Отказы</button>
+          </div>
+          <div class="subbar">
+            <span class="hint"><b id="dlg-count">—</b> откликов <span id="dlg-fresh" class="fresh"></span></span>
+            <div class="seg" id="dlg-sort">
+              <button class="active" data-s="date">Новые</button>
+              <button data-s="status">Статус</button>
+            </div>
+          </div>
+          <div id="dialogs"></div>
         </div>
-        <div id="dialogs"></div>
+        <div id="src-getmatch" style="display:none">
+          <div class="chips" id="gm-filter">
+            <button class="chip active" data-gf="all">Все</button>
+            <button class="chip" data-gf="wait">⏳ Ждём</button>
+            <button class="chip" data-gf="ok">✅ Одобрены</button>
+            <button class="chip" data-gf="bad">🔴 Отказы</button>
+          </div>
+          <div class="subbar"><span class="hint"><b id="gm-count">—</b> откликов</span></div>
+          <div id="gm-apps"></div>
+        </div>
       </section>
 
       <!-- ФУНКЦИИ -->

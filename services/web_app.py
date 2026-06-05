@@ -23,7 +23,7 @@ from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webapp_static")
-FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga")  # тумблеры
+FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga", "getmatch")  # тумблеры
 MAX_PER_DAY_CAP = 200   # серверный суточный потолок откликов hh (защита от бана)
 TESTS_PER_DAY_CAP = 30  # практический потолок браузерного тест-флоу
 _INITDATA_MAX_AGE = 86400  # сутки
@@ -504,7 +504,7 @@ def _activity(account: str, dfrom=None, dto=None) -> dict:
             agg = {k: int(v) for k, v in cur.fetchall()}
     finally:
         conn.close()
-    return {k: agg.get(k, 0) for k in ("apply", "tests", "reply", "browse", "bump")}
+    return {k: agg.get(k, 0) for k in ("apply", "tests", "reply", "browse", "bump", "getmatch")}
 
 
 def _action_items(account: str) -> list:
@@ -678,7 +678,7 @@ async def _set_config(account: str, key: str, value) -> None:
     if key in FEATURES:
         # ГигаРекрутер нельзя включить без подключённого Telegram (user-сессии):
         # бот действует от лица пользователя в чате @Giga_recruiter_bot.
-        if key == "giga" and bool(value):
+        if key in ("giga", "getmatch") and bool(value):
             cfg = await asyncio.to_thread(pgconn.app_config, account)
             if not cfg.get("tg_user_session"):
                 raise HTTPException(

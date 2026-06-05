@@ -152,10 +152,10 @@ function bindToggles(features, tgConnected) {
   document.querySelectorAll(".toggle input[data-feat]").forEach((inp) => {
     inp.checked = !!features[inp.dataset.feat];
     // ГигаРекрутер нельзя включить без подключённого Telegram
-    const lockGiga = inp.dataset.feat === "giga" && !tgConnected;
-    inp.disabled = lockGiga;
-    if (lockGiga) inp.checked = false;
-    inp.closest(".toggle").classList.toggle("disabled", lockGiga);
+    const lockTg = (inp.dataset.feat === "giga" || inp.dataset.feat === "getmatch") && !tgConnected;
+    inp.disabled = lockTg;
+    if (lockTg) inp.checked = false;
+    inp.closest(".toggle").classList.toggle("disabled", lockTg);
     inp.onchange = async () => {
       const row = inp.closest(".toggle"); row.classList.add("busy");
       try { await save(inp.dataset.feat, inp.checked); hap("light"); }
@@ -228,6 +228,7 @@ function renderActivity(a) {
   $("#a-reply").textContent = a.reply || 0;
   $("#a-browse").textContent = a.browse || 0;
   $("#a-bump").textContent = a.bump || 0;
+  if ($("#a-getmatch")) $("#a-getmatch").textContent = a.getmatch || 0;
 }
 const loadActivity = () => api("/api/activity" + qp()).then(renderActivity).catch(() => {});
 

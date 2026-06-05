@@ -27,6 +27,8 @@ JOBS: list[dict] = [
          feature="tests",  cron="0 6-18/3 * * *",   jitter=90,   tags=["browser"], timeout=1800),
     dict(name="giga",           command=["python", "/app/services/giga_recruiter.py"],
          feature="giga",   cron="*/3 5-19 * * *",   jitter=60,   tags=["llm"],     timeout=1800),
+    dict(name="getmatch",       command=["python", "/app/services/getmatch_apply.py"],
+         feature="getmatch", cron="20 6-18/4 * * *", jitter=120,  tags=[],          timeout=1200),
     dict(name="monitor",        command=["python", "/app/services/monitor.py"],
          feature=None,     cron="0 5 * * *",        jitter=0,    tags=[],          timeout=600),
     dict(name="funnel",         command=["python", "/app/services/funnel.py"],

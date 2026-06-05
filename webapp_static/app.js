@@ -258,6 +258,10 @@ function bindConfig(cfg, resumes) {
   wire($("#cfg-salary"), "salary");
   clampWire($("#cfg-limit"), "apply.max_per_day", capL);
   clampWire($("#cfg-tlimit"), "apply.tests_per_day", capT);
+  if ($("#cfg-gm-limit")) {
+    $("#cfg-gm-limit").value = cfg.getmatch_max_per_day != null ? cfg.getmatch_max_per_day : "";
+    clampWire($("#cfg-gm-limit"), "getmatch.max_per_day", 50);
+  }
   const gph = $("#cfg-gph");
   if (gph) {
     gph.checked = !!cfg.civil_law_only;

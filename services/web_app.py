@@ -687,6 +687,8 @@ async def api_settings(account: str = None,
             pgconn.get_setting, "apply.resume_id", "", account),
         "civil_law_only": bool(await asyncio.to_thread(
             pgconn.get_setting, "apply.civil_law_only", False, account)),
+        "getmatch_max_per_day": await asyncio.to_thread(
+            pgconn.get_setting, "getmatch.max_per_day", 50, account),
         "max_per_day_cap": MAX_PER_DAY_CAP,   # серверный суточный потолок hh
         "tests_per_day_cap": TESTS_PER_DAY_CAP,  # практический потолок тест-флоу
     }
@@ -729,6 +731,9 @@ async def _set_config(account: str, key: str, value) -> None:
         cap = MAX_PER_DAY_CAP if key == "apply.max_per_day" else TESTS_PER_DAY_CAP
         await asyncio.to_thread(
             pgconn.set_setting, key, min(cap, max(0, int(value))), account)
+    elif key == "getmatch.max_per_day":
+        await asyncio.to_thread(
+            pgconn.set_setting, "getmatch.max_per_day", min(50, max(0, int(value))), account)
     elif key == "apply.resume_id":
         await asyncio.to_thread(pgconn.set_setting, "apply.resume_id", str(value), account)
     elif key == "apply.civil_law_only":

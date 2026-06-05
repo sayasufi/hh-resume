@@ -238,3 +238,12 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 .empty{padding:24px 16px;text-align:center;color:#7a828f;font-size:13px}
 .seg.src{margin-bottom:10px}
 .seg.src button{font-weight:600}
+
+/* фильтр источника (Отклики) — полноширинный 2-табовый */
+.seg.src{margin:0 14px 10px}
+.seg.src button{flex:1;padding:9px 2px;font-weight:600}
+/* карта настроек: секции по платформам */
+.sect-head{display:flex;align-items:center;gap:8px;font-size:17px;font-weight:700;color:#e7eaf0;margin:20px 14px 2px}
+.sect-sub{font-size:12px;color:#7a828f;margin:0 14px 9px;line-height:1.35}
+.dot-hh,.dot-gm,.dot-gen{width:9px;height:9px;border-radius:50%;flex:none}
+.dot-hh{background:#3d6df0}.dot-gm{background:#5fdc8b}.dot-gen{background:#9aa3b2}

@@ -76,6 +76,10 @@ def _ensure_tables() -> None:
                         "ADD COLUMN IF NOT EXISTS action_url text")  # ссылка на анкету/тест
             cur.execute("ALTER TABLE dlg_cache "
                         "ADD COLUMN IF NOT EXISTS created text")  # дата отклика (для воронки)
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS getmatch_apps ("
+                "account text NOT NULL, vacancy_id text NOT NULL, title text, url text, "
+                "applied_at timestamptz DEFAULT now(), PRIMARY KEY (account, vacancy_id))")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -442,6 +446,19 @@ def _giga_summary(account: str) -> dict:
             "active": by.get("active", 0) + by.get("running", 0), "last": last}
 
 
+def _getmatch_apps(account: str, limit: int = 100) -> list:
+    """Реестр наших откликов через GetMatch (что бот отправил)."""
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT vacancy_id, title, url, applied_at FROM getmatch_apps "
+                        "WHERE account=%s ORDER BY applied_at DESC LIMIT %s", (account, limit))
+            return [{"id": r[0], "title": r[1] or "", "url": r[2] or "",
+                     "at": (str(r[3])[:16] if r[3] else "")} for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 async def _dialog_messages(account: str, nid: str) -> dict:
     data = await _hh_call(account, f"/negotiations/{nid}/messages")
     msgs = []
@@ -777,6 +794,13 @@ async def api_giga(account: str = None,
                    x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data, account)
     return await asyncio.to_thread(_giga_summary, account)
+
+
+@app.get("/api/getmatch")
+async def api_getmatch(account: str = None,
+                       x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data, account)
+    return {"applications": await asyncio.to_thread(_getmatch_apps, account)}
 
 
 @app.get("/healthz")

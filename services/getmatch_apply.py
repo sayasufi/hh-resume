@@ -6,7 +6,8 @@
 дневной лимит. Кнопки «Смотреть/Вакансии (N)/Еще N» — мини-апп, не нужны.
 
 Гейт: feat.getmatch + app_config.tg_user_session. Профиль ОБЯЗАН быть подтверждён —
-иначе не откликаемся, кладём дело «подтвердите профиль».
+иначе не откликаемся, кладём дело «подтвердите профиль». Отправленные отклики пишем в
+`getmatch_apps` (реестр: название/ссылка/дата) — для просмотра в кабинете.
 
 Запуск: python /app/services/getmatch_apply.py [--dry]   (обычно через Prefect JOBS).
 """
@@ -73,6 +74,12 @@ def is_expired(text: str) -> bool:
     return bool(_EXPIRED_RE.search(text or ""))
 
 
+def first_line(text: str) -> str:
+    """Первая строка (название вакансии) из текста сообщения."""
+    lines = (text or "").strip().splitlines()
+    return (lines[0] if lines else "")[:200]
+
+
 # ── операция ─────────────────────────────────────────────────────────────────
 def _today_count(account: str) -> int:
     conn = pgconn.connect()
@@ -83,6 +90,22 @@ def _today_count(account: str) -> int:
                         (account, SEEN_KIND))
             r = cur.fetchone()
         return int(r[0]) if r else 0
+    finally:
+        conn.close()
+
+
+def _record_app(account, vid, title, url):
+    """Записать отправленный отклик в реестр getmatch_apps (для кабинета)."""
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TABLE IF NOT EXISTS getmatch_apps ("
+                        "account text NOT NULL, vacancy_id text NOT NULL, title text, url text, "
+                        "applied_at timestamptz DEFAULT now(), PRIMARY KEY (account, vacancy_id))")
+            cur.execute("INSERT INTO getmatch_apps(account, vacancy_id, title, url) "
+                        "VALUES (%s,%s,%s,%s) ON CONFLICT(account, vacancy_id) DO NOTHING",
+                        (account, vid, title, url))
+        conn.commit()
     finally:
         conn.close()
 
@@ -173,6 +196,8 @@ async def run():
                 print(f"getmatch: vac {vid} — уже откликались ранее, seen")
             elif applied_ok(resp):
                 pgconn.bump_activity("getmatch", 1)
+                _record_app(account, vid, first_line(getattr(m, "raw_text", None) or m.text),
+                            f"https://getmatch.ru/vacancies/{vid}")
                 applied += 1
                 print(f"getmatch: отклик на vac {vid} ({sent_today + applied}/{limit})")
                 await asyncio.sleep(random.uniform(5, 15))

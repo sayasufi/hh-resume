@@ -248,6 +248,21 @@ function renderGiga(g) {
 }
 const loadGiga = () => api("/api/giga").then(renderGiga).catch(() => {});
 
+// реестр откликов GetMatch (что бот отправил)
+function renderGmApps(items) {
+  const box = $("#gm-apps"), title = $("#gm-apps-title");
+  if (!items || !items.length) { box.innerHTML = ""; if (title) title.style.display = "none"; return; }
+  if (title) title.style.display = "";
+  box.innerHTML = '<div class="list">' + items.map((a) =>
+    '<div class="cell act"><div class="dlg-main">'
+    + `<div class="dlg-title">${esc(a.title)}</div><div class="dlg-date">${esc(a.at)}</div></div>`
+    + `<button class="abtn open" data-url="${esc(a.url)}">Открыть ↗</button></div>`).join("") + "</div>";
+  box.querySelectorAll(".abtn[data-url]").forEach((el) => {
+    el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
+  });
+}
+const loadGetmatchApps = () => api("/api/getmatch").then((r) => renderGmApps(r.applications || [])).catch(() => {});
+
 // дела (что нужно сделать самому)
 function renderActions(items) {
   const box = $("#actions");
@@ -361,7 +376,7 @@ async function boot() {
     $("#giga-hint").textContent = st.tg_connected
       ? "✅ Telegram подключён — ГигаРекрутер сам проходит интервью за вас."
       : "⚠️ Чтобы включить ГигаРекрутера, подключите Telegram: команда /connect в боте.";
-    loadDialogs(); loadActivity(); loadActions(); loadGiga();
+    loadDialogs(); loadActivity(); loadActions(); loadGiga(); loadGetmatchApps();
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {
     err(String(e.message) === "not_linked"

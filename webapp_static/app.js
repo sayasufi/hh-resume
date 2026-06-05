@@ -162,8 +162,18 @@ function renderGmLink(st) {
   }
   if (st.tg_connected) { box.style.display = "none"; return; }
   box.style.display = "";
-  hint.textContent = "Привязка GetMatch: впиши свой Telegram-username — код придёт в бот @g_jobbot, скопируй его сюда. (Если сделан /connect — код прочитаю сам.)";
-  $("#gm-login-row").style.display = "";
+  // username берём из самого Telegram (Mini App его знает) — поле ввода только fallback
+  const u = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.username) || "";
+  GM_LOGIN = u;
+  if (u) {
+    hint.textContent = "Привязка GetMatch (@" + u + "): нажми «Получить код» — он придёт в бот " +
+      "@g_jobbot, впиши его сюда. (Если сделан /connect — прочитаю код сам.)";
+    $("#gm-login-row").style.display = "none";
+  } else {
+    hint.textContent = "Привязка GetMatch: впиши свой Telegram-username — код придёт в бот " +
+      "@g_jobbot, скопируй его сюда.";
+    $("#gm-login-row").style.display = "";
+  }
 }
 let GM_LOGIN = "";
 function wireGmLink() {
@@ -171,8 +181,8 @@ function wireGmLink() {
   if (!otpBtn || otpBtn._wired) return;
   otpBtn._wired = true;
   otpBtn.onclick = async () => {
-    const login = ($("#gm-login").value || "").trim();
-    if (!login) { msg.textContent = "Введите логин"; return; }
+    const login = (GM_LOGIN || ($("#gm-login") && $("#gm-login").value) || "").trim();
+    if (!login) { msg.textContent = "Не удалось определить Telegram-username"; return; }
     otpBtn.disabled = true; msg.textContent = "Отправляю код…";
     try {
       const r = await api("/api/getmatch/otp", { method: "POST", body: JSON.stringify({ login }) });

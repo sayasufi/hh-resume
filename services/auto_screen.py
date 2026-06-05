@@ -87,15 +87,31 @@ async def _do_bot(client, oa, sys_prompt, bot, start, vac, dry):
     except Exception as e:
         print(f"    @{bot}: не резолвится ({type(e).__name__}) — пропуск")
         return False
-    base = await client.get_messages(ent, limit=1)
-    last_id = base[0].id if base else 0
-    if start:
-        await client(StartBotRequest(bot=ent, peer=ent, start_param=start))
+    recent = await client.get_messages(ent, limit=4)
+    inbound = sorted([m for m in recent if not m.out], key=lambda x: x.id)
+    last = inbound[-1] if inbound else None
+    # если скрининг уже идёт (последнее сообщение бота — незакрытый вопрос) — ПРОДОЛЖАЕМ
+    # с него, а не перезапускаем /start (иначе бот переспросит всё заново).
+    resume = bool(last and (last.buttons or "?" in (last.text or ""))
+                  and not (gr.DONE_RE.search(last.text or "") and "?" not in (last.text or ""))
+                  and not gr.NOACTIVE_RE.search(last.text or ""))
+    if resume:
+        print(f"    @{bot}: продолжаю незаконченный скрининг (не рестартю)")
+        last_id = inbound[-2].id if len(inbound) >= 2 else 0
+        seeded = [m for m in inbound if m.id > last_id]
     else:
-        await client.send_message(ent, "/start")
+        last_id = recent[0].id if recent else 0
+        if start:
+            await client(StartBotRequest(bot=ent, peer=ent, start_param=start))
+        else:
+            await client.send_message(ent, "/start")
+        seeded = None
     convo, turns = [], 0
     while turns < MAX_TURNS:
-        replies = await gr._wait_reply(client, ent, last_id, REPLY_TIMEOUT)
+        if seeded is not None:
+            replies, seeded = seeded, None
+        else:
+            replies = await gr._wait_reply(client, ent, last_id, REPLY_TIMEOUT)
         if not replies:
             print(f"    @{bot}: бот молчит — стоп")
             return turns > 0
@@ -229,6 +245,17 @@ async def main():
     print(f"auto_screen[{account}] режим={'LIVE' if LIVE else 'DRY (ничего не шлётся)'}: "
           f"pending дел {len(tasks)}")
     api = _hh_api(cfg)
+    # реальная ссылка на hh-резюме — когда бот/HR просит «приложи резюме», дать её, не уклоняться
+    rid = pgconn.get_setting("apply.resume_id", account=account)
+    if rid:
+        try:
+            _r = await api.get(f"/resumes/{rid}")
+            hh_url = _r.get("alternate_url") or f"https://hh.ru/resume/{rid}"
+        except Exception:
+            hh_url = f"https://hh.ru/resume/{rid}"
+        sys_prompt += (
+            f"\n\nКогда просят ссылку на твоё резюме на hh.ru — дай ИМЕННО эту ссылку: {hh_url}. "
+            "Не пиши «не могу прислать» и не уклоняйся. (Другие ссылки/GitHub/портфолио не выдумывай.)")
     api_id, api_hash = pgconn.tg_api()
     client = TelegramClient(StringSession(pgconn.dec_session(enc)), api_id, api_hash)
     await client.connect()

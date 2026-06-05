@@ -465,6 +465,67 @@ def _getmatch_apps(account: str, limit: int = 200) -> list:
         conn.close()
 
 
+def _src_age(h, now) -> str:
+    if not h or not h.get("ts"):
+        return ""
+    d = now - h["ts"]
+    if d < 3600:
+        return f"{int(d // 60)} мин назад"
+    if d < 86400:
+        return f"{int(d // 3600)} ч назад"
+    return f"{int(d // 86400)} дн назад"
+
+
+def _source_health(account: str) -> list:
+    """Здоровье источников (hh / GetMatch / ГигаРекрутер): статус + последний прогон + причина."""
+    import time as _t
+    cfg = pgconn.app_config(account)
+    now = _t.time()
+
+    def by_run(h):  # фича вкл + привязано — судим по хартбиту
+        if not h or not h.get("ts"):
+            return "ok", "включено", "ждёт первого прогона"  # хартбита ещё нет — не алертим
+        if not h.get("ok"):
+            return "down", "последний прогон с ошибкой", (h.get("detail") or "")[:80]
+        if (now - h["ts"]) > 30 * 3600:
+            return "warn", "давно не запускался", "проверь оркестратор"
+        return "ok", "работает", ""
+
+    def row(src, state, label, detail, h):
+        return {"src": src, "state": state, "label": label, "detail": detail,
+                "run": _src_age(h, now)}
+
+    out = []
+    # фича-чек первым: выключено -> off (НЕ алертим). down только если фича ВКЛ, но сломано.
+    tok = cfg.get("token") or {}
+    h_apply = pgconn.read_health("apply", account)
+    if not pgconn.feature_enabled("apply", account):
+        out.append(row("hh.ru", "off", "авто-отклики выключены", "", h_apply))
+    elif not (tok.get("access_token") or tok.get("refresh_token")):
+        out.append(row("hh.ru", "down", "не привязан", "нет hh-аккаунта", None))
+    elif tok.get("access_expires_at", 0) < now and not tok.get("refresh_token"):
+        out.append(row("hh.ru", "down", "токен истёк", "нужна переавторизация hh", h_apply))
+    else:
+        out.append(row("hh.ru", *by_run(h_apply), h_apply))
+
+    h_gm = pgconn.read_health("getmatch", account)
+    if not pgconn.feature_enabled("getmatch", account):
+        out.append(row("GetMatch", "off", "выключено", "", h_gm))
+    elif not (pgconn.get_setting("getmatch.session", "", account) or cfg.get("tg_user_session")):
+        out.append(row("GetMatch", "down", "не привязан", "привяжи в Функциях", None))
+    else:
+        out.append(row("GetMatch", *by_run(h_gm), h_gm))
+
+    h_g = pgconn.read_health("giga", account)
+    if not pgconn.feature_enabled("giga", account):
+        out.append(row("ГигаРекрутер", "off", "выключено", "", h_g))
+    elif not cfg.get("tg_user_session"):
+        out.append(row("ГигаРекрутер", "down", "нет доступа к Telegram", "сделай /connect в боте", None))
+    else:
+        out.append(row("ГигаРекрутер", *by_run(h_g), h_g))
+    return out
+
+
 async def _dialog_messages(account: str, nid: str) -> dict:
     data = await _hh_call(account, f"/negotiations/{nid}/messages")
     msgs = []
@@ -704,7 +765,9 @@ async def api_settings(account: str = None,
             "getmatch_linked": bool(await asyncio.to_thread(
                 pgconn.get_setting, "getmatch.session", "", account)),
             "getmatch_username": await asyncio.to_thread(
-                pgconn.get_setting, "getmatch.username", "", account) or ""}
+                pgconn.get_setting, "getmatch.username", "", account) or "",
+            # здоровье источников (hh / GetMatch / ГигаРекрутер) — для секции «Источники»
+            "sources": await asyncio.to_thread(_source_health, account)}
 
 
 async def _set_config(account: str, key: str, value) -> None:

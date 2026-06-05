@@ -5,6 +5,8 @@
 JOBS — единственный источник правды (см. план/спеку §4.5). Сейчас платформа одна — hh."""
 from prefect import flow, task
 
+from hh_applicant_tool.storage import pgconn
+
 from .alerts import notify_failure
 from .jitter import human_jitter
 from .runner import run_op
@@ -35,6 +37,8 @@ JOBS: list[dict] = [
          feature=None,     cron="5 5 * * *",        jitter=0,    tags=[],          timeout=600),
     dict(name="send-digest",    command=["python", "/app/services/send_digest.py"],
          feature="notify", cron="15,45 5-19 * * *", jitter=0,    tags=[],          timeout=300),
+    dict(name="health-check",   command=["python", "/app/services/health_check.py"],
+         feature=None,     cron="0 9,17 * * *",     jitter=0,    tags=[],          timeout=300),
 ]
 JOBS_BY_NAME: dict[str, dict] = {j["name"]: j for j in JOBS}
 
@@ -42,7 +46,21 @@ JOBS_BY_NAME: dict[str, dict] = {j["name"]: j for j in JOBS}
 @task(retries=2, retry_delay_seconds=[30, 120])
 async def run_target(job_name: str, target: str):
     job = JOBS_BY_NAME[job_name]
-    await run_op(job["command"], job.get("platform", "hh"), target, timeout=job["timeout"])
+    feat = job.get("feature")
+    try:
+        await run_op(job["command"], job.get("platform", "hh"), target, timeout=job["timeout"])
+    except Exception as e:
+        if feat:  # хартбит источника: прогон упал
+            try:
+                pgconn.record_health(feat, False, repr(e)[:160], account=target)
+            except Exception:
+                pass
+        raise
+    if feat:  # хартбит источника: прогон прошёл
+        try:
+            pgconn.record_health(feat, True, account=target)
+        except Exception:
+            pass
 
 
 @flow(on_failure=[notify_failure])

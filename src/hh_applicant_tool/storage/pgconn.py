@@ -282,6 +282,20 @@ def set_setting(key: str, value, account: str | None = None) -> None:
         conn.close()
 
 
+def record_health(source: str, ok: bool, detail: str = "", account: str | None = None) -> None:
+    """Хартбит источника: время прогона + успех + причина (мониторинг надёжности).
+    source — feature (apply/tests/reply/browse/giga/getmatch)."""
+    import time as _t
+    set_setting(f"_health.{source}",
+                {"ts": int(_t.time()), "ok": bool(ok), "detail": (detail or "")[:200]},
+                account=account)
+
+
+def read_health(source: str, account: str | None = None) -> dict | None:
+    v = get_setting(f"_health.{source}", None, account=account)
+    return v if isinstance(v, dict) else None
+
+
 def feature_enabled(feat: str, account: str | None = None) -> bool:
     """Тумблер функции из Mini App. Ключ settings `feat.<feat>`, по умолчанию ВКЛ."""
     return bool(get_setting(f"feat.{feat}", True, account=account))

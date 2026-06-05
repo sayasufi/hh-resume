@@ -66,16 +66,20 @@ function renderMe(d) {
     : "⏸ Обычные отклики на паузе — включи «Авто-отклики» в Функциях.";
 }
 
-// статусы привязок на вкладке «Профиль» (из /api/settings)
-function renderLinks(st) {
-  const set = (id, ok, yes, no) => {
-    const el = $(id); if (!el) return;
-    el.textContent = ok ? yes : no;
-    el.style.color = ok ? "#5fdc8b" : "#9aa3b2";
-  };
-  set("#p-hh", st.hh_linked, "✅ привязан", "— не привязан");
-  set("#p-gm", st.getmatch_linked, "✅ привязан", "— не привязан");
-  set("#p-tg", st.tg_connected, "✅ есть доступ", "— нет доступа");
+// здоровье источников на вкладке «Профиль» (из /api/settings → sources)
+function renderSources(sources) {
+  const box = $("#sources");
+  if (!box) return;
+  const cls = { ok: "ok", warn: "wait", down: "bad", off: "wait" };
+  const ico = { ok: "✅", warn: "⚠️", down: "🔴", off: "⏸" };
+  box.innerHTML = (sources || []).map((s) => {
+    const sub = [s.detail, s.run].filter(Boolean).join(" · ");
+    return '<div class="cell"><div class="dlg-main">'
+      + `<div class="dlg-title">${esc(s.src)} `
+      + `<span class="gm-st ${cls[s.state] || "wait"}">${ico[s.state] || ""} ${esc(s.label)}</span></div>`
+      + (sub ? `<div class="dlg-date">${esc(sub)}</div>` : "")
+      + "</div></div>";
+  }).join("");
 }
 
 function renderTrend(days) {
@@ -206,7 +210,7 @@ function wireGmLink() {
       hap("light");
       const st = await api("/api/settings");
       bindToggles(st.features, st.tg_connected, st.getmatch_linked);
-      renderGmLink(st); renderLinks(st);
+      renderGmLink(st); renderSources(st.sources);
     } catch (e) { msg.textContent = (e && e.message) || "Не удалось привязать"; }
     finally { linkBtn.disabled = false; }
   };
@@ -500,7 +504,7 @@ async function boot() {
     const [me, st] = await Promise.all([api("/api/me" + qp()), api("/api/settings")]);
     renderMe(me); setupAdmin(me);
     bindToggles(st.features, st.tg_connected, st.getmatch_linked); bindConfig(st.config, st.resumes || []);
-    renderLinks(st); renderGmLink(st); wireGmLink();
+    renderSources(st.sources); renderGmLink(st); wireGmLink();
     $("#giga-hint").textContent = st.tg_connected
       ? ""
       : "⚠️ Чтобы включить ГигаРекрутера, дайте доступ к Telegram: команда /connect в боте.";

@@ -138,11 +138,12 @@ async def run():
             me = await api.ensure_auth()
         except GetMatchError as e:
             print(f"getmatch: логин не удался: {e}")
-            if not DRY:
-                pgconn.notify(pgconn.PRIORITY_MED,
-                              "Не удалось войти в GetMatch по API — проверьте профиль и подключение "
-                              f"Telegram. ({e})", category="action", dedup_key="getmatch:login")
-            return
+            if DRY:
+                return
+            pgconn.notify(pgconn.PRIORITY_MED,
+                          "Не удалось войти в GetMatch по API — проверьте профиль и подключение "
+                          f"Telegram. ({e})", category="action", dedup_key="getmatch:login")
+            raise  # чтобы run_target записал честный хартбит (источник сломан), не «ok»
         print(f"getmatch: вошли как {me.get('first_name')} {me.get('last_name')}")
 
         letter_llm = _letter_llm(cfg)

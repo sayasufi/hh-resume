@@ -568,6 +568,24 @@ async def cb_link(cq: CallbackQuery):
     await _send_link_prompt(cq.message)
 
 
+def _create_profile(user, phone: str) -> str:
+    """Создать профиль (bare-аккаунт по TG-id) без hh: имя/телефон + общие конфиги
+    (бот для уведомлений, vLLM для писем GetMatch). Аккаунты привяжутся через /addaccount."""
+    account = str(user.id)
+    full_name = (" ".join(x for x in [user.last_name, user.first_name] if x)
+                 or (user.username or account))
+    pgconn.register_user(full_name, account)
+    pgconn.set_app_config("tg_user_id", user.id, account=account)
+    pgconn.set_app_config("hh_phone", phone, account=account)
+    pgconn.set_setting("user.full_name", full_name, account=account)
+    base = pgconn.app_config()
+    if base.get("telegram"):
+        pgconn.set_app_config("telegram", base["telegram"], account=account)
+    if base.get("openai"):
+        pgconn.set_app_config("openai", base["openai"], account=account)
+    return full_name
+
+
 @dp.message(F.contact)
 async def on_contact(message: Message):
     if message.chat.type != "private":
@@ -578,26 +596,30 @@ async def on_contact(message: Message):
         await message.answer("Это чужой контакт. Поделись СВОИМ номером.",
                              reply_markup=ReplyKeyboardRemove())
         return
-    # один TG — один аккаунт: если уже привязан к ДРУГОМУ, не плодим вторую связь
     existing = _account_by("tg_user_id", message.from_user.id)
-    account = _account_by("hh_phone", c.phone_number)
-    if existing and account and existing != account:
+    if existing:  # профиль уже есть — просто подтверждаем
         name = pgconn.get_setting("user.full_name", None, account=existing) or existing
-        await message.answer(ALREADY_LINKED.format(name=name),
-                             reply_markup=ReplyKeyboardRemove())
-        return
-    if not account:
         await message.answer(
-            "❌ Не нашёл hh-аккаунт с таким номером. Убедись, что номер совпадает "
-            "с тем, что в hh, или добавь аккаунт через /addaccount.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+            f"✅ Профиль «{name}» уже привязан. Открывай кабинет «📊 Профиль» "
+            "или привяжи ещё аккаунт через /addaccount.",
+            reply_markup=ReplyKeyboardRemove())
         return
-    pgconn.set_app_config("tg_user_id", message.from_user.id, account=account)
+    account = _account_by("hh_phone", c.phone_number)
+    if account:  # есть hh-аккаунт с этим номером — линкуем к нему (как раньше)
+        pgconn.set_app_config("tg_user_id", message.from_user.id, account=account)
+        await message.answer(
+            "✅ Привязано! Открывай профиль кнопкой «📊 Профиль» (слева от поля ввода).",
+            reply_markup=ReplyKeyboardRemove())
+        return
+    # нет hh — создаём профиль; аккаунты (hh, GetMatch) привяжешь через /addaccount
+    full_name = _create_profile(message.from_user, c.phone_number)
     await message.answer(
-        "✅ Привязано! Открывай профиль кнопкой «📊 Профиль» (слева от поля ввода).",
-        reply_markup=ReplyKeyboardRemove(),
-    )
+        f"✅ Профиль создан, <b>{full_name}</b>!\n\n"
+        "Теперь привяжи аккаунты для поиска работы:\n"
+        "• /addaccount → hh.ru (логин + пароль)\n"
+        "• GetMatch — скоро\n\n"
+        "Или открой кабинет кнопкой «📊 Профиль».",
+        reply_markup=ReplyKeyboardRemove(), parse_mode="HTML")
 
 
 @dp.message(Connect.password)
@@ -628,19 +650,25 @@ ALREADY_LINKED = (
 )
 
 
-async def _start_addaccount(message: Message, state: FSMContext) -> bool:
-    """Общий старт онбординга с проверкой «один TG — один аккаунт». False = отказ."""
-    linked = _account_by("tg_user_id", message.from_user.id)
-    if linked:
-        name = pgconn.get_setting("user.full_name", None, account=linked) or linked
-        await message.answer(ALREADY_LINKED.format(name=name))
+async def _start_addaccount(reply: Message, user_id: int, state: FSMContext) -> bool:
+    """Привязка hh к профилю. К bare-профилю прикрепляем hh; если hh уже есть — отказ;
+    без профиля — просим /start. False = не начали."""
+    linked = _account_by("tg_user_id", user_id)
+    if not linked:
+        await reply.answer("Сначала создай профиль: /start → поделись номером.")
         return False
-    await _drop_login(message.chat.id)
+    if (pgconn.app_config(account=linked) or {}).get("token"):
+        name = pgconn.get_setting("user.full_name", None, account=linked) or linked
+        await reply.answer(
+            f"У профиля «{name}» уже привязан hh-аккаунт. Открой кабинет «📊 Профиль».")
+        return False
+    await _drop_login(reply.chat.id)
     await state.clear()
     await state.set_state(AddAcc.login)
-    await message.answer(
-        "➕ Новый hh-аккаунт.\nЛогин hh — email или телефон (напр. +79991234567):"
-    )
+    await state.update_data(attach_account=linked)
+    await reply.answer(
+        "➕ Привязка hh-аккаунта к профилю.\n"
+        "Логин hh — email или телефон (напр. +79991234567):")
     return True
 
 
@@ -648,7 +676,7 @@ async def _start_addaccount(message: Message, state: FSMContext) -> bool:
 async def cmd_addaccount(message: Message, state: FSMContext):
     if message.chat.type != "private":
         return
-    await _start_addaccount(message, state)
+    await _start_addaccount(message, message.from_user.id, state)
 
 
 @dp.message(AddAcc.login)
@@ -755,7 +783,8 @@ async def acc_salary(message: Message, state: FSMContext):
     if not acc_id:
         await message.answer("❌ Не удалось определить идентификатор hh-аккаунта.")
         return
-    account = re.sub(r"\W", "", acc_id)
+    # к bare-профилю (создан на /start) прикрепляем hh под его ключом — не плодим аккаунт
+    account = d.get("attach_account") or re.sub(r"\W", "", acc_id)
     full_name = " ".join(
         x for x in [me.get("last_name"), me.get("first_name")] if x
     ) or d["login"]
@@ -778,27 +807,16 @@ async def acc_salary(message: Message, state: FSMContext):
         await message.answer(f"❌ Авторизация ок, но настройка не удалась: {e}")
         return
     await message.answer(
-        f"✅ Аккаунт {full_name} добавлен — работает и API, и браузер.\n"
+        f"✅ hh-аккаунт {full_name} привязан к профилю — работает и API, и браузер.\n"
         f"Резюме: {pub[0].get('title','')}. Отклики пойдут по расписанию.\n\n"
-        "Теперь /start — привязать профиль и открыть личный кабинет."
+        "Открывай кабинет кнопкой «📊 Профиль»."
     )
 
 
 @dp.callback_query(F.data == "addacc")
 async def cb_addacc(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
-    # тот же чек «один TG — один аккаунт» (from_user у колбэка — нажавший)
-    linked = _account_by("tg_user_id", cq.from_user.id)
-    if linked:
-        name = pgconn.get_setting("user.full_name", None, account=linked) or linked
-        await cq.message.answer(ALREADY_LINKED.format(name=name))
-        return
-    await _drop_login(cq.message.chat.id)
-    await state.clear()
-    await state.set_state(AddAcc.login)
-    await cq.message.answer(
-        "➕ Новый hh-аккаунт.\nЛогин hh — email или телефон (напр. +79991234567):"
-    )
+    await _start_addaccount(cq.message, cq.from_user.id, state)
 
 
 @dp.callback_query(F.data == "connect")

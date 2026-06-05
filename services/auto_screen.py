@@ -29,11 +29,15 @@ MAX_TURNS = 22  # анкеты-скрининги бывают длинными 
 REPLY_TIMEOUT = 70  # AI-боты (напр. «Василиса») генерят следующий вопрос медленно
 
 HR_SYS = (
-    "Ты — кандидат {name}. Напиши КОРОТКОЕ первое сообщение HR-менеджеру в Telegram по поводу "
-    "вакансии «{vac}». 1-3 предложения, живой человеческий язык, без канцелярита и markdown. "
-    "Поздоровайся, скажи что откликнулся и интересна вакансия, ОДНА фраза почему подходишь (строго "
-    "по опыту ниже, без выдумок), предложи продолжить общение. Без слова «резюме», без заглушек [..]."
-    "\n\n=== ОПЫТ ===\n{resume}\n=== КОНЕЦ ===")
+    "Ты — кандидат {name}. Напиши ОЧЕНЬ короткое, живое, человеческое первое сообщение HR в Telegram "
+    "по вакансии «{vac}» — как нормальному человеку в мессенджере, 2-3 коротких предложения.\n"
+    "ОБЯЗАТЕЛЬНО: (1) поздоровайся и ПРЕДСТАВЬСЯ по ИМЕНИ (только имя, не ФИО целиком); (2) скажи, что "
+    "откликнулся на эту вакансию на hh; (3) ОДНА простая фраза кто ты по специальности (строго по "
+    "опыту ниже).\n"
+    "НЕЛЬЗЯ: канцелярит и буззворды («большой опыт проектирования высоконагруженных систем», "
+    "«экспертиза», «проекты полного цикла»), markdown, выдуманные факты, слово «резюме» (ссылку "
+    "добавят отдельно), заглушки [..]. Пиши просто и по-человечески.\n\n"
+    "=== ОПЫТ ===\n{resume}\n=== КОНЕЦ ===")
 
 
 def _hh_api(cfg):
@@ -202,16 +206,18 @@ async def _pick_button(oa, sys_prompt, question, options):
     return ((await chat.send_message(prompt)) or "").strip()
 
 
-async def _do_hr(client, oa, name, resume, user, vac, dry):
+async def _do_hr(client, oa, name, resume, hh_url, user, vac, dry):
     chat = ChatOpenAI(
         token=oa["token"], model=oa.get("model"),
         completion_endpoint=oa.get("completion_endpoint"),
         system_prompt=HR_SYS.format(name=name, vac=vac, resume=resume),
-        temperature=0.5, max_completion_tokens=220)
-    msg = ((await chat.send_message(f"Вакансия: {vac}. Напиши первое сообщение HR.")) or "").strip()
-    print(f"    @{user} (вакансия «{vac[:40]}»)\n      СООБЩЕНИЕ: «{msg[:260]}»")
-    if not msg:
+        temperature=0.5, max_completion_tokens=180)
+    intro = ((await chat.send_message(f"Вакансия: {vac}. Напиши первое сообщение HR.")) or "").strip()
+    if not intro:
         return False
+    # резюме кидаем СРАЗУ, отдельной строкой — чтобы HR сразу нашла отклик и поняла, кто пишет
+    msg = intro + (f"\nВот моё резюме на hh: {hh_url}" if hh_url else "")
+    print(f"    @{user} (вакансия «{vac[:40]}»)\n      СООБЩЕНИЕ: «{msg[:300]}»")
     if dry:
         print(f"    @{user}: DRY — сообщение НЕ отправлено")
         return None
@@ -246,6 +252,7 @@ async def main():
           f"pending дел {len(tasks)}")
     api = _hh_api(cfg)
     # реальная ссылка на hh-резюме — когда бот/HR просит «приложи резюме», дать её, не уклоняться
+    hh_url = ""
     rid = pgconn.get_setting("apply.resume_id", account=account)
     if rid:
         try:
@@ -288,7 +295,7 @@ async def main():
                 if ma and ("напиш" in low or "telegram" in low or "@" in t["action"]):
                     user = ma.group(1)
                     print(f"\n  [HR] дело #{t['id']} «{t['vac'][:42]}» -> @{user}")
-                    r = await _do_hr(client, oa, name, resume, user, t["vac"], DRY)
+                    r = await _do_hr(client, oa, name, resume, hh_url, user, t["vac"], DRY)
                     if r is True and LIVE:
                         _mark_done(t["id"])
                     nh += 1

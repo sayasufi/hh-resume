@@ -58,9 +58,14 @@ def is_profile_ok(text: str) -> bool:
 
 
 def applied_ok(text: str) -> bool:
-    """Ответ бота = отклик отправлен?"""
+    """Ответ бота = НОВЫЙ отклик отправлен?"""
     t = text or ""
     return bool(_APPLIED_RE.search(t)) or "Мои отклики" in t
+
+
+def is_already(text: str) -> bool:
+    """Ответ бота = на эту вакансию уже откликались ранее."""
+    return "уже откликал" in (text or "").lower()
 
 
 def is_expired(text: str) -> bool:
@@ -164,7 +169,9 @@ async def run():
             newtxt = " ".join((mm.text or "") for mm in await _read_new(client, ent, before_click))
             resp = (alert + " " + newtxt).strip()
             pgconn.add_seen(SEEN_KIND, [vid]); seen.add(vid)
-            if applied_ok(resp):
+            if is_already(resp):
+                print(f"getmatch: vac {vid} — уже откликались ранее, seen")
+            elif applied_ok(resp):
                 pgconn.bump_activity("getmatch", 1)
                 applied += 1
                 print(f"getmatch: отклик на vac {vid} ({sent_today + applied}/{limit})")

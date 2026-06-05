@@ -1,47 +1,34 @@
-from types import SimpleNamespace
-
-from services import getmatch_apply as g
+from services.getmatch_api import abs_url, apply_form, profile_filters
 
 
-def _cb(text, data):
-    return SimpleNamespace(text=text, data=data)
+def test_abs_url():
+    assert abs_url("/vacancies/34693-mlops") == "https://getmatch.ru/vacancies/34693-mlops"
+    assert abs_url("https://getmatch.ru/x") == "https://getmatch.ru/x"
+    assert abs_url("") == ""
+    assert abs_url(None) == ""
 
 
-def _btn(text):
-    return SimpleNamespace(text=text, data=None)
+def test_apply_form_basic():
+    offer = {"id": 34687,
+             "location_requirements": [{"location_id": "moscow__mo__russia", "format": "office"}]}
+    me = {"first_name": "Семен", "last_name": "Рябов", "salary_from": 200000, "salary_currency": "RUB"}
+    f = apply_form(offer, me)
+    assert f == {"first_name": "Семен", "last_name": "Рябов", "salary_currency": "RUB",
+                 "salary_from": "200000", "location_id": "moscow__mo__russia",
+                 "web_apply_source": "offers_list"}
 
 
-def test_apply_callback_id():
-    assert g.apply_callback_id(_cb("💥 Откликнуться в боте", b"application__send__32950")) == "32950"
-    assert g.apply_callback_id(_btn("Описание")) is None
-    assert g.apply_callback_id(_cb("x", b"other_data")) is None
+def test_apply_form_defaults():
+    # нет локаций и валюты — безопасные дефолты, salary_from строкой
+    f = apply_form({"id": 1}, {"first_name": "A", "last_name": "B", "salary_from": None})
+    assert f["location_id"] == ""
+    assert f["salary_currency"] == "RUB"
+    assert f["salary_from"] == "0"
 
 
-def test_find_apply_button():
-    rows = [[_btn("Описание"), _btn("Вакансии (177)")],
-            [_cb("💥 Откликнуться в боте", b"application__send__34696")]]
-    btn = g.find_apply_button(rows)
-    assert g.apply_callback_id(btn) == "34696"
-    # запасной матч по тексту, если callback не нашёлся
-    assert g.find_apply_button([[_btn("💥 Откликнуться в боте")]]).text == "💥 Откликнуться в боте"
-    assert g.find_apply_button([[_btn("Описание")]]) is None
-    assert g.find_apply_button([]) is None
-
-
-def test_is_profile_ok():
-    assert g.is_profile_ok("У вас подтверждённый профиль 🤘") is True
-    assert g.is_profile_ok("С ним можно откликаться на вакансии в один клик") is True
-    assert g.is_profile_ok("Заполните профиль: пришлите ссылку на резюме") is False
-    assert g.is_profile_ok("") is False
-
-
-def test_applied_ok():
-    assert g.applied_ok("Отклик отправлен работодателю") is True
-    assert g.applied_ok("Отклик уже отправлен работодателю") is True
-    assert g.applied_ok("Что-то пошло не так") is False
-
-
-def test_is_expired():
-    assert g.is_expired("Вакансия уже неактуальна") is True
-    assert g.is_expired("Вакансия закрыта") is True
-    assert g.is_expired("Отклик отправлен") is False
+def test_profile_filters():
+    me = {"specializations": ["data_science", "python"], "locations": ["moscow", "remote"],
+          "salary_from": 200000}
+    assert profile_filters(me) == {"sp": ["data_science", "python"],
+                                   "l": ["moscow", "remote"], "sa": 200000}
+    assert profile_filters({}) == {}

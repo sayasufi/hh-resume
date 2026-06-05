@@ -6,7 +6,9 @@
 Статусы: после откликов синхронизируем все наши отклики (GET /api/applications/candidate) в таблицу
 getmatch_apps (status/status_readable/reject_reason/company) — это источник для кабинета.
 
-Гейт: feat.getmatch + app_config.tg_user_session. Запуск: python /app/services/getmatch_apply.py [--dry].
+Гейт: feat.getmatch + привязка (getmatch.session ИЛИ tg_user_session). Telegram нужен только для
+авто-релогина при истечении сессии; без него — перепривязка логином+кодом в кабинете.
+Запуск: python /app/services/getmatch_apply.py [--dry].
 """
 import asyncio
 import os
@@ -114,8 +116,9 @@ async def run():
         print("getmatch: feat выключен — пропуск"); return
     cfg = pgconn.app_config()
     enc = cfg.get("tg_user_session")
-    if not enc:
-        print("getmatch: нет tg_user_session — пропуск"); return
+    has_session = bool(pgconn.get_setting("getmatch.session", account=account))
+    if not enc and not has_session:
+        print("getmatch: не привязан (нет сессии и нет Telegram) — пропуск"); return
 
     lock_conn = pgconn.connect()
     with lock_conn.cursor() as cur:

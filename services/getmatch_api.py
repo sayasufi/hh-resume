@@ -65,7 +65,7 @@ def profile_filters(me: dict) -> dict:
 class GetMatchAPI:
     """Тонкий клиент API GetMatch для одного аккаунта."""
 
-    def __init__(self, account: str, tg_session_enc: str):
+    def __init__(self, account: str, tg_session_enc: str | None = None):
         self.account = account
         self.tg_session_enc = tg_session_enc
         self.username = None  # Telegram username (логин), берём из сессии при логине
@@ -122,17 +122,21 @@ class GetMatchAPI:
         return True
 
     async def ensure_auth(self):
-        """Переиспользовать сохранённую сессию; при невалидности — OTP-релогин. Возвращает /me."""
+        """Сохранённая сессия → при 401 Telegram-релогин (если подключён TG), иначе просим
+        перепривязать аккаунт (логин+код) в кабинете. Возвращает /me."""
         sess = pgconn.get_setting("getmatch.session", account=self.account)
         if sess:
             self.hc.cookies.set("AIOHTTP_SESSION", sess, domain="getmatch.ru")
             r = await self.hc.get("/api/auth/me")
             if r.status_code == 200:
                 return r.json()
+        if not self.tg_session_enc:
+            raise GetMatchError("сессия GetMatch истекла — перепривяжите аккаунт "
+                                "(логин + код) в кабинете")
         await self._otp_login()
         r = await self.hc.get("/api/auth/me")
         if r.status_code != 200:
-            raise GetMatchError(f"после логина /me = {r.status_code}")
+            raise GetMatchError(f"после Telegram-логина /me = {r.status_code}")
         return r.json()
 
     # ── данные ────────────────────────────────────────────────────────────────
@@ -157,3 +161,31 @@ class GetMatchAPI:
                                params={"section": "all", "offset": 0, "limit": limit})
         r.raise_for_status()
         return r.json().get("applications", [])
+
+
+# ── standalone-привязка из кабинета (без Telethon) ───────────────────────────
+async def request_otp(username: str) -> dict:
+    """Запросить OTP-код для входа (уходит на email и/или Telegram). Для привязки из кабинета."""
+    async with httpx.AsyncClient(timeout=20.0, headers={"User-Agent": UA, "Origin": BASE}) as hc:
+        r = await hc.post(BASE + "/api/auth/otp",
+                          json={"username": username, "role": ROLE, "register_if_not_found": False})
+        if r.status_code != 200:
+            raise GetMatchError(f"otp {r.status_code}: {r.text[:120]}")
+        return r.json()
+
+
+async def authorize_with_code(account: str, username: str, code: str) -> dict:
+    """Авторизовать по коду, сохранить сессию + username для аккаунта. Возвращает /me ({} при сбое)."""
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True,
+                                 headers={"User-Agent": UA, "Origin": BASE}) as hc:
+        r = await hc.post(BASE + "/api/auth/authorize",
+                          json={"login_username": username, "code": code, "role": ROLE})
+        if r.status_code != 200:
+            raise GetMatchError(f"неверный код или логин ({r.status_code})")
+        sess = hc.cookies.get("AIOHTTP_SESSION")
+        if not sess:
+            raise GetMatchError("сессия не получена")
+        pgconn.set_setting("getmatch.session", sess, account=account)
+        pgconn.set_setting("getmatch.username", username, account=account)
+        me = await hc.get(BASE + "/api/auth/me")
+        return me.json() if me.status_code == 200 else {}

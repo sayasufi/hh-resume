@@ -1,5 +1,5 @@
 """Бот-помощник (aiogram 3.x): меню, /start, /connect (привязка Telegram по QR),
-/status, /help. Привязка Telegram нужна для авто-интервью (ГигаРекрутер) — сессия
+/help. Привязка Telegram нужна для авто-интервью (ГигаРекрутер) — сессия
 сохраняется зашифрованной в схему юзера, найденную по совпадению номера телефона.
 
 aiogram — бот-сторона; Telethon — user-сессия (qr_login). 2FA через FSM.
@@ -102,10 +102,8 @@ START_TEXT = (
     "• 🔔 присылаю важное: приглашения, просьбы связаться\n\n"
     "📊 <b>Личный кабинет</b> — вся статистика и тумблеры: что включить, "
     "что выключить.\n\n"
-    "<b>С чего начать:</b>\n"
-    "1️⃣ «Привязать профиль» — свяжу твой Telegram с hh по номеру\n"
-    "2️⃣ «Открыть кабинет» — профиль, статистика, управление\n\n"
-    "Аккаунта на hh ещё нет в системе? Жми «Добавить hh-аккаунт»."
+    "<b>С чего начать:</b> поделись номером телефона кнопкой ниже — создам твой профиль. "
+    "Дальше привяжешь аккаунты (hh, GetMatch) через /addaccount."
 )
 HELP_TEXT = (
     "❓ <b>Как пользоваться</b>\n\n"
@@ -118,17 +116,6 @@ HELP_TEXT = (
     "Важное (интервью, контакты работодателей) приходит автоматически "
     "дайджестом 🔴🟡🟢."
 )
-
-
-def _kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Открыть кабинет",
-                              web_app=WebAppInfo(url=WEBAPP_URL))],
-        [InlineKeyboardButton(text="🔗 Привязать профиль", callback_data="link")],
-        [InlineKeyboardButton(text="➕ Привязать hh-аккаунт", callback_data="addacc")],
-        [InlineKeyboardButton(text="🔗 Доступ к Telegram", callback_data="connect"),
-         InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
-    ])
 
 
 def _kb_linked():
@@ -205,48 +192,6 @@ def save_link(account, enc_sess, tg_id):
         conn.commit()
     finally:
         conn.close()
-
-
-def status_text(account):
-    conn = psycopg.connect(pgconn.get_dsn())
-    g = {}
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SET search_path TO public")
-            cur.execute(
-                "SELECT value FROM app_config WHERE account=%s AND key='token'",
-                (account,),
-            )
-            r = cur.fetchone()
-            tok = r[0] if r else None
-            for k in ("_applications_count", "_applications_date",
-                      "_applications_pause_until", "user.full_name"):
-                cur.execute(
-                    "SELECT value FROM settings WHERE account=%s AND key=%s",
-                    (account, k),
-                )
-                r = cur.fetchone()
-                try:
-                    g[k] = json.loads(r[0]) if r else None
-                except Exception:
-                    g[k] = r[0] if r else None
-    finally:
-        conn.close()
-
-    name = g.get("user.full_name") or account
-    today = time.strftime("%Y-%m-%d")
-    cnt = g.get("_applications_count") if g.get("_applications_date") == today else 0
-    pause = g.get("_applications_pause_until")
-    days = ((tok or {}).get("access_expires_at", 0) - time.time()) / 86400 if tok else -1
-    tline = f"ок ({days:.0f} дн)" if days > 0 else "🔴 истёк — нужна переавторизация"
-    lines = [
-        f"📊 Статус — {name}",
-        f"🔑 Токен: {tline}",
-        f"📨 Откликов сегодня: {cnt}"
-        + (f"  (лимит, пауза до {pause})" if pause and pause > today else ""),
-        "🔗 Telegram: подключён ✅",
-    ]
-    return "\n".join(lines)
 
 
 # --- QR-привязка ---
@@ -562,22 +507,12 @@ def _already_linked_text(user_id):
             "«📊 Профиль» (слева от поля ввода) или /start.")
 
 
-@dp.callback_query(F.data == "link")
-async def cb_link(cq: CallbackQuery):
-    await cq.answer()
-    txt = _already_linked_text(cq.from_user.id)
-    if txt:
-        await cq.message.answer(txt)
-        return
-    await _send_link_prompt(cq.message)
-
-
 def _create_profile(user, phone: str) -> str:
     """Создать профиль (bare-аккаунт по TG-id) без hh: имя/телефон + общие конфиги
     (бот для уведомлений, vLLM для писем GetMatch). Аккаунты привяжутся через /addaccount."""
     account = str(user.id)
     full_name = (" ".join(x for x in [user.last_name, user.first_name] if x)
-                 or (user.username or account))
+                 or user.username or "кандидат")  # не показываем числовой TG-id как имя
     pgconn.register_user(full_name, account)
     pgconn.set_app_config("tg_user_id", user.id, account=account)
     pgconn.set_app_config("hh_phone", phone, account=account)
@@ -731,14 +666,21 @@ async def _start_getmatch(reply: Message, user, state: FSMContext):
 async def gm_code(message: Message, state: FSMContext):
     code = (message.text or "").strip()
     d = await state.get_data()
-    await state.clear()
+    if not d.get("gm_account") or not d.get("gm_user"):  # состояние слетело (рестарт бота)
+        await state.clear()
+        await message.answer("Сессия привязки истекла. Повтори: /addaccount → GetMatch.")
+        return
+    if not code.isdigit() or not (4 <= len(code) <= 6):
+        await message.answer("Код — это 4-6 цифр из бота @g_jobbot. Пришли его ещё раз:")
+        return  # остаёмся в GmLink.code
     from getmatch_api import authorize_with_code, GetMatchError
     await message.answer("⏳ Привязываю GetMatch…")
     try:
         me = await authorize_with_code(d["gm_account"], d["gm_user"], code)
     except GetMatchError as e:
-        await message.answer(f"❌ {e}\nПовтори: /addaccount → GetMatch.")
-        return
+        await message.answer(f"❌ {e}\nПришли код из @g_jobbot ещё раз или начни заново: /addaccount → GetMatch.")
+        return  # состояние не чистим — можно переввести код
+    await state.clear()
     pgconn.set_setting("feat.getmatch", True, account=d["gm_account"])
     name = ((me.get("first_name") or "") + " " + (me.get("last_name") or "")).strip()
     await message.answer(

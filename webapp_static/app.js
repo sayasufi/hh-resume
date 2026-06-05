@@ -42,7 +42,8 @@ document.querySelectorAll("#tabs button").forEach((b) => {
 });
 
 function renderMe(d) {
-  const p = d.profile, s = d.stats;
+  const p = (d && d.profile) || {}, s = (d && d.stats) || {};
+  const funnel = s.funnel || [];
   $("#avatar").textContent = (p.name || "·").trim().charAt(0).toUpperCase() || "·";
   $("#hname").textContent = p.name || "—";
   const stt = p.status || "";
@@ -50,8 +51,8 @@ function renderMe(d) {
   const sk = p.status_kind || (stt.includes("работает") ? "ok" : stt.indexOf("всё") === 0 ? "off" : "paused");
   st.className = "pill " + (sk === "ok" ? "good" : sk === "off" ? "bad" : "warn");
   $("#p-name").textContent = p.name || "—";
-  const max = Math.max(1, ...s.funnel.map((f) => f.value));
-  $("#funnel").innerHTML = s.funnel.map((f) =>
+  const max = Math.max(1, ...funnel.map((f) => f.value));
+  $("#funnel").innerHTML = funnel.map((f) =>
     `<div class="fbar"><div class="fill" style="width:${Math.round(f.value / max * 100)}%"></div>`
     + `<div class="ftext"><span>${esc(f.label)}</span><span class="fval"><b>${f.value}</b>`
     + `${f.conv != null ? `<em>${f.conv}%</em>` : ""}</span></div></div>`).join("");
@@ -259,8 +260,11 @@ function bindConfig(cfg, resumes) {
   clampWire($("#cfg-limit"), "apply.max_per_day", capL);
   clampWire($("#cfg-tlimit"), "apply.tests_per_day", capT);
   if ($("#cfg-gm-limit")) {
+    const capG = cfg.getmatch_max_per_day_cap || 50;
     $("#cfg-gm-limit").value = cfg.getmatch_max_per_day != null ? cfg.getmatch_max_per_day : "";
-    clampWire($("#cfg-gm-limit"), "getmatch.max_per_day", 50);
+    $("#cfg-gm-limit").max = capG;
+    if ($("#cap-glimit")) $("#cap-glimit").textContent = "(макс " + capG + ")";
+    clampWire($("#cfg-gm-limit"), "getmatch.max_per_day", capG);
   }
   const gph = $("#cfg-gph");
   if (gph) {
@@ -319,7 +323,10 @@ const loadGiga = () => api("/api/giga").then(renderGiga).catch(() => {});
 // отклики GetMatch со статусами: список во вкладке «Отклики» + разбивка в «Стате»
 let GM_APPS = [], GM_FILTER = "all";
 const gmCls = (a) => {
-  const s = (a.status_readable || "").toLowerCase();
+  const m = (a.status || "").toLowerCase();  // стабильный машинный код — приоритетно
+  if (/(approv|accept|invit|offer|hir)/.test(m)) return "ok";
+  if (/(reject|declin|refus)/.test(m)) return "bad";
+  const s = (a.status_readable || "").toLowerCase();  // запасной матч по тексту
   if (s.includes("одобр") || s.includes("приглаш") || s.includes("оффер")) return "ok";
   if (s.includes("отказ")) return "bad";
   return "wait";
@@ -341,7 +348,7 @@ function renderGmApps() {
     return '<div class="cell act"><div class="dlg-main">'
       + `<div class="dlg-title">${esc(a.title)} ${st}</div>`
       + `<div class="dlg-date">${esc(sub)}${rej}</div></div>`
-      + `<button class="abtn open" data-url="${esc(a.url)}">↗</button></div>`;
+      + (a.url ? `<button class="abtn open" data-url="${esc(a.url)}">↗</button>` : "") + "</div>";
   }).join("") + "</div>";
   box.querySelectorAll(".abtn[data-url]").forEach((el) => {
     el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
@@ -501,7 +508,7 @@ async function boot() {
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {
     err(String(e.message) === "not_linked"
-      ? "Сначала привяжи профиль: в боте /link и поделись номером"
+      ? "Сначала привяжи профиль: открой бота, нажми /start и поделись номером"
       : "Ошибка загрузки: " + e.message);
   }
 }

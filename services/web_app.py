@@ -26,6 +26,7 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga", "getmatch")  # тумблеры
 MAX_PER_DAY_CAP = 200   # серверный суточный потолок откликов hh (защита от бана)
 TESTS_PER_DAY_CAP = 30  # практический потолок браузерного тест-флоу
+GETMATCH_CAP = 50       # практический потолок откликов GetMatch в сутки
 _INITDATA_MAX_AGE = 86400  # сутки
 
 app = FastAPI(title="hh Mini App")
@@ -448,7 +449,7 @@ def _giga_summary(account: str) -> dict:
             "active": by.get("active", 0) + by.get("running", 0), "last": last}
 
 
-def _getmatch_apps(account: str, limit: int = 100) -> list:
+def _getmatch_apps(account: str, limit: int = 200) -> list:
     """Реестр наших откликов через GetMatch (что бот отправил)."""
     conn = pgconn.connect()
     try:
@@ -688,7 +689,8 @@ async def api_settings(account: str = None,
         "civil_law_only": bool(await asyncio.to_thread(
             pgconn.get_setting, "apply.civil_law_only", False, account)),
         "getmatch_max_per_day": await asyncio.to_thread(
-            pgconn.get_setting, "getmatch.max_per_day", 50, account),
+            pgconn.get_setting, "getmatch.max_per_day", GETMATCH_CAP, account),
+        "getmatch_max_per_day_cap": GETMATCH_CAP,
         "max_per_day_cap": MAX_PER_DAY_CAP,   # серверный суточный потолок hh
         "tests_per_day_cap": TESTS_PER_DAY_CAP,  # практический потолок тест-флоу
     }
@@ -733,7 +735,7 @@ async def _set_config(account: str, key: str, value) -> None:
             pgconn.set_setting, key, min(cap, max(0, int(value))), account)
     elif key == "getmatch.max_per_day":
         await asyncio.to_thread(
-            pgconn.set_setting, "getmatch.max_per_day", min(50, max(0, int(value))), account)
+            pgconn.set_setting, "getmatch.max_per_day", min(GETMATCH_CAP, max(0, int(value))), account)
     elif key == "apply.resume_id":
         await asyncio.to_thread(pgconn.set_setting, "apply.resume_id", str(value), account)
     elif key == "apply.civil_law_only":
@@ -831,9 +833,9 @@ async def api_getmatch_otp(body: dict, account: str = None,
                            x_init_data: str = Header(None, alias="X-Init-Data")):
     """Шаг 1 привязки: запросить код входа GetMatch (на email/Telegram)."""
     account = await _auth(x_init_data, account)
-    login = (body.get("login") or "").strip()
-    if not login:
-        raise HTTPException(400, "Укажите логин GetMatch (email или username)")
+    login = (body.get("login") or "").strip().lstrip("@")
+    if not (3 <= len(login) <= 64 and all(c.isalnum() or c in "_@.+-" for c in login)):
+        raise HTTPException(400, "Укажите корректный Telegram-username GetMatch (без пробелов).")
     from services.getmatch_api import request_otp, GetMatchError
     try:
         res = await request_otp(login)
@@ -857,9 +859,13 @@ async def api_getmatch_link(body: dict, account: str = None,
         raise HTTPException(400, "Нужны логин и код")
     from services.getmatch_api import authorize_with_code, GetMatchError
     try:
-        me = await authorize_with_code(account, login, code)
+        me = await authorize_with_code(account, login.lstrip("@"), code)
     except GetMatchError as e:
         raise HTTPException(400, str(e))
+    # привязали — включаем фичу (как делает бот) и сбрасываем кэш профиля
+    await asyncio.to_thread(pgconn.set_setting, "feat.getmatch", True, account)
+    for _k in [_k for _k in _me_cache if _k[0] == account]:
+        _me_cache.pop(_k, None)
     name = ((me.get("first_name") or "") + " " + (me.get("last_name") or "")).strip()
     return {"ok": True, "name": name}
 

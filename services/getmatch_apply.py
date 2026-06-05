@@ -104,7 +104,10 @@ async def _gen_letter(llm, offer) -> str:
         t = (await llm.send_message(
             f"Вакансия: «{pos}»" + (f" в {comp}" if comp else "") +
             ". Напиши сопроводительное письмо.")).strip()
-        return t if len(t) >= 20 else ""
+        if len(t) < 20:
+            print(f"getmatch: письмо слишком короткое ({len(t)} симв) — отбрасываю")
+            return ""
+        return t
     except Exception as e:
         print(f"getmatch: письмо не сгенерировано: {repr(e)[:60]}")
         return ""
@@ -121,12 +124,16 @@ async def run():
         print("getmatch: не привязан (нет сессии и нет Telegram) — пропуск"); return
 
     lock_conn = pgconn.connect()
-    with lock_conn.cursor() as cur:
-        cur.execute("SELECT pg_try_advisory_lock(hashtext(%s))", (f"getmatch:{account}",))
-        if not cur.fetchone()[0]:
-            print("getmatch: уже выполняется — пропуск"); lock_conn.close(); return
-    api = GetMatchAPI(account, enc)
+    api = None
+    locked = False
     try:
+        with lock_conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(hashtext(%s))", (f"getmatch:{account}",))
+            if not cur.fetchone()[0]:
+                print("getmatch: уже выполняется — пропуск")
+                return
+        locked = True
+        api = GetMatchAPI(account, enc)
         try:
             me = await api.ensure_auth()
         except GetMatchError as e:
@@ -139,7 +146,8 @@ async def run():
         print(f"getmatch: вошли как {me.get('first_name')} {me.get('last_name')}")
 
         letter_llm = _letter_llm(cfg)
-        limit = int(pgconn.get_setting("getmatch.max_per_day", DEFAULT_MAX) or DEFAULT_MAX)
+        _lim = pgconn.get_setting("getmatch.max_per_day", DEFAULT_MAX)
+        limit = DEFAULT_MAX if _lim is None else int(_lim)  # явный 0 = выключено
         sent_today = _today_count(account)
         seen = pgconn.seen_keys(SEEN_KIND)
         applied = 0
@@ -157,7 +165,7 @@ async def run():
                 pos = (o.get("position") or "")[:42]
                 letter = await _gen_letter(letter_llm, o)
                 if o.get("cover_letter_required") and not letter:
-                    print(f"getmatch: vac {vid} требует письмо, LLM недоступна — пропуск")
+                    print(f"getmatch: vac {vid} требует письмо, а его нет (LLM выкл/ответ отбракован) — пропуск")
                     continue
                 if DRY:
                     print(f"getmatch[dry]: откликнулся бы на {pos} (vac {vid}); письмо={len(letter)} симв.")
@@ -168,13 +176,14 @@ async def run():
                 except Exception as e:
                     print(f"getmatch: apply vac {vid} ошибка: {repr(e)[:70]}")
                     continue
-                pgconn.add_seen(SEEN_KIND, [vid]); seen.add(vid)
                 if r.status_code == 200:
-                    pgconn.bump_activity("getmatch", 1); applied += 1
+                    # seen — ТОЛЬКО при успехе: иначе при 401/5xx vid сгорал бы навсегда (нет TTL)
+                    pgconn.add_seen(SEEN_KIND, [vid]); seen.add(vid)
+                    pgconn.bump_activity("getmatch", 1, account=account); applied += 1
                     print(f"getmatch: ✅ отклик {pos} (vac {vid}) [{sent_today + applied}/{limit}]")
-                    await asyncio.sleep(random.uniform(4, 12))
                 else:
-                    print(f"getmatch: vac {vid} apply -> {r.status_code} {r.text[:60]}")
+                    print(f"getmatch: vac {vid} apply -> {r.status_code} {r.text[:60]} (повторю позже)")
+                await asyncio.sleep(random.uniform(4, 12))  # троттлинг любого реального POST
         print(f"getmatch: откликов за прогон: {applied}")
 
         # --- синхронизация статусов (всегда, даже в dry) ---
@@ -185,9 +194,11 @@ async def run():
         except Exception as e:
             print(f"getmatch: синк статусов ошибка: {repr(e)[:70]}")
     finally:
-        await api.aclose()
-        with lock_conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (f"getmatch:{account}",))
+        if api is not None:
+            await api.aclose()
+        if locked:
+            with lock_conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (f"getmatch:{account}",))
         lock_conn.close()
 
 

@@ -219,31 +219,27 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 .fresh { font-size: 12px; color: var(--hint); margin-left: 4px; }
 .abtn.chat { background: color-mix(in srgb, var(--hint) 16%, transparent); color: var(--text); }
 
-/* getmatch статусы */
+/* getmatch: статусы-бейджи (адаптивно под тему Telegram) */
 .gm-st{font-size:11px;padding:1px 7px;border-radius:10px;white-space:nowrap;vertical-align:middle;font-weight:600}
-.gm-st.ok{background:#1c3a26;color:#5fdc8b}
-.gm-st.bad{background:#3a1c1f;color:#ff8b8b}
-.gm-st.wait{background:#2a2c33;color:#9aa3b2}
+.gm-st.ok{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
+.gm-st.bad{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+.gm-st.wait{background:color-mix(in srgb,var(--hint) 16%,transparent);color:var(--hint)}
 
-/* getmatch привязка без Telegram */
-.gm-link{margin-top:10px;padding:10px;background:#1b1d24;border-radius:12px}
-.gm-link-hint{font-size:12px;color:#9aa3b2;margin-bottom:8px}
+/* getmatch: привязка без Telegram */
+.gm-link{margin-top:10px;padding:10px;background:var(--page);border-radius:12px}
+.gm-link-hint{font-size:12px;color:var(--hint);margin-bottom:8px}
 .gm-link-row{display:flex;gap:8px;margin-bottom:8px}
-.gm-link-row input{flex:1;min-width:0;padding:8px 10px;border-radius:9px;border:1px solid #2a2c33;background:#13151a;color:#e7eaf0;font-size:14px}
-.gm-link-row button{padding:8px 12px;border-radius:9px;border:0;background:#3d6df0;color:#fff;font-size:13px;font-weight:600;white-space:nowrap}
+.gm-link-row input{flex:1;min-width:0;padding:8px 10px;border-radius:9px;border:1px solid var(--sep);background:var(--sec);color:var(--text);font-size:14px}
+.gm-link-row button{padding:8px 12px;border-radius:9px;border:0;background:var(--accent);color:var(--accent-t);font-size:13px;font-weight:600;white-space:nowrap}
 .gm-link-row button:disabled{opacity:.5}
-.gm-link-msg{font-size:12px;color:#cfd6e2;min-height:14px}
+.gm-link-msg{font-size:12px;color:var(--text);min-height:14px}
 
-/* getmatch: пустое состояние + переключатель источника */
-.empty{padding:24px 16px;text-align:center;color:#7a828f;font-size:13px}
-.seg.src{margin-bottom:10px}
-.seg.src button{font-weight:600}
-
-/* фильтр источника (Отклики) — полноширинный 2-табовый */
+/* фильтр источника (Отклики) — полноширинный 2-таб */
 .seg.src{margin:0 14px 10px}
 .seg.src button{flex:1;padding:9px 2px;font-weight:600}
+
 /* карта настроек: секции по платформам */
-.sect-head{display:flex;align-items:center;gap:8px;font-size:17px;font-weight:700;color:#e7eaf0;margin:20px 14px 2px}
-.sect-sub{font-size:12px;color:#7a828f;margin:0 14px 9px;line-height:1.35}
+.sect-head{display:flex;align-items:center;gap:8px;font-size:17px;font-weight:700;color:var(--text);margin:20px 14px 2px}
+.sect-sub{font-size:12px;color:var(--hint);margin:0 14px 9px;line-height:1.35}
 .dot-hh,.dot-gm,.dot-gen{width:9px;height:9px;border-radius:50%;flex:none}
-.dot-hh{background:#3d6df0}.dot-gm{background:#5fdc8b}.dot-gen{background:#9aa3b2}
+.dot-hh{background:var(--accent)}.dot-gm{background:var(--good)}.dot-gen{background:var(--hint)}

@@ -119,6 +119,7 @@ class GetMatchAPI:
         sess = self.hc.cookies.get("AIOHTTP_SESSION")
         if sess:
             pgconn.set_setting("getmatch.session", sess, account=self.account)
+            pgconn.set_setting("getmatch.username", self.username, account=self.account)
         return True
 
     async def ensure_auth(self):
@@ -133,6 +134,7 @@ class GetMatchAPI:
         if not self.tg_session_enc:
             raise GetMatchError("сессия GetMatch истекла — перепривяжите аккаунт "
                                 "(логин + код) в кабинете")
+        self.hc.cookies.clear()  # сбросить протухшую сессию перед релогином
         await self._otp_login()
         r = await self.hc.get("/api/auth/me")
         if r.status_code != 200:

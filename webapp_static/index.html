@@ -46,27 +46,41 @@
           <input type="date" id="d-from"><span>—</span><input type="date" id="d-to">
         </div>
 
+        <!-- ━━ hh.ru ━━ -->
+        <div class="sect-head"><span class="dot-hh"></span>hh.ru</div>
         <div class="gtitle">Воронка за период</div>
         <div id="funnel" class="list pad-list"></div>
         <div class="ghint">% — доля от всех откликов за период. Каждый этап входит в предыдущий.</div>
-
         <div class="gtitle">Из них по статусам сейчас</div>
         <div id="breakdown" class="list"></div>
-
-        <div class="gtitle">Активность бота за период</div>
+        <div class="gtitle">Активность за период</div>
         <div class="grid">
           <div class="stat"><div class="num" id="a-apply">—</div><div class="lbl">Откликов отправлено</div></div>
           <div class="stat"><div class="num" id="a-tests">—</div><div class="lbl">Тестовых откликов</div></div>
           <div class="stat"><div class="num" id="a-reply">—</div><div class="lbl">Ответов работодателям</div></div>
           <div class="stat"><div class="num" id="a-browse">—</div><div class="lbl">Просмотров вакансий</div></div>
           <div class="stat"><div class="num" id="a-bump">—</div><div class="lbl">Поднятий резюме</div></div>
-          <div class="stat"><div class="num" id="a-getmatch">—</div><div class="lbl">Откликов через GetMatch</div></div>
         </div>
         <div class="ghint" id="next-apply" style="padding:10px 18px 0"></div>
         <div class="gtitle">Динамика откликов · 30 дней</div>
         <div id="trend" class="list pad-list"></div>
-        <div class="gtitle" id="gm-stats-title" style="display:none">GetMatch — по статусам</div>
+
+        <!-- ━━ GetMatch ━━ -->
+        <div class="sect-head"><span class="dot-gm"></span>GetMatch</div>
         <div id="gm-stats" class="list"></div>
+        <div class="ghint" id="gm-empty">Пока нет откликов через GetMatch.</div>
+
+        <!-- ━━ Habr Career ━━ -->
+        <div class="sect-head"><span class="dot-gen" style="background:#1a7ebb"></span>Habr Career</div>
+        <div id="habr-stats" class="list"></div>
+        <div class="ghint" id="habr-empty">Пока нет откликов через Habr.</div>
+
+        <!-- ━━ Авто-задачи в Telegram ━━ -->
+        <div class="sect-head"><span class="dot-gen" style="background:#8b5cf6"></span>Авто-задачи в Telegram</div>
+        <div class="grid">
+          <div class="stat"><div class="num" id="a-giga">—</div><div class="lbl">Задач разобрано</div></div>
+        </div>
+        <div class="ghint" style="padding:6px 18px 0">Бот сам проходит скрининги-боты и пишет HR в Telegram.</div>
       </section>
 
       <!-- ОТКЛИКИ -->

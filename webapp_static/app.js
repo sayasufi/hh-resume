@@ -272,13 +272,13 @@ function renderActivity(a) {
   $("#a-reply").textContent = a.reply || 0;
   $("#a-browse").textContent = a.browse || 0;
   $("#a-bump").textContent = a.bump || 0;
-  if ($("#a-getmatch")) $("#a-getmatch").textContent = a.getmatch || 0;
 }
 const loadActivity = () => api("/api/activity" + qp()).then(renderActivity).catch(() => {});
 
 // прогресс авто-ГигаРекрутера (giga_queue) — раньше был полностью невидим
 function renderGiga(g) {
   const box = $("#giga-card");
+  if ($("#a-giga")) $("#a-giga").textContent = (g && g.done) || 0;  // блок «Авто-задачи в Telegram» в Стате
   if (!g || (!g.pending && !g.done && !g.active)) { box.classList.add("hidden"); return; }
   box.classList.remove("hidden");
   const last = g.last && g.last.vacancy
@@ -326,20 +326,20 @@ function renderGmApps() {
     el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
   });
 }
-function renderGmStats() {
-  const box = $("#gm-stats"), title = $("#gm-stats-title");
+function _statusRows(box, empty, apps) {
   if (!box) return;
-  if (!GM_APPS.length) { box.innerHTML = ""; if (title) title.style.display = "none"; return; }
-  if (title) title.style.display = "";
+  if (empty) empty.style.display = apps.length ? "none" : "";
+  if (!apps.length) { box.innerHTML = ""; return; }
   const c = { wait: 0, ok: 0, bad: 0 };
-  GM_APPS.forEach((a) => { c[gmCls(a)]++; });
+  apps.forEach((a) => { c[gmCls(a)]++; });
   const row = (lbl, n, kind) =>
     `<div class="cell"><span class="dlg-title">${lbl}</span><span class="gm-st ${kind}">${n}</span></div>`;
-  box.innerHTML = row("Всего отправлено", GM_APPS.length, "wait")
+  box.innerHTML = row("Всего отправлено", apps.length, "wait")
     + row("⏳ Ждём ответа", c.wait, "wait")
     + row("✅ Одобрены / приглашения", c.ok, "ok")
     + row("🔴 Отказы", c.bad, "bad");
 }
+function renderGmStats() { _statusRows($("#gm-stats"), $("#gm-empty"), GM_APPS); }
 const loadGetmatchApps = () => api("/api/getmatch").then((r) => {
   GM_APPS = r.applications || []; renderGmApps(); renderGmStats();
 }).catch(() => {});
@@ -389,8 +389,9 @@ function renderHabrApps() {
     el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
   });
 }
+function renderHabrStats() { _statusRows($("#habr-stats"), $("#habr-empty"), HABR_APPS); }
 const loadHabrApps = () => api("/api/habr").then((r) => {
-  HABR_APPS = r.applications || []; renderHabrApps();
+  HABR_APPS = r.applications || []; renderHabrApps(); renderHabrStats();
 }).catch(() => {});
 if ($("#habr-filter")) $("#habr-filter").querySelectorAll(".chip").forEach((c) => {
   c.onclick = () => {
@@ -463,7 +464,7 @@ const loadDialogs = () => api("/api/dialogs" + qp())
 // ручное обновление (кнопка в шапке) — перетягивает всё актуальное
 function refreshAll() {
   hap("light");
-  loadStats(); loadActivity(); loadDialogs(); loadActions(); loadGiga(); loadGetmatchApps();
+  loadStats(); loadActivity(); loadDialogs(); loadActions(); loadGiga(); loadGetmatchApps(); loadHabrApps();
   api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
 }
 if ($("#refresh")) $("#refresh").onclick = refreshAll;
@@ -523,7 +524,7 @@ async function boot() {
     $("#giga-hint").textContent = st.tg_connected
       ? ""
       : "⚠️ Чтобы включить «Авто-задачи в Telegram», дайте доступ к Telegram: команда /connect в боте.";
-    loadDialogs(); loadActivity(); loadActions(); loadGiga(); loadGetmatchApps();
+    loadDialogs(); loadActivity(); loadActions(); loadGiga(); loadGetmatchApps(); loadHabrApps();
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {
     err(String(e.message) === "not_linked"

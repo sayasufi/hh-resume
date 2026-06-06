@@ -18,13 +18,25 @@ from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.tl.functions.contacts import DeleteContactsRequest, ImportContactsRequest
 from telethon.tl.functions.messages import StartBotRequest
+from telethon.tl.types import InputPhoneContact
 
 LIVE = "--live" in sys.argv
 DRY = not LIVE
 TME = re.compile(r"(?:https?://)?t\.me/([A-Za-z0-9_]+)(?:\?start=([\w=-]+))?")
 ATRE = re.compile(r"@([A-Za-z0-9_]{4,})")
+PHONE = re.compile(r"(?:\+7|8|7)[\s\-\(\)]*\d{3}[\s\-\(\)]*\d{3}[\s\-\(\)]*\d{2}[\s\-\(\)]*\d{2}")
 CONSENT_RE = re.compile(r"соглас|ознаком|принима|начать|продолж|поех|да[,!. ]", re.I)
+
+
+def _norm_phone(p):
+    d = re.sub(r"\D", "", p)
+    if len(d) == 11 and d[0] in "78":
+        d = "7" + d[1:]
+    elif len(d) == 10:
+        d = "7" + d
+    return "+" + d
 MAX_TASKS = 5
 MAX_TURNS = 30  # боты проходим ВСЕГДА до конца — лимит высокий (длинные анкеты 15-25 вопросов)
 REPLY_TIMEOUT = 70  # AI-боты (напр. «Василиса») генерят следующий вопрос медленно
@@ -206,12 +218,16 @@ async def _pick_button(oa, sys_prompt, question, options):
     return ((await chat.send_message(prompt)) or "").strip()
 
 
-async def _do_hr(client, oa, name, resume, hh_url, vac_url, user, vac, dry):
+def _hr_msg(name, hh_url, vac_url):
     # дело «написать HR в Telegram» появляется, когда HR САМ попросил написать — поэтому сообщение
     # простое: поздоровались, имя, что откликнулся на hh, + ссылки. Без LLM (никакого робото-дрейфа).
     intro = f"Здравствуйте! Меня зовут {_first_name(name)}, откликался на вашу вакансию на hh."
-    msg = intro + (f"\nВакансия: {vac_url}" if vac_url else "") \
-              + (f"\nМоё резюме: {hh_url}" if hh_url else "")
+    return intro + (f"\nВакансия: {vac_url}" if vac_url else "") \
+                 + (f"\nМоё резюме: {hh_url}" if hh_url else "")
+
+
+async def _do_hr(client, oa, name, resume, hh_url, vac_url, user, vac, dry):
+    msg = _hr_msg(name, hh_url, vac_url)
     print(f"    @{user} (вакансия «{vac[:40]}»)\n      СООБЩЕНИЕ: «{msg[:300]}»")
     if dry:
         print(f"    @{user}: DRY — сообщение НЕ отправлено")
@@ -223,6 +239,40 @@ async def _do_hr(client, oa, name, resume, hh_url, vac_url, user, vac, dry):
     except Exception as e:
         print(f"    @{user}: не отправилось ({type(e).__name__})")
         return False
+
+
+async def _do_phone(client, name, hh_url, vac_url, phone, vac, dry):
+    """Написать HR по НОМЕРУ в Telegram: импорт контакта -> если есть TG -> сообщение ->
+    удалить контакт (чат остаётся). Нет TG -> None (это реальный звонок, дело оставляем)."""
+    msg = _hr_msg(name, hh_url, vac_url)
+    print(f"    тел {phone} (вакансия «{vac[:40]}»)\n      СООБЩЕНИЕ: «{msg[:300]}»")
+    if dry:
+        print(f"    тел {phone}: DRY — не импортирую/не пишу")
+        return None
+    try:
+        res = await client(ImportContactsRequest(
+            [InputPhoneContact(client_id=0, phone=phone, first_name=f"hh {vac[:18]}", last_name="")]))
+    except Exception as e:
+        print(f"    тел {phone}: импорт упал ({type(e).__name__}) — пропуск")
+        return None
+    if not res.users:
+        print(f"    тел {phone}: нет Telegram — это звонок, дело оставляю")
+        return None
+    u = res.users[0]
+    try:
+        await client.send_message(u, msg, link_preview=False)
+        ok = True
+    except Exception as e:
+        print(f"    тел {phone}: не отправилось ({type(e).__name__})")
+        ok = False
+    try:  # чистим контакт — чат остаётся, контакты не засоряем
+        await client(DeleteContactsRequest(id=[u]))
+    except Exception:
+        pass
+    if ok:
+        print(f"    тел {phone}: написал в Telegram (@{u.username or 'по номеру'})")
+        return True
+    return False
 
 
 async def main():
@@ -300,6 +350,15 @@ async def main():
                         print(f"\n  [HR] дело #{t['id']} «{t['vac'][:42]}» -> @{user}")
                         r = await _do_hr(client, oa, name, resume, hh_url, t["vac_url"], user, t["vac"], DRY)
                         if r is True and LIVE:  # написали один раз -> дело закрыто, дальше юзер сам
+                            _mark_done(t["id"])
+                        nh += 1
+                    elif (PHONE.search(msg)
+                            and ("напиш" in low or "telegram" in low or "мессендж" in low)):
+                        # «написать в мессенджер», но дан НОМЕР (нет @) -> пишем в TG по номеру
+                        phone = _norm_phone(PHONE.search(msg).group(0))
+                        print(f"\n  [ТЕЛ] дело #{t['id']} «{t['vac'][:42]}» -> {phone}")
+                        r = await _do_phone(client, name, hh_url, t["vac_url"], phone, t["vac"], DRY)
+                        if r is True and LIVE:  # написали -> закрыто; нет TG -> None, оставляем (звонок)
                             _mark_done(t["id"])
                         nh += 1
             except Exception as e:

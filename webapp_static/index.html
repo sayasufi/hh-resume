@@ -151,14 +151,8 @@
             <input type="checkbox" data-feat="apply"><i></i></label>
           <label class="cell tap"><span class="k">Лимит в день <em id="cap-limit">(макс 200)</em></span>
             <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></label>
-        </div>
-
-        <div class="gtitle">Отклики с тестами</div>
-        <div class="list">
-          <label class="cell toggle"><span class="t"><b>Включить авто-тесты</b><small>отклик + тест через браузер</small></span>
+          <label class="cell toggle"><span class="t"><b>Отклики с тестами</b><small>отклик + тест через браузер · <span id="tlimit-note">+25% к лимиту</span></small></span>
             <input type="checkbox" data-feat="tests"><i></i></label>
-          <label class="cell tap"><span class="k">Лимит в день <em id="cap-tlimit">(макс 30)</em></span>
-            <input type="number" id="cfg-tlimit" inputmode="numeric" min="0" max="30"></label>
         </div>
 
         <div class="gtitle">Чаты и активность</div>
@@ -168,15 +162,6 @@
           <label class="cell toggle"><span class="t"><b>Активность + поднятие резюме</b><small>просмотр вакансий, авто-bump</small></span>
             <input type="checkbox" data-feat="browse"><i></i></label>
         </div>
-
-        <!-- ░░ Авто-задачи в Telegram (все источники) ░░ -->
-        <div class="sect-head"><span class="dot-gen" style="background:#8b5cf6"></span>Авто-задачи в Telegram</div>
-        <div class="sect-sub">Бот сам проходит боты-скрининги работодателей и пишет HR в Telegram — по делам со <b>всех источников</b> (hh, Habr и т.д.).</div>
-        <div class="list">
-          <label class="cell toggle"><span class="t"><b>Включить авто-задачи</b><small>скрининги-боты + написать HR; дела всех источников</small></span>
-            <input type="checkbox" data-feat="giga"><i></i></label>
-        </div>
-        <div class="ghint" id="giga-hint"></div>
 
         <!-- ░░ GetMatch ░░ -->
         <div class="sect-head"><span class="dot-gm"></span>GetMatch</div>
@@ -207,7 +192,10 @@
         <div class="list">
           <label class="cell toggle"><span class="t"><b>Уведомления и дайджест</b><small>важное в личку: интервью, контакты работодателей</small></span>
             <input type="checkbox" data-feat="notify"><i></i></label>
+          <label class="cell toggle"><span class="t"><b>Авто-задачи в Telegram</b><small>бот сам проходит боты-скрининги и пишет HR — дела со всех источников (hh, Habr…)</small></span>
+            <input type="checkbox" data-feat="giga"><i></i></label>
         </div>
+        <div class="ghint" id="giga-hint"></div>
       </section>
 
       <!-- ДЕЛА -->

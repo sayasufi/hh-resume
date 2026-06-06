@@ -188,13 +188,18 @@ function bindToggles(features, tgConnected, gmLinked, habrLinked) {
 function resumeTitle(id) { const r = RESUMES.find((x) => String(x.id) === String(id)); return r ? (r.title || r.id) : (id || "—"); }
 function bindConfig(cfg, resumes) {
   RESUMES = resumes || []; RESUME_ID = cfg.resume_id || (RESUMES[0] && RESUMES[0].id) || "";
-  const capL = cfg.max_per_day_cap || 200, capT = cfg.tests_per_day_cap || 30;
+  const capL = cfg.max_per_day_cap || 200;
   $("#cfg-salary").value = cfg.salary || "";
   $("#cfg-limit").value = cfg.max_per_day != null ? cfg.max_per_day : "";
-  $("#cfg-tlimit").value = cfg.tests_per_day != null ? cfg.tests_per_day : "";
-  $("#cfg-limit").max = capL; $("#cfg-tlimit").max = capT;
+  $("#cfg-limit").max = capL;
   if ($("#cap-limit")) $("#cap-limit").textContent = "(макс " + capL + ")";
-  if ($("#cap-tlimit")) $("#cap-tlimit").textContent = "(макс " + capT + ")";
+  const updateTNote = () => {  // тесты = 25% от лимита откликов
+    const n = Math.round((parseInt($("#cfg-limit").value || "0", 10) || 0) * 0.25);
+    const el = $("#tlimit-note");
+    if (el) el.textContent = n ? `+${n}/день (25% от лимита)` : "+25% к лимиту";
+  };
+  updateTNote();
+  $("#cfg-limit").addEventListener("input", updateTNote);
   $("#resume-val").textContent = resumeTitle(RESUME_ID);
   const wire = (el, key) => {
     el.onchange = async () => {
@@ -213,7 +218,6 @@ function bindConfig(cfg, resumes) {
   };
   wire($("#cfg-salary"), "salary");
   clampWire($("#cfg-limit"), "apply.max_per_day", capL);
-  clampWire($("#cfg-tlimit"), "apply.tests_per_day", capT);
   if ($("#cfg-gm-limit")) {
     const capG = cfg.getmatch_max_per_day_cap || 50;
     $("#cfg-gm-limit").value = cfg.getmatch_max_per_day != null ? cfg.getmatch_max_per_day : "";

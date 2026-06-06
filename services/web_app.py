@@ -23,10 +23,11 @@ from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webapp_static")
-FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga", "getmatch")  # тумблеры
+FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga", "getmatch", "habr")  # тумблеры
 MAX_PER_DAY_CAP = 200   # серверный суточный потолок откликов hh (защита от бана)
 TESTS_PER_DAY_CAP = 30  # практический потолок браузерного тест-флоу
 GETMATCH_CAP = 50       # практический потолок откликов GetMatch в сутки
+HABR_CAP = 30           # практический потолок откликов Habr Career в сутки
 _INITDATA_MAX_AGE = 86400  # сутки
 
 app = FastAPI(title="hh Mini App")
@@ -466,6 +467,24 @@ def _getmatch_apps(account: str, limit: int = 200) -> list:
         conn.close()
 
 
+def _habr_apps(account: str, limit: int = 200) -> list:
+    """Реестр наших откликов через Habr Career."""
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT vacancy_id, title, url, applied_at, status, company "
+                        "FROM habr_apps WHERE account=%s "
+                        "ORDER BY applied_at DESC NULLS LAST LIMIT %s", (account, limit))
+            return [{"id": r[0], "title": r[1] or "", "url": r[2] or "",
+                     "at": (str(r[3])[:10] if r[3] else ""), "status": r[4] or "",
+                     "status_readable": r[4] or "", "company": r[5] or "",
+                     "reject_reason": ""} for r in cur.fetchall()]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
 def _src_age(h, now) -> str:
     if not h or not h.get("ts"):
         return ""
@@ -774,6 +793,11 @@ async def api_settings(account: str = None,
         "getmatch_max_per_day": await asyncio.to_thread(
             pgconn.get_setting, "getmatch.max_per_day", GETMATCH_CAP, account),
         "getmatch_max_per_day_cap": GETMATCH_CAP,
+        "habr_max_per_day": await asyncio.to_thread(
+            pgconn.get_setting, "habr.max_per_day", HABR_CAP, account),
+        "habr_max_per_day_cap": HABR_CAP,
+        "habr_query": await asyncio.to_thread(
+            pgconn.get_setting, "habr.query", "", account) or "",
         "max_per_day_cap": MAX_PER_DAY_CAP,   # серверный суточный потолок hh
         "tests_per_day_cap": TESTS_PER_DAY_CAP,  # практический потолок тест-флоу
     }
@@ -788,7 +812,10 @@ async def api_settings(account: str = None,
                 pgconn.get_setting, "getmatch.session", "", account)),
             "getmatch_username": await asyncio.to_thread(
                 pgconn.get_setting, "getmatch.username", "", account) or "",
-            # здоровье источников (hh / GetMatch / ГигаРекрутер) — для секции «Источники»
+            # привязан ли Habr (есть сессия)
+            "habr_linked": bool(await asyncio.to_thread(
+                pgconn.get_setting, "habr.session", "", account)),
+            # здоровье источников (hh / GetMatch / ГигаРекрутер / Habr) — для секции «Источники»
             "sources": await asyncio.to_thread(_source_health, account)}
 
 
@@ -808,6 +835,9 @@ async def _set_config(account: str, key: str, value) -> None:
             if not cfg.get("tg_user_session") and not linked:
                 raise HTTPException(
                     400, "Сначала привяжите GetMatch (логин + код) или подключите Telegram.")
+        if key == "habr" and bool(value):
+            if not await asyncio.to_thread(pgconn.get_setting, "habr.session", "", account):
+                raise HTTPException(400, "Сначала войдите в Habr Career (логин/пароль + 2captcha).")
         await asyncio.to_thread(pgconn.set_setting, f"feat.{key}", bool(value), account)
     elif key == "salary":
         cfg = await asyncio.to_thread(pgconn.app_config, account)
@@ -821,6 +851,11 @@ async def _set_config(account: str, key: str, value) -> None:
     elif key == "getmatch.max_per_day":
         await asyncio.to_thread(
             pgconn.set_setting, "getmatch.max_per_day", min(GETMATCH_CAP, max(0, int(value))), account)
+    elif key == "habr.max_per_day":
+        await asyncio.to_thread(
+            pgconn.set_setting, "habr.max_per_day", min(HABR_CAP, max(0, int(value))), account)
+    elif key == "habr.query":
+        await asyncio.to_thread(pgconn.set_setting, "habr.query", str(value).strip()[:80], account)
     elif key == "apply.resume_id":
         await asyncio.to_thread(pgconn.set_setting, "apply.resume_id", str(value), account)
     elif key == "apply.civil_law_only":
@@ -923,6 +958,13 @@ async def api_getmatch(account: str = None,
                        x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data, account)
     return {"applications": await asyncio.to_thread(_getmatch_apps, account)}
+
+
+@app.get("/api/habr")
+async def api_habr(account: str = None,
+                   x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data, account)
+    return {"applications": await asyncio.to_thread(_habr_apps, account)}
 
 
 @app.post("/api/getmatch/otp")

@@ -226,6 +226,17 @@ function bindConfig(cfg, resumes) {
     if ($("#cap-glimit")) $("#cap-glimit").textContent = "(макс " + capG + ")";
     clampWire($("#cfg-gm-limit"), "getmatch.max_per_day", capG);
   }
+  if ($("#cfg-habr-limit")) {
+    const capH = cfg.habr_max_per_day_cap || 30;
+    $("#cfg-habr-limit").value = cfg.habr_max_per_day != null ? cfg.habr_max_per_day : "";
+    $("#cfg-habr-limit").max = capH;
+    if ($("#cap-hlimit")) $("#cap-hlimit").textContent = "(макс " + capH + ")";
+    clampWire($("#cfg-habr-limit"), "habr.max_per_day", capH);
+  }
+  if ($("#cfg-habr-query")) {
+    $("#cfg-habr-query").value = cfg.habr_query || "";
+    $("#cfg-habr-query").onchange = () => save("habr.query", $("#cfg-habr-query").value.trim());
+  }
   const gph = $("#cfg-gph");
   if (gph) {
     gph.checked = !!cfg.civil_law_only;
@@ -336,10 +347,12 @@ if ($("#dlg-src")) $("#dlg-src").querySelectorAll("button").forEach((b) => {
   b.onclick = () => {
     $("#dlg-src").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
     b.classList.add("active");
-    const gm = b.dataset.src === "getmatch";
-    $("#src-hh").style.display = gm ? "none" : "";
-    $("#src-getmatch").style.display = gm ? "" : "none";
-    if (gm) loadGetmatchApps();  // подтянуть свежие отклики GetMatch (надёжно, не по тайму boot)
+    const src = b.dataset.src;
+    $("#src-hh").style.display = src === "hh" ? "" : "none";
+    $("#src-getmatch").style.display = src === "getmatch" ? "" : "none";
+    $("#src-habr").style.display = src === "habr" ? "" : "none";
+    if (src === "getmatch") loadGetmatchApps();  // свежие отклики (надёжно, не по тайму boot)
+    if (src === "habr") loadHabrApps();
     hap("sel");
   };
 });
@@ -348,6 +361,40 @@ if ($("#gm-filter")) $("#gm-filter").querySelectorAll(".chip").forEach((c) => {
   c.onclick = () => {
     $("#gm-filter").querySelectorAll(".chip").forEach((x) => x.classList.remove("active"));
     c.classList.add("active"); GM_FILTER = c.dataset.gf; renderGmApps(); hap("sel");
+  };
+});
+
+// ── отклики Habr (зеркало GetMatch) ──
+let HABR_APPS = [], HABR_FILTER = "all";
+function renderHabrApps() {
+  const box = $("#habr-apps"), cnt = $("#habr-count");
+  if (!box) return;
+  const items = HABR_FILTER === "all" ? HABR_APPS : HABR_APPS.filter((a) => gmCls(a) === HABR_FILTER);
+  if (cnt) cnt.textContent = items.length;
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">'
+      + (HABR_APPS.length ? "Нет откликов в этом фильтре" : "Пока нет откликов через Habr") + "</div>";
+    return;
+  }
+  box.innerHTML = '<div class="list">' + items.map((a) => {
+    const sub = [a.company, a.at].filter(Boolean).join(" · ");
+    const st = a.status_readable ? `<span class="gm-st ${gmCls(a)}">${esc(a.status_readable)}</span>` : "";
+    return '<div class="cell act"><div class="dlg-main">'
+      + `<div class="dlg-title">${esc(a.title)} ${st}</div>`
+      + `<div class="dlg-date">${esc(sub)}</div></div>`
+      + (a.url ? `<button class="abtn open" data-url="${esc(a.url)}">↗</button>` : "") + "</div>";
+  }).join("") + "</div>";
+  box.querySelectorAll(".abtn[data-url]").forEach((el) => {
+    el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
+  });
+}
+const loadHabrApps = () => api("/api/habr").then((r) => {
+  HABR_APPS = r.applications || []; renderHabrApps();
+}).catch(() => {});
+if ($("#habr-filter")) $("#habr-filter").querySelectorAll(".chip").forEach((c) => {
+  c.onclick = () => {
+    $("#habr-filter").querySelectorAll(".chip").forEach((x) => x.classList.remove("active"));
+    c.classList.add("active"); HABR_FILTER = c.dataset.hf; renderHabrApps(); hap("sel");
   };
 });
 

@@ -41,6 +41,8 @@ JOBS: list[dict] = [
          feature=None,     cron="0 9,17 * * *",     jitter=0,    tags=[],          timeout=300),
     dict(name="auto-screen",    command=["python", "/app/services/auto_screen.py", "--live"],
          feature="giga",   cron="50 9-18/3 * * *",  jitter=400,  tags=["llm"],     timeout=1900),
+    dict(name="habr",           command=["python", "/app/services/habr_apply.py"],
+         feature="habr",   cron="35 6-18/4 * * *",  jitter=200,  tags=["llm"],     timeout=1200),
 ]
 JOBS_BY_NAME: dict[str, dict] = {j["name"]: j for j in JOBS}
 

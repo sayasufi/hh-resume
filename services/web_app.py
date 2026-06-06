@@ -526,6 +526,14 @@ def _source_health(account: str) -> list:
         out.append(row("Авто-задачи в Telegram", "off", "выключено", "", h_g))
     else:
         out.append(row("Авто-задачи в Telegram", *by_run(h_g), h_g))
+
+    h_hb = pgconn.read_health("habr", account)
+    if not pgconn.get_setting("feat.habr", None, account):
+        out.append(row("Habr Career", "off", "выключено", "", h_hb))
+    elif not pgconn.get_setting("habr.session", "", account):
+        out.append(row("Habr Career", "down", "не подключён", "нужен логин Habr", None))
+    else:
+        out.append(row("Habr Career", *by_run(h_hb), h_hb))
     return out
 
 

@@ -50,6 +50,28 @@ def _query(cfg, account):
     return title or "python"
 
 
+def _record(account, v):
+    """Записать отклик в habr_apps — для вкладки «Отклики» в кабинете."""
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS habr_apps ("
+                "account text NOT NULL, vacancy_id text NOT NULL, title text, url text, "
+                "company text, status text, applied_at timestamptz DEFAULT now(), "
+                "PRIMARY KEY (account, vacancy_id))")
+            href = v.get("href") or f"/vacancies/{v['id']}"
+            url = href if href.startswith("http") else "https://career.habr.com" + href
+            cur.execute(
+                "INSERT INTO habr_apps(account, vacancy_id, title, url, company, status) "
+                "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (account, vacancy_id) DO NOTHING",
+                (account, str(v["id"]), v.get("title", ""), url,
+                 (v.get("company") or {}).get("title", ""), "Отклик отправлен"))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 async def run():
     account = pgconn.get_account()
     if not pgconn.feature_enabled("habr"):
@@ -112,6 +134,7 @@ async def run():
                 pgconn.add_seen("habr", vid)
                 seen.add(vid)
                 pgconn.bump_activity("habr", 1, account=account)
+                _record(account, v)
                 applied += 1
                 print(f"habr: откликнулся на {title[:42]}")
             else:

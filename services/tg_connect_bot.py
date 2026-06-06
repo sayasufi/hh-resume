@@ -233,7 +233,7 @@ async def start_connect(message: Message, state: FSMContext):
     await message.answer(
         "🔗 <b>Доступ к твоему Telegram</b> (по желанию).\n\n"
         "<b>Зачем:</b> чтобы я сам читал твои чаты с ботами и действовал за тебя —\n"
-        "• проходил собеседования в чате ГигаРекрутера;\n"
+        "• сам проходил анкеты и интервью в Telegram-ботах работодателей;\n"
         "• забирал коды входа GetMatch из @g_jobbot автоматически.\n\n"
         "<b>Что это:</b> вход в твой Telegram как новое устройство — я смогу читать и "
         "писать сообщения от твоего имени. Сессия хранится в зашифрованном виде; "
@@ -466,7 +466,7 @@ async def _connect_entry(message: Message, state: FSMContext, user_id: int):
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
             text="🔄 Переподключить", callback_data="conn:reconnect")]])
         await message.answer(
-            f"✅ Telegram уже подключён для ГигаРекрутера (аккаунт «{name}»).\n"
+            f"✅ Telegram уже подключён для авто-задач в Telegram (аккаунт «{name}»).\n"
             "Если сессия слетела — жми «Переподключить».", reply_markup=kb)
         return
     await start_connect(message, state)

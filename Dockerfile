@@ -25,8 +25,10 @@ COPY pyproject.toml poetry.lock* README.md /app/
 # И ставим его
 RUN pip install --no-cache-dir -e '.[playwright,pillow]'
 
-# Ставим зависимости хромиума и сам хромиум пользователю docker
+# Ставим зависимости хромиума и сам хромиум — И для root (джобы/оркестратор бегут как root),
+# И для docker. Без root-копии apply_tests/form_fill не находят браузер (Executable doesn't exist).
 RUN playwright install-deps chromium && \
+  playwright install chromium && \
   su docker -c "playwright install chromium"
 
 # Каталог config создаётся пустым; конфиг/секреты НЕ бакаются в образ —

@@ -23,7 +23,7 @@ from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webapp_static")
-FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga", "getmatch", "habr")  # тумблеры
+FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga", "getmatch", "habr", "habr_chat")  # тумблеры
 MAX_PER_DAY_CAP = 200   # серверный суточный потолок откликов hh (защита от бана)
 TESTS_PER_DAY_CAP = 30  # практический потолок браузерного тест-флоу
 GETMATCH_CAP = 50       # практический потолок откликов GetMatch в сутки
@@ -833,7 +833,7 @@ async def _set_config(account: str, key: str, value) -> None:
             if not cfg.get("tg_user_session") and not linked:
                 raise HTTPException(
                     400, "Сначала привяжите GetMatch (логин + код) или подключите Telegram.")
-        if key == "habr" and bool(value):
+        if key in ("habr", "habr_chat") and bool(value):
             if not await asyncio.to_thread(pgconn.get_setting, "habr.session", "", account):
                 raise HTTPException(400, "Сначала войдите в Habr Career (логин/пароль + 2captcha).")
         await asyncio.to_thread(pgconn.set_setting, f"feat.{key}", bool(value), account)

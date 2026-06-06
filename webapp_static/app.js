@@ -171,7 +171,7 @@ function bindToggles(features, tgConnected, gmLinked, habrLinked) {
     // giga нужен Telegram; getmatch — Telegram ИЛИ логин+код; habr — вход на career.habr.com
     const lockGiga = inp.dataset.feat === "giga" && !tgConnected;
     const lockGm = inp.dataset.feat === "getmatch" && !tgConnected && !gmLinked;
-    const lockHabr = inp.dataset.feat === "habr" && !habrLinked;
+    const lockHabr = (inp.dataset.feat === "habr" || inp.dataset.feat === "habr_chat") && !habrLinked;
     const lock = lockGiga || lockGm || lockHabr;
     inp.disabled = lock;
     if (lock) inp.checked = false;

@@ -496,6 +496,15 @@ def _src_age(h, now) -> str:
     return f"{int(d // 86400)} дн назад"
 
 
+def _tg_catalog() -> list:
+    """Каталог TG-категорий для кабинета: [{key, label, count, sample}]."""
+    cat = json.loads(pgconn.get_setting("tg.catalog", account="_global") or "{}")
+    return [{"key": k, "label": v.get("label", k),
+             "count": len(v.get("channels") or []),
+             "sample": ", ".join((v.get("channels") or [])[:3])}
+            for k, v in cat.items()]
+
+
 def _source_health(account: str) -> list:
     """Здоровье источников (hh / GetMatch / ГигаРекрутер): статус + последний прогон + причина."""
     import time as _t
@@ -798,6 +807,9 @@ async def api_settings(account: str = None,
         "habr_max_per_day_cap": HABR_CAP,
         "tg_channels": await asyncio.to_thread(
             pgconn.get_setting, "tg.channels", "", account) or "",
+        "tg_catalog": await asyncio.to_thread(_tg_catalog),
+        "tg_cats": (await asyncio.to_thread(pgconn.get_setting, "tg.cats", account=account))
+                   or (await asyncio.to_thread(pgconn.get_setting, "tg.cats_default", account="_global")) or "",
         "max_per_day_cap": MAX_PER_DAY_CAP,   # серверный суточный потолок hh
         "tests_per_day_cap": TESTS_PER_DAY_CAP,  # практический потолок тест-флоу
     }
@@ -860,6 +872,12 @@ async def _set_config(account: str, key: str, value) -> None:
             return "".join(ch for ch in c.strip().lower().lstrip("@") if ch.isalnum() or ch == "_")
         chans = ",".join(filter(None, (_clean(c) for c in str(value).replace("\n", ",").split(","))))[:4000]
         await asyncio.to_thread(pgconn.set_setting, "tg.channels", chans, account)
+    elif key == "tg.cats":
+        # выбранные категории каталога (ключи через запятую)
+        valid = set(json.loads(await asyncio.to_thread(
+            pgconn.get_setting, "tg.catalog", "{}", "_global") or "{}").keys())
+        cats = ",".join(c.strip() for c in str(value).split(",") if c.strip() in valid)
+        await asyncio.to_thread(pgconn.set_setting, "tg.cats", cats, account)
     elif key == "apply.resume_id":
         await asyncio.to_thread(pgconn.set_setting, "apply.resume_id", str(value), account)
     elif key == "apply.civil_law_only":

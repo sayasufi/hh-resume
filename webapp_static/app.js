@@ -187,6 +187,30 @@ function bindToggles(features, tgConnected, gmLinked, habrLinked) {
 }
 
 function resumeTitle(id) { const r = RESUMES.find((x) => String(x.id) === String(id)); return r ? (r.title || r.id) : (id || "—"); }
+
+// категории TG-каналов: тумблеры ниш (вместо текстового поля)
+function renderTgCats(catalog, catsStr) {
+  const box = $("#tg-cats"), title = $("#tg-cats-title");
+  if (!box) return;
+  catalog = catalog || [];
+  if (!catalog.length) { box.innerHTML = ""; if (title) title.style.display = "none"; return; }
+  if (title) title.style.display = "";
+  const sel = new Set((catsStr || "").split(",").map((s) => s.trim()).filter(Boolean));
+  box.innerHTML = catalog.map((c) =>
+    `<label class="cell toggle"><span class="t"><b>${esc(c.label)} <em style="color:var(--hint);font-weight:400">${c.count}</em></b>`
+    + `<small>${esc(c.sample)}…</small></span>`
+    + `<input type="checkbox" data-cat="${esc(c.key)}"${sel.has(c.key) ? " checked" : ""}><i></i></label>`
+  ).join("");
+  box.querySelectorAll("input[data-cat]").forEach((inp) => {
+    inp.onchange = async () => {
+      const row = inp.closest(".toggle"); row.classList.add("busy");
+      if (inp.checked) sel.add(inp.dataset.cat); else sel.delete(inp.dataset.cat);
+      try { await save("tg.cats", [...sel].join(",")); hap("light"); }
+      catch (e) { inp.checked = !inp.checked; err("Не удалось сохранить"); }
+      finally { row.classList.remove("busy"); }
+    };
+  });
+}
 function bindConfig(cfg, resumes) {
   RESUMES = resumes || []; RESUME_ID = cfg.resume_id || (RESUMES[0] && RESUMES[0].id) || "";
   const capL = cfg.max_per_day_cap || 200;
@@ -233,10 +257,7 @@ function bindConfig(cfg, resumes) {
     if ($("#cap-hlimit")) $("#cap-hlimit").textContent = "(макс " + capH + ")";
     clampWire($("#cfg-habr-limit"), "habr.max_per_day", capH);
   }
-  if ($("#cfg-tg-channels")) {
-    $("#cfg-tg-channels").value = cfg.tg_channels || "";
-    $("#cfg-tg-channels").onchange = () => save("tg.channels", $("#cfg-tg-channels").value.trim());
-  }
+  renderTgCats(cfg.tg_catalog, cfg.tg_cats);
   const gph = $("#cfg-gph");
   if (gph) {
     gph.checked = !!cfg.civil_law_only;

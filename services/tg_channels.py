@@ -80,9 +80,25 @@ async def _decide(oa, resume, post):
 
 
 def _channels(account):
-    raw = (pgconn.get_setting("tg.channels", account=account)
-           or pgconn.get_setting("tg.channels_default", account="_global") or "")
-    return [c.strip().lstrip("@") for c in raw.split(",") if c.strip()]
+    """Каналы = объединение выбранных категорий каталога + (опц.) кастомные каналы."""
+    import json
+    cats_raw = pgconn.get_setting("tg.cats", account=account)
+    if cats_raw is None:  # не настраивал -> дефолтные категории
+        cats_raw = pgconn.get_setting("tg.cats_default", account="_global") or ""
+    cats = [c.strip() for c in cats_raw.split(",") if c.strip()]
+    catalog = json.loads(pgconn.get_setting("tg.catalog", account="_global") or "{}")
+    out, seen = [], set()
+    for k in cats:
+        for u in (catalog.get(k, {}).get("channels") or []):
+            if u not in seen:
+                seen.add(u)
+                out.append(u)
+    for c in (pgconn.get_setting("tg.channels", account=account) or "").split(","):  # кастомные
+        u = c.strip().lstrip("@")
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
 
 
 async def _hh_resume_url(cfg, account):

@@ -630,6 +630,17 @@ def _action_done(account: str, aid: int) -> None:
         conn.close()
 
 
+def _action_delete(account: str, aid: int) -> None:
+    """Удалить дело совсем (вакансия не интересна) — не путать с «выполнено»."""
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM action_items WHERE account=%s AND id=%s", (account, aid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _funnel(apps: int, invitations: int, interviews: int) -> list:
     """Воронка-фолбэк (когда кэш диалогов пуст): % у этапов — доля от всех откликов."""
     sob = max(invitations, interviews)
@@ -870,6 +881,18 @@ async def api_action_done(body: dict, account: str = None,
     except (TypeError, ValueError):
         raise HTTPException(400, "bad id")
     await asyncio.to_thread(_action_done, account, aid)
+    return {"ok": True}
+
+
+@app.post("/api/action_delete")
+async def api_action_delete(body: dict, account: str = None,
+                            x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data, account)
+    try:
+        aid = int(body.get("id"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "bad id")
+    await asyncio.to_thread(_action_delete, account, aid)
     return {"ok": True}
 
 

@@ -177,11 +177,15 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 /* дела */
 .act { align-items: center; }
 .act .dlg-date { margin-top: 3px; }
+.act-text { cursor: pointer; min-width: 0; }
+/* раскрытие дела по тапу: показать полный текст (по умолчанию обрезан в одну строку) */
+.act.expanded .dlg-title, .act.expanded .dlg-emp { white-space: normal; overflow: visible; }
 .act-btns { display: flex; gap: 8px; flex-shrink: 0; align-items: center; }
 .abtn { border: none; border-radius: 999px; padding: 8px 13px; font-size: 13px; font-weight: 600;
   cursor: pointer; font-family: inherit; }
 .abtn.open { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .abtn.done { background: color-mix(in srgb, var(--good) 20%, transparent); color: var(--good); min-width: 36px; }
+.abtn.del { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); min-width: 36px; }
 .abtn:active { transform: scale(.94); }
 
 /* KPI-конверсии (отклик→ответ/собес/оффер) */

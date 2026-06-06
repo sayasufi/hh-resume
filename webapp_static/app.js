@@ -357,24 +357,31 @@ function renderActions(items) {
   $("#act-count").textContent = items.length;
   if (!items.length) { box.innerHTML = '<div class="empty">Дел нет — всё под контролем 👌</div>'; return; }
   box.innerHTML = '<div class="list">' + items.map((a) =>
-    `<div class="cell act"><div class="dlg-main">`
+    `<div class="cell act"><div class="dlg-main act-text">`
     + `<div class="dlg-title">${esc(a.action)}</div>`
     + `<div class="dlg-emp">${esc(a.vacancy)}</div>`
-    + `<div class="dlg-date">${esc(a.created_at)}</div></div>`
+    + `<div class="dlg-date">${esc(a.created_at)} · нажми, чтобы раскрыть</div></div>`
     + `<div class="act-btns">`
     + (a.action_url ? `<button class="abtn open" data-url="${esc(a.action_url)}">Открыть ↗</button>` : "")
     + (a.chat_url ? `<button class="abtn chat" data-url="${esc(a.chat_url)}">Чат</button>` : "")
-    + `<button class="abtn done" data-id="${a.id}">✓</button></div></div>`).join("") + "</div>";
+    + `<button class="abtn del" data-id="${a.id}" title="Удалить — вакансия не интересна">🗑</button>`
+    + `<button class="abtn done" data-id="${a.id}" title="Выполнено">✓</button></div></div>`).join("") + "</div>";
   box.querySelectorAll(".abtn[data-url]").forEach((el) => {
     el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
   });
-  box.querySelectorAll(".abtn.done").forEach((el) => {
+  // тап по тексту дела — раскрыть/свернуть полный текст (часто обрезано)
+  box.querySelectorAll(".act-text").forEach((el) => {
+    el.onclick = () => { el.closest(".act").classList.toggle("expanded"); hap("sel"); };
+  });
+  const actBtn = (cls, path) => box.querySelectorAll(cls).forEach((el) => {
     el.onclick = async () => {
       const row = el.closest(".act"); row.style.opacity = ".4";
-      try { await api("/api/action_done", { method: "POST", body: JSON.stringify({ id: parseInt(el.dataset.id, 10) }) }); hap("light"); loadActions(); }
+      try { await api(path, { method: "POST", body: JSON.stringify({ id: parseInt(el.dataset.id, 10) }) }); hap("light"); loadActions(); }
       catch (e) { err("Не удалось"); row.style.opacity = "1"; }
     };
   });
+  actBtn(".abtn.done", "/api/action_done");
+  actBtn(".abtn.del", "/api/action_delete");
 }
 const loadActions = () => api("/api/actions").then((r) => renderActions(r.items || []))
   .catch(() => failBox("#actions", "#act-count", loadActions));

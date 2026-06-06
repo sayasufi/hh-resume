@@ -89,7 +89,7 @@ async def _do_bot(client, oa, sys_prompt, bot, start, vac, dry):
         ent = await client.get_entity(bot)
     except Exception as e:
         print(f"    @{bot}: не резолвится ({type(e).__name__}) — пропуск")
-        return False
+        return "dead"  # недостижим -> закрыть дело (не долбить вечно)
     recent = await client.get_messages(ent, limit=4)
     inbound = sorted([m for m in recent if not m.out], key=lambda x: x.id)
     last = inbound[-1] if inbound else None
@@ -117,14 +117,15 @@ async def _do_bot(client, oa, sys_prompt, bot, start, vac, dry):
             replies = await gr._wait_reply(client, ent, last_id, REPLY_TIMEOUT)
         if not replies:
             print(f"    @{bot}: бот молчит — стоп")
-            return turns > 0
+            # тишина после прогресса = скрининг закончился; тишина сразу = бот мёртв
+            return "done" if turns > 0 else "dead"
         for m in replies:
             last_id = max(last_id, m.id)
         if gr._star_msg(replies) is not None:
             if not dry:
                 await gr._rate5(gr._star_msg(replies))
             print(f"    @{bot}: завершено (оценка 5★{' [dry]' if dry else ''})")
-            return True
+            return "done"
         bot_text = "\n".join((m.text or "").strip() for m in replies
                              if (m.text or "").strip()).strip()
         # кнопка согласия/старта — кликаем по ИНДЕКСУ (надёжнее, чем по тексту с эмодзи)
@@ -154,7 +155,7 @@ async def _do_bot(client, oa, sys_prompt, bot, start, vac, dry):
             continue
         if gr.DONE_RE.search(bot_text) and "?" not in bot_text:
             print(f"    @{bot}: бот закончил")
-            return True
+            return "done"
         # вопрос с кнопками-вариантами (Да/Нет, выбор) -> LLM выбирает кнопку, НЕ текст
         opt_btns = [(m, i, j, b.text) for m in replies
                     for i, row in enumerate(m.buttons or [])
@@ -181,7 +182,7 @@ async def _do_bot(client, oa, sys_prompt, bot, start, vac, dry):
         answer = (await gr._answer(oa, sys_prompt, convo, bot_text) or "").strip()
         print(f"    @{bot}\n      Q: «{bot_text[:110]}»\n      A: «{answer[:200]}»")
         if not answer:
-            return False
+            return "partial"  # LLM не ответил -> не закрываем, продолжим в следующий прогон
         if dry:
             print(f"    @{bot}: DRY — ответ НЕ отправлен")
             return None
@@ -190,7 +191,7 @@ async def _do_bot(client, oa, sys_prompt, bot, start, vac, dry):
         last_id = max(last_id, s.id)
         turns += 1
         await asyncio.sleep(3)
-    return True
+    return "partial"  # упёрлись в MAX_TURNS -> скрининг ещё не закончен, дорешаем в след. прогон (resume)
 
 
 async def _pick_button(oa, sys_prompt, question, options):
@@ -285,7 +286,7 @@ async def main():
                     seen.add(bot)
                     print(f"\n  [БОТ] дело #{t['id']} «{t['vac'][:42]}» -> @{bot}")
                     r = await _do_bot(client, oa, sys_prompt, bot, mt.group(2), t["vac"], DRY)
-                    if r is True and LIVE:
+                    if r in ("done", "dead") and LIVE:  # partial -> НЕ закрываем, дорешаем (resume)
                         _mark_done(t["id"])
                     nb += 1
                 else:

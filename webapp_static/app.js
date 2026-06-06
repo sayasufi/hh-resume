@@ -376,6 +376,17 @@ function renderGmStats() { _statusRows($("#gm-stats"), $("#gm-empty"), GM_APPS);
 const loadGetmatchApps = () => api("/api/getmatch").then((r) => {
   GM_APPS = r.applications || []; renderGmApps(); renderGmStats();
 }).catch(() => {});
+// под-вкладки в «Настройках» (hh / GetMatch / Habr / Telegram / Общие)
+if ($("#set-nav")) $("#set-nav").querySelectorAll("button").forEach((b) => {
+  b.onclick = () => {
+    $("#set-nav").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    document.querySelectorAll("#tab-feat .set-panel").forEach((p) => {
+      p.style.display = p.dataset.panel === b.dataset.set ? "" : "none";
+    });
+    hap("sel");
+  };
+});
 // переключатель источника в «Откликах» (hh / GetMatch)
 if ($("#dlg-src")) $("#dlg-src").querySelectorAll("button").forEach((b) => {
   b.onclick = () => {

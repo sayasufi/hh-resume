@@ -131,87 +131,100 @@
 
       <!-- ФУНКЦИИ -->
       <section id="tab-feat" class="tab">
-        <!-- ░░ hh.ru ░░ -->
-        <div class="sect-head"><span class="dot-hh"></span>hh.ru</div>
-        <div class="sect-sub">Отклики, тесты, чаты с работодателями и авто-интервью на hh.ru.</div>
-
-        <div class="gtitle">Профиль откликов</div>
-        <div class="list">
-          <label class="cell tap"><span class="k">Желаемая зарплата, ₽</span>
-            <input type="number" id="cfg-salary" inputmode="numeric" placeholder="250000"></label>
-          <button class="cell tap" id="resume-row"><span class="k">Активное резюме</span>
-            <span class="v chevron" id="resume-val">—</span></button>
-          <label class="cell toggle"><span class="t"><b>Только по договору ГПХ</b><small>лишь вакансии с оформлением ГПХ</small></span>
-            <input type="checkbox" id="cfg-gph"><i></i></label>
+        <div class="seg subtabs" id="set-nav">
+          <button class="active" data-set="hh">hh.ru</button>
+          <button data-set="gm">GetMatch</button>
+          <button data-set="habr">Habr</button>
+          <button data-set="tg">Telegram</button>
+          <button data-set="common">Общие</button>
         </div>
 
-        <div class="gtitle">Авто-отклики</div>
-        <div class="list">
-          <label class="cell toggle"><span class="t"><b>Включить авто-отклики</b><small>на подходящие вакансии</small></span>
-            <input type="checkbox" data-feat="apply"><i></i></label>
-          <label class="cell tap"><span class="k">Лимит в день <em id="cap-limit">(макс 200)</em></span>
-            <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></label>
-          <label class="cell toggle"><span class="t"><b>Отклики с тестами</b><small>отклик + тест через браузер · <span id="tlimit-note">+25% к лимиту</span></small></span>
-            <input type="checkbox" data-feat="tests"><i></i></label>
+        <!-- hh -->
+        <div class="set-panel" data-panel="hh">
+          <div class="sect-sub">Отклики, тесты и чаты с работодателями на hh.ru.</div>
+          <div class="gtitle">Профиль откликов</div>
+          <div class="list">
+            <label class="cell tap"><span class="k">Желаемая зарплата, ₽</span>
+              <input type="number" id="cfg-salary" inputmode="numeric" placeholder="250000"></label>
+            <button class="cell tap" id="resume-row"><span class="k">Активное резюме</span>
+              <span class="v chevron" id="resume-val">—</span></button>
+            <label class="cell toggle"><span class="t"><b>Только по договору ГПХ</b><small>лишь вакансии с оформлением ГПХ</small></span>
+              <input type="checkbox" id="cfg-gph"><i></i></label>
+          </div>
+          <div class="gtitle">Авто-отклики</div>
+          <div class="list">
+            <label class="cell toggle"><span class="t"><b>Включить авто-отклики</b><small>на подходящие вакансии</small></span>
+              <input type="checkbox" data-feat="apply"><i></i></label>
+            <label class="cell tap"><span class="k">Лимит в день <em id="cap-limit">(макс 200)</em></span>
+              <input type="number" id="cfg-limit" inputmode="numeric" min="0" max="200"></label>
+            <label class="cell toggle"><span class="t"><b>Отклики с тестами</b><small>отклик + тест через браузер · <span id="tlimit-note">+25% к лимиту</span></small></span>
+              <input type="checkbox" data-feat="tests"><i></i></label>
+          </div>
+          <div class="gtitle">Чаты и активность</div>
+          <div class="list">
+            <label class="cell toggle"><span class="t"><b>Ответы работодателям</b><small>авто-ответы в чатах hh</small></span>
+              <input type="checkbox" data-feat="reply"><i></i></label>
+            <label class="cell toggle"><span class="t"><b>Активность + поднятие резюме</b><small>просмотр вакансий, авто-bump</small></span>
+              <input type="checkbox" data-feat="browse"><i></i></label>
+          </div>
         </div>
 
-        <div class="gtitle">Чаты и активность</div>
-        <div class="list">
-          <label class="cell toggle"><span class="t"><b>Ответы работодателям</b><small>авто-ответы в чатах hh</small></span>
-            <input type="checkbox" data-feat="reply"><i></i></label>
-          <label class="cell toggle"><span class="t"><b>Активность + поднятие резюме</b><small>просмотр вакансий, авто-bump</small></span>
-            <input type="checkbox" data-feat="browse"><i></i></label>
+        <!-- GetMatch -->
+        <div class="set-panel" data-panel="gm" style="display:none">
+          <div class="sect-sub">Авто-отклики на профильные вакансии getmatch.ru — с сопроводительными письмами.</div>
+          <div class="list">
+            <label class="cell toggle"><span class="t"><b>Авто-отклики GetMatch</b><small>профильные вакансии getmatch.ru</small></span>
+              <input type="checkbox" data-feat="getmatch"><i></i></label>
+            <label class="cell tap"><span class="k">Лимит в день <em id="cap-glimit">(макс 50)</em></span>
+              <input type="number" id="cfg-gm-limit" inputmode="numeric" min="0" max="50"></label>
+          </div>
+          <div class="ghint" id="gm-link" style="display:none"></div>
         </div>
 
-        <!-- ░░ GetMatch ░░ -->
-        <div class="sect-head"><span class="dot-gm"></span>GetMatch</div>
-        <div class="sect-sub">Авто-отклики на профильные вакансии getmatch.ru — с сопроводительными письмами.</div>
-        <div class="list">
-          <label class="cell toggle"><span class="t"><b>Авто-отклики GetMatch</b><small>профильные вакансии getmatch.ru</small></span>
-            <input type="checkbox" data-feat="getmatch"><i></i></label>
-          <label class="cell tap"><span class="k">Лимит в день <em id="cap-glimit">(макс 50)</em></span>
-            <input type="number" id="cfg-gm-limit" inputmode="numeric" min="0" max="50"></label>
+        <!-- Habr -->
+        <div class="set-panel" data-panel="habr" style="display:none">
+          <div class="sect-sub">Авто-отклики на профильные IT-вакансии career.habr.com — с письмами.</div>
+          <div class="list">
+            <label class="cell toggle"><span class="t"><b>Авто-отклики Habr</b><small>по подходящим вакансиям профиля</small></span>
+              <input type="checkbox" data-feat="habr"><i></i></label>
+            <label class="cell toggle"><span class="t"><b>Авто-ответ в чате</b><small>сам отвечает рекрутёрам; где нужен ты — в «Дела»</small></span>
+              <input type="checkbox" data-feat="habr_chat"><i></i></label>
+            <label class="cell tap"><span class="k">Лимит в день <em id="cap-hlimit">(макс 50)</em></span>
+              <input type="number" id="cfg-habr-limit" inputmode="numeric" min="0" max="50"></label>
+          </div>
+          <div class="ghint" id="habr-hint" style="display:none"></div>
         </div>
-        <div class="ghint" id="gm-link" style="display:none"></div>
 
-        <!-- ░░ Habr Career ░░ -->
-        <div class="sect-head"><span class="dot-gen" style="background:#1a7ebb"></span>Habr Career</div>
-        <div class="sect-sub">Авто-отклики на профильные IT-вакансии career.habr.com — с сопроводительными письмами.</div>
-        <div class="list">
-          <label class="cell toggle"><span class="t"><b>Авто-отклики Habr</b><small>по подходящим вакансиям профиля</small></span>
-            <input type="checkbox" data-feat="habr"><i></i></label>
-          <label class="cell toggle"><span class="t"><b>Авто-ответ в чате</b><small>сам отвечает рекрутёрам; где нужен ты — в «Дела»</small></span>
-            <input type="checkbox" data-feat="habr_chat"><i></i></label>
-          <label class="cell tap"><span class="k">Лимит в день <em id="cap-hlimit">(макс 50)</em></span>
-            <input type="number" id="cfg-habr-limit" inputmode="numeric" min="0" max="50"></label>
+        <!-- Telegram -->
+        <div class="set-panel" data-panel="tg" style="display:none">
+          <div class="gtitle">Авто-задачи в Telegram</div>
+          <div class="list">
+            <label class="cell toggle"><span class="t"><b>Включить авто-задачи</b><small>бот сам проходит боты-скрининги и пишет HR — дела со всех источников</small></span>
+              <input type="checkbox" data-feat="giga"><i></i></label>
+          </div>
+          <div class="ghint" id="giga-hint"></div>
+          <div class="gtitle">Вакансии из каналов</div>
+          <div class="list">
+            <label class="cell toggle"><span class="t"><b>Из Telegram-каналов</b><small>живая база IT-каналов; личные отклики рекрутёрам</small></span>
+              <input type="checkbox" data-feat="tg_channels"><i></i></label>
+          </div>
+          <div class="gtitle" id="tg-cats-title" style="display:none">Какие каналы мониторить</div>
+          <div class="chips" id="tg-cats"></div>
+          <div class="subbar" id="tg-chans-bar" style="display:none">
+            <span class="hint"><b id="tg-chans-count">—</b> каналов в работе</span>
+            <span class="hint tap-link" id="tg-chans-toggle" style="cursor:pointer;color:var(--accent)">показать ⌄</span>
+          </div>
+          <div class="chips" id="tg-chans" style="display:none"></div>
+          <div class="ghint" id="tgch-hint" style="display:none"></div>
         </div>
-        <div class="ghint" id="habr-hint" style="display:none"></div>
 
-        <!-- ░░ Telegram-каналы ░░ -->
-        <div class="sect-head"><span class="dot-gen" style="background:#29a9eb"></span>Telegram-каналы</div>
-        <div class="sect-sub">Бот читает каналы с вакансиями, находит подходящие под профиль и пишет рекрутёру в личку (резюме + почему подходишь). Нужен подключённый Telegram.</div>
-        <div class="list">
-          <label class="cell toggle"><span class="t"><b>Вакансии из Telegram-каналов</b><small>живая база IT-каналов; личные отклики рекрутёрам</small></span>
-            <input type="checkbox" data-feat="tg_channels"><i></i></label>
+        <!-- Общие -->
+        <div class="set-panel" data-panel="common" style="display:none">
+          <div class="list">
+            <label class="cell toggle"><span class="t"><b>Уведомления и дайджест</b><small>важное в личку: интервью, контакты работодателей</small></span>
+              <input type="checkbox" data-feat="notify"><i></i></label>
+          </div>
         </div>
-        <div class="gtitle" id="tg-cats-title" style="display:none">Какие каналы мониторить</div>
-        <div class="chips" id="tg-cats"></div>
-        <div class="subbar" id="tg-chans-bar" style="display:none">
-          <span class="hint"><b id="tg-chans-count">—</b> каналов в работе</span>
-          <span class="hint tap-link" id="tg-chans-toggle" style="cursor:pointer;color:var(--accent)">показать ⌄</span>
-        </div>
-        <div class="chips" id="tg-chans" style="display:none"></div>
-        <div class="ghint" id="tgch-hint" style="display:none"></div>
-
-        <!-- ░░ Общее ░░ -->
-        <div class="sect-head"><span class="dot-gen"></span>Общее</div>
-        <div class="list">
-          <label class="cell toggle"><span class="t"><b>Уведомления и дайджест</b><small>важное в личку: интервью, контакты работодателей</small></span>
-            <input type="checkbox" data-feat="notify"><i></i></label>
-          <label class="cell toggle"><span class="t"><b>Авто-задачи в Telegram</b><small>бот сам проходит боты-скрининги и пишет HR — дела со всех источников (hh, Habr…)</small></span>
-            <input type="checkbox" data-feat="giga"><i></i></label>
-        </div>
-        <div class="ghint" id="giga-hint"></div>
       </section>
 
       <!-- ДЕЛА -->
@@ -226,7 +239,7 @@
       <button data-tab="stats"><span class="ic">📊</span><span>Стата</span></button>
       <button data-tab="dialogs"><span class="ic">📋</span><span>Отклики</span></button>
       <button data-tab="actions"><span class="ic">✅</span><span>Дела</span></button>
-      <button data-tab="feat"><span class="ic">⚙️</span><span>Функции</span></button>
+      <button data-tab="feat"><span class="ic">⚙️</span><span>Настройки</span></button>
     </nav>
   </div>
 

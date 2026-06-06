@@ -66,6 +66,11 @@ class GmLink(StatesGroup):  # привязка GetMatch по коду из @g_jo
     code = State()
 
 
+class HabrLink(StatesGroup):  # привязка Habr Career: email + пароль (вход через 2captcha)
+    login = State()
+    password = State()
+
+
 _login_sessions: dict = {}  # chat_id -> onboard.LoginSession (живой браузер)
 
 
@@ -111,7 +116,7 @@ HELP_TEXT = (
     "/start → «Открыть кабинет»): профиль, статистика и тумблеры функций.\n\n"
     "<b>Команды:</b>\n"
     "/start — открыть кабинет / привязать профиль по номеру\n"
-    "/addaccount — привязать аккаунт: hh (логин+пароль) или GetMatch (код)\n"
+    "/addaccount — привязать аккаунт: hh (логин+пароль), GetMatch (код) или Habr (email+пароль)\n"
     "/connect — дать доступ к Telegram для авто-функций (интервью, коды GetMatch)\n\n"
     "Важное (интервью, контакты работодателей) приходит автоматически "
     "дайджестом 🔴🟡🟢."
@@ -618,6 +623,7 @@ def _addaccount_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🟦 hh.ru — логин + пароль", callback_data="addacc:hh")],
         [InlineKeyboardButton(text="🟩 GetMatch — код из @g_jobbot", callback_data="addacc:gm")],
+        [InlineKeyboardButton(text="🟧 Habr Career — email + пароль", callback_data="addacc:habr")],
     ])
 
 
@@ -708,6 +714,88 @@ async def cb_addacc_hh(cq: CallbackQuery, state: FSMContext):
 async def cb_addacc_gm(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
     await _start_getmatch(cq.message, cq.from_user, state)
+
+
+async def _start_habr(reply: Message, user, state: FSMContext):
+    """Habr Career: попросить email → пароль → авто-вход (Playwright + 2captcha)."""
+    account = _account_by("tg_user_id", user.id)
+    if not account:
+        await reply.answer("Сначала создай профиль: /start → поделись номером.")
+        return
+    if pgconn.get_setting("habr.session", None, account=account):
+        await reply.answer("Habr Career уже привязан. Управляй в кабинете «📊 Профиль».")
+        return
+    if not pgconn.get_setting("habr.2captcha_key", None, account="_global"):
+        await reply.answer("❌ Привязка Habr временно недоступна (не настроен ключ 2captcha). "
+                           "Напиши администратору.")
+        return
+    await state.clear()
+    await state.set_state(HabrLink.login)
+    await state.update_data(habr_account=account)
+    await reply.answer("🟧 Привязка <b>Habr Career</b>.\n"
+                       "Пришли <b>email</b> от аккаунта career.habr.com:", parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "addacc:habr")
+async def cb_addacc_habr(cq: CallbackQuery, state: FSMContext):
+    await cq.answer()
+    await _start_habr(cq.message, cq.from_user, state)
+
+
+@dp.message(HabrLink.login)
+async def habr_login(message: Message, state: FSMContext):
+    login = (message.text or "").strip()
+    d = await state.get_data()
+    if not d.get("habr_account"):
+        await state.clear()
+        await message.answer("Сессия привязки истекла. Повтори: /addaccount → Habr.")
+        return
+    if "@" not in login or len(login) < 5:
+        await message.answer("Это не похоже на email. Пришли email от career.habr.com:")
+        return  # остаёмся в HabrLink.login
+    await state.update_data(habr_login=login)
+    await state.set_state(HabrLink.password)
+    await message.answer("🔑 Теперь пришли <b>пароль</b> от Habr Career "
+                         "(сообщение с паролем удалю сразу):", parse_mode="HTML")
+
+
+@dp.message(HabrLink.password)
+async def habr_password(message: Message, state: FSMContext):
+    pw = (message.text or "").strip()
+    d = await state.get_data()
+    account, login = d.get("habr_account"), d.get("habr_login")
+    try:
+        await message.delete()  # пароль не должен висеть в чате
+    except Exception:
+        pass
+    if not account or not login:
+        await state.clear()
+        await message.answer("Сессия привязки истекла. Повтори: /addaccount → Habr.")
+        return
+    key = pgconn.get_setting("habr.2captcha_key", None, account="_global")
+    if not key:
+        await state.clear()
+        await message.answer("❌ Не настроен ключ 2captcha. Напиши администратору.")
+        return
+    await message.answer("⏳ Вхожу в Habr Career (до минуты — решаю капчу через 2captcha)…")
+    import json as _json
+    import habr_api
+    try:
+        ss = await habr_api.browser_login(login, pw, key)
+    except Exception as e:
+        await state.clear()
+        await message.answer(f"❌ Не удалось войти: {e}\n"
+                             "Проверь email/пароль и повтори: /addaccount → Habr.")
+        return
+    await state.clear()
+    pgconn.set_setting("habr.session", _json.dumps(ss), account=account)
+    pgconn.set_setting("habr.login", login, account=account)
+    pgconn.set_setting("habr.password", pgconn.enc_session(pw), account=account)
+    pgconn.set_setting("habr.2captcha_key", key, account=account)
+    pgconn.set_setting("feat.habr", True, account=account)
+    await message.answer(
+        "✅ <b>Habr Career привязан!</b> Авто-отклики включены.\n"
+        "Настрой поисковый запрос и лимит в кабинете «📊 Профиль» → Функции.", parse_mode="HTML")
 
 
 @dp.message(AddAcc.login)

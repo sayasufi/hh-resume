@@ -172,7 +172,8 @@ function bindToggles(features, tgConnected, gmLinked, habrLinked) {
     const lockGiga = inp.dataset.feat === "giga" && !tgConnected;
     const lockGm = inp.dataset.feat === "getmatch" && !tgConnected && !gmLinked;
     const lockHabr = (inp.dataset.feat === "habr" || inp.dataset.feat === "habr_chat") && !habrLinked;
-    const lock = lockGiga || lockGm || lockHabr;
+    const lockTg = inp.dataset.feat === "tg_channels" && !tgConnected;
+    const lock = lockGiga || lockGm || lockHabr || lockTg;
     inp.disabled = lock;
     if (lock) inp.checked = false;
     inp.closest(".toggle").classList.toggle("disabled", lock);
@@ -231,6 +232,10 @@ function bindConfig(cfg, resumes) {
     $("#cfg-habr-limit").max = capH;
     if ($("#cap-hlimit")) $("#cap-hlimit").textContent = "(макс " + capH + ")";
     clampWire($("#cfg-habr-limit"), "habr.max_per_day", capH);
+  }
+  if ($("#cfg-tg-channels")) {
+    $("#cfg-tg-channels").value = cfg.tg_channels || "";
+    $("#cfg-tg-channels").onchange = () => save("tg.channels", $("#cfg-tg-channels").value.trim());
   }
   const gph = $("#cfg-gph");
   if (gph) {
@@ -511,6 +516,10 @@ async function boot() {
     if ($("#habr-hint")) {
       $("#habr-hint").style.display = st.habr_linked ? "none" : "";
       $("#habr-hint").textContent = st.habr_linked ? "" : "Чтобы включить — подключите Habr Career: /addaccount → Habr (логин + пароль).";
+    }
+    if ($("#tgch-hint")) {
+      $("#tgch-hint").style.display = st.tg_connected ? "none" : "";
+      $("#tgch-hint").textContent = st.tg_connected ? "" : "Чтобы включить — подключите Telegram: /connect в боте.";
     }
     renderSources(st.sources); renderGmLink(st); wireGmLink();
     $("#giga-hint").textContent = st.tg_connected

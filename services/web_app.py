@@ -23,7 +23,7 @@ from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webapp_static")
-FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga", "getmatch", "habr", "habr_chat")  # тумблеры
+FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga", "getmatch", "habr", "habr_chat", "tg_channels")  # тумблеры
 MAX_PER_DAY_CAP = 200   # серверный суточный потолок откликов hh (защита от бана)
 TESTS_PER_DAY_CAP = 30  # практический потолок браузерного тест-флоу
 GETMATCH_CAP = 50       # практический потолок откликов GetMatch в сутки
@@ -796,6 +796,8 @@ async def api_settings(account: str = None,
         "habr_max_per_day": await asyncio.to_thread(
             pgconn.get_setting, "habr.max_per_day", HABR_CAP, account),
         "habr_max_per_day_cap": HABR_CAP,
+        "tg_channels": await asyncio.to_thread(
+            pgconn.get_setting, "tg.channels", "", account) or "",
         "max_per_day_cap": MAX_PER_DAY_CAP,   # серверный суточный потолок hh
         "tests_per_day_cap": TESTS_PER_DAY_CAP,  # практический потолок тест-флоу
     }
@@ -821,12 +823,12 @@ async def _set_config(account: str, key: str, value) -> None:
     if key in FEATURES:
         # ГигаРекрутер нельзя включить без подключённого Telegram (user-сессии):
         # бот действует от лица пользователя в чате @Giga_recruiter_bot.
-        if key == "giga" and bool(value):
+        if key in ("giga", "tg_channels") and bool(value):
             cfg = await asyncio.to_thread(pgconn.app_config, account)
             if not cfg.get("tg_user_session"):
                 raise HTTPException(
                     400, "Подключите Telegram (кнопка «Подключить» / команда /connect "
-                         "в боте), чтобы включить «Авто-задачи в Telegram».")
+                         "в боте) — нужно для авто-задач и вакансий из Telegram-каналов.")
         if key == "getmatch" and bool(value):
             cfg = await asyncio.to_thread(pgconn.app_config, account)
             linked = await asyncio.to_thread(pgconn.get_setting, "getmatch.session", "", account)
@@ -852,6 +854,12 @@ async def _set_config(account: str, key: str, value) -> None:
     elif key == "habr.max_per_day":
         await asyncio.to_thread(
             pgconn.set_setting, "habr.max_per_day", min(HABR_CAP, max(0, int(value))), account)
+    elif key == "tg.channels":
+        # список каналов через запятую (пусто = база IT-каналов по умолчанию)
+        def _clean(c):
+            return "".join(ch for ch in c.strip().lower().lstrip("@") if ch.isalnum() or ch == "_")
+        chans = ",".join(filter(None, (_clean(c) for c in str(value).replace("\n", ",").split(","))))[:4000]
+        await asyncio.to_thread(pgconn.set_setting, "tg.channels", chans, account)
     elif key == "apply.resume_id":
         await asyncio.to_thread(pgconn.set_setting, "apply.resume_id", str(value), account)
     elif key == "apply.civil_law_only":

@@ -497,11 +497,9 @@ def _src_age(h, now) -> str:
 
 
 def _tg_catalog() -> list:
-    """Каталог TG-категорий для кабинета: [{key, label, count, sample}]."""
+    """Каталог TG-категорий для кабинета: [{key, label, channels:[...]}]."""
     cat = json.loads(pgconn.get_setting("tg.catalog", account="_global") or "{}")
-    return [{"key": k, "label": v.get("label", k),
-             "count": len(v.get("channels") or []),
-             "sample": ", ".join((v.get("channels") or [])[:3])}
+    return [{"key": k, "label": v.get("label", k), "channels": list(v.get("channels") or [])}
             for k, v in cat.items()]
 
 

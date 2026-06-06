@@ -190,26 +190,41 @@ function resumeTitle(id) { const r = RESUMES.find((x) => String(x.id) === String
 
 // категории TG-каналов: тумблеры ниш (вместо текстового поля)
 function renderTgCats(catalog, catsStr) {
-  const box = $("#tg-cats"), title = $("#tg-cats-title");
+  const box = $("#tg-cats"), title = $("#tg-cats-title"), bar = $("#tg-chans-bar"), chans = $("#tg-chans");
   if (!box) return;
   catalog = catalog || [];
-  if (!catalog.length) { box.innerHTML = ""; if (title) title.style.display = "none"; return; }
-  if (title) title.style.display = "";
+  const show = catalog.length > 0;
+  if (title) title.style.display = show ? "" : "none";
+  if (bar) bar.style.display = show ? "" : "none";
+  if (!show) { box.innerHTML = ""; if (chans) chans.innerHTML = ""; return; }
   const sel = new Set((catsStr || "").split(",").map((s) => s.trim()).filter(Boolean));
-  box.innerHTML = catalog.map((c) =>
-    `<label class="cell toggle"><span class="t"><b>${esc(c.label)} <em style="color:var(--hint);font-weight:400">${c.count}</em></b>`
-    + `<small>${esc(c.sample)}…</small></span>`
-    + `<input type="checkbox" data-cat="${esc(c.key)}"${sel.has(c.key) ? " checked" : ""}><i></i></label>`
-  ).join("");
-  box.querySelectorAll("input[data-cat]").forEach((inp) => {
-    inp.onchange = async () => {
-      const row = inp.closest(".toggle"); row.classList.add("busy");
-      if (inp.checked) sel.add(inp.dataset.cat); else sel.delete(inp.dataset.cat);
-      try { await save("tg.cats", [...sel].join(",")); hap("light"); }
-      catch (e) { inp.checked = !inp.checked; err("Не удалось сохранить"); }
-      finally { row.classList.remove("busy"); }
-    };
-  });
+  const draw = () => {
+    box.innerHTML = catalog.map((c) =>
+      `<button class="chip${sel.has(c.key) ? " active" : ""}" data-cat="${esc(c.key)}">${esc(c.label)} · ${c.channels.length}</button>`
+    ).join("");
+    box.querySelectorAll(".chip").forEach((ch) => {
+      ch.onclick = async () => {
+        const k = ch.dataset.cat;
+        if (sel.has(k)) sel.delete(k); else sel.add(k);
+        hap("sel"); draw();
+        try { await save("tg.cats", [...sel].join(",")); } catch (e) { err("Не удалось сохранить"); }
+      };
+    });
+    const uniq = [...new Set(catalog.filter((c) => sel.has(c.key)).flatMap((c) => c.channels))];
+    if ($("#tg-chans-count")) $("#tg-chans-count").textContent = uniq.length;
+    if (chans) chans.innerHTML = uniq.map((u) =>
+      `<button class="chip" data-u="${esc(u)}">@${esc(u)}</button>`).join("");
+    if (chans) chans.querySelectorAll(".chip[data-u]").forEach((b) => {
+      b.onclick = () => { const l = "https://t.me/" + b.dataset.u; if (tg && tg.openLink) tg.openLink(l); else window.open(l, "_blank"); };
+    });
+  };
+  draw();
+  const tgl = $("#tg-chans-toggle");
+  if (tgl) tgl.onclick = () => {
+    const open = chans.style.display === "none";
+    chans.style.display = open ? "" : "none";
+    tgl.textContent = open ? "скрыть ⌃" : "показать ⌄";
+  };
 }
 function bindConfig(cfg, resumes) {
   RESUMES = resumes || []; RESUME_ID = cfg.resume_id || (RESUMES[0] && RESUMES[0].id) || "";

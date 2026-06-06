@@ -43,7 +43,6 @@ document.querySelectorAll("#tabs button").forEach((b) => {
 
 function renderMe(d) {
   const p = (d && d.profile) || {}, s = (d && d.stats) || {};
-  const funnel = s.funnel || [];
   $("#avatar").textContent = (p.name || "·").trim().charAt(0).toUpperCase() || "·";
   $("#hname").textContent = p.name || "—";
   const stt = p.status || "";
@@ -51,15 +50,9 @@ function renderMe(d) {
   const sk = p.status_kind || (stt.includes("работает") ? "ok" : stt.indexOf("всё") === 0 ? "off" : "paused");
   st.className = "pill " + (sk === "ok" ? "good" : sk === "off" ? "bad" : "warn");
   $("#p-name").textContent = p.name || "—";
-  const max = Math.max(1, ...funnel.map((f) => f.value));
-  $("#funnel").innerHTML = funnel.map((f) =>
-    `<div class="fbar"><div class="fill" style="width:${Math.round(f.value / max * 100)}%"></div>`
-    + `<div class="ftext"><span>${esc(f.label)}</span><span class="fval"><b>${f.value}</b>`
-    + `${f.conv != null ? `<em>${f.conv}%</em>` : ""}</span></div></div>`).join("");
   const bd = s.breakdown || [];
   $("#breakdown").innerHTML = bd.length ? bd.map((b) =>
-    `<div class="cell"><span class="k">${b.emoji} ${esc(b.label)}</span>`
-    + `<span class="v"><b>${b.value}</b><em style="color:var(--hint);font-weight:400;margin-left:6px">${b.pct}%</em></span></div>`).join("")
+    `<div class="stat"><div class="num">${b.value}</div><div class="lbl">${b.emoji} ${esc(b.label)}</div></div>`).join("")
     : '<div class="empty">Нет данных за период</div>';
   $("#next-apply").textContent = d.next_apply
     ? "⏱ Следующие обычные отклики: " + d.next_apply
@@ -84,6 +77,7 @@ function renderSources(sources) {
 
 function renderTrend(days) {
   const box = $("#trend");
+  if (!box) return;  // график динамики убран из Статы
   if (!days || days.length < 2) { box.innerHTML = '<div class="empty">График появится за пару дней использования</div>'; return; }
   const vals = days.map((d) => d.applications), max = Math.max(1, ...vals);
   const W = 320, H = 88, n = days.length;

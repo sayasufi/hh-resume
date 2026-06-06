@@ -41,13 +41,9 @@ async def _gen_letter(oa, resume, title, company):
     return t
 
 
-def _query(cfg, account):
-    """Поисковый запрос: настройка habr.query, иначе из заголовка hh-резюме."""
-    q = pgconn.get_setting("habr.query", account=account)
-    if q:
-        return q
-    title = ((cfg.get("resume") or {}).get("title") or "").strip()
-    return title or "python"
+def _query(account):
+    """Поисковый запрос (необязателен). Пусто -> откликаемся по «подходящим» (профиль Habr)."""
+    return (pgconn.get_setting("habr.query", account=account) or "").strip()
 
 
 def _record(account, v):
@@ -109,9 +105,13 @@ async def run():
         limit = DEFAULT_MAX if _lim is None else int(_lim)
         oa = cfg.get("openai")
         resume = (cfg.get("resume_text") or "").strip()
-        query = _query(cfg, account)
-        offers = await api.offers(q=query)
-        print(f"habr: вошли, вакансий по «{query}»: {len(offers)}, лимит {limit}")
+        query = _query(account)
+        if query:
+            offers = await api.offers(q=query)
+            print(f"habr: вошли, по запросу «{query}»: {len(offers)}, лимит {limit}")
+        else:
+            offers = await api.offers(type="suitable")
+            print(f"habr: вошли, подходящие по профилю: {len(offers)}, лимит {limit}")
 
         seen = pgconn.seen_keys("habr")
         applied = 0

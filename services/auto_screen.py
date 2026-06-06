@@ -219,16 +219,25 @@ async def _pick_button(oa, sys_prompt, question, options):
     return ((await chat.send_message(prompt)) or "").strip()
 
 
-def _hr_msg(name, hh_url, vac_url):
+def _task_src(t):
+    """Источник дела (для текста HR-сообщения): 'hh' / 'Хабр Карьере' / '' (если не определить)."""
+    if t.get("nid"):
+        return "hh"
+    blob = f"{t.get('action_url') or ''} {t.get('vac_url') or ''}".lower()
+    return "Хабр Карьере" if "habr" in blob else ""
+
+
+def _hr_msg(name, hh_url, vac_url, src=""):
     # дело «написать HR в Telegram» появляется, когда HR САМ попросил написать — поэтому сообщение
-    # простое: поздоровались, имя, что откликнулся на hh, + ссылки. Без LLM (никакого робото-дрейфа).
-    intro = f"Здравствуйте! Меня зовут {_first_name(name)}, откликался на вашу вакансию на hh."
+    # простое: поздоровались, имя, что откликнулся, + ссылки. Без LLM (никакого робото-дрейфа).
+    where = f" на {src}" if src else ""
+    intro = f"Здравствуйте! Меня зовут {_first_name(name)}, откликался на вашу вакансию{where}."
     return intro + (f"\nВакансия: {vac_url}" if vac_url else "") \
                  + (f"\nМоё резюме: {hh_url}" if hh_url else "")
 
 
-async def _do_hr(client, oa, name, resume, hh_url, vac_url, user, vac, dry):
-    msg = _hr_msg(name, hh_url, vac_url)
+async def _do_hr(client, oa, name, resume, hh_url, vac_url, user, vac, dry, src=""):
+    msg = _hr_msg(name, hh_url, vac_url, src)
     print(f"    @{user} (вакансия «{vac[:40]}»)\n      СООБЩЕНИЕ: «{msg[:300]}»")
     if dry:
         print(f"    @{user}: DRY — сообщение НЕ отправлено")
@@ -242,10 +251,10 @@ async def _do_hr(client, oa, name, resume, hh_url, vac_url, user, vac, dry):
         return False
 
 
-async def _do_phone(client, name, hh_url, vac_url, phone, vac, dry):
+async def _do_phone(client, name, hh_url, vac_url, phone, vac, dry, src=""):
     """Написать HR по НОМЕРУ в Telegram: импорт контакта -> если есть TG -> сообщение ->
     удалить контакт (чат остаётся). Нет TG -> None (это реальный звонок, дело оставляем)."""
-    msg = _hr_msg(name, hh_url, vac_url)
+    msg = _hr_msg(name, hh_url, vac_url, src)
     print(f"    тел {phone} (вакансия «{vac[:40]}»)\n      СООБЩЕНИЕ: «{msg[:300]}»")
     if dry:
         print(f"    тел {phone}: DRY — не импортирую/не пишу")
@@ -281,8 +290,8 @@ async def main():
     account = pgconn.get_account()
     enc = cfg.get("tg_user_session")
     oa = cfg.get("openai") or {}
-    if not enc or not oa.get("token") or not (cfg.get("token") or {}).get("access_token"):
-        print("auto_screen: нет tg-сессии / openai / hh-токена — пропуск")
+    if not enc or not oa.get("token"):
+        print("auto_screen: нет tg-сессии / openai — пропуск")
         return
     name = gr._label()
     resume = (cfg.get("resume_text") or "").strip()
@@ -299,11 +308,13 @@ async def main():
     tasks = _pending(account)
     print(f"auto_screen[{account}] режим={'LIVE' if LIVE else 'DRY (ничего не шлётся)'}: "
           f"pending дел {len(tasks)}")
-    api = _hh_api(cfg)
+    # hh-API нужен только для дел с hh (чтение переписки по nid); для дел с других источников
+    # (Habr и т.п.) он не требуется — auto_screen работает по тексту самого дела.
+    api = _hh_api(cfg) if (cfg.get("token") or {}).get("access_token") else None
     # реальная ссылка на hh-резюме — когда бот/HR просит «приложи резюме», дать её, не уклоняться
     hh_url = ""
     rid = pgconn.get_setting("apply.resume_id", account=account)
-    if rid:
+    if rid and api:
         try:
             _r = await api.get(f"/resumes/{rid}")
             hh_url = _r.get("alternate_url") or f"https://hh.ru/resume/{rid}"
@@ -317,7 +328,8 @@ async def main():
     await client.connect()
     if not await client.is_user_authorized():
         print("auto_screen: tg-сессия слетела — пропуск")
-        await api.aclose()
+        if api:
+            await api.aclose()
         return
     nb = nh = 0
     seen = set()  # контактированные боты И @HR за прогон — дедуп, не писать одному дважды
@@ -333,7 +345,15 @@ async def main():
             if (nb >= MAX_BOTS and nh >= MAX_HR) or time.time() > deadline:
                 break
             try:  # одно плохое дело не должно ронять весь прогон (и ложно флагать здоровье)
-                msg = await _last_employer_msg(api, t["nid"])
+                # переписку работодателя тянем только для hh-дел (есть nid + hh-API);
+                # дела из других источников (Habr и т.п.) разбираем по тексту самого дела
+                msg = ""
+                if api and t.get("nid"):
+                    try:
+                        msg = await _last_employer_msg(api, t["nid"])
+                    except Exception:
+                        msg = ""
+                src = _task_src(t)
                 blob = f"{t['action']} {t['action_url']} {msg}"
                 mt = TME.search(blob)
                 if mt and mt.group(1).lower().endswith("bot") and "giga" not in mt.group(1).lower():
@@ -365,19 +385,19 @@ async def main():
                             continue
                         seen.add(user)
                         print(f"\n  [HR] дело #{t['id']} «{t['vac'][:42]}» -> @{user}")
-                        r = await _do_hr(client, oa, name, resume, hh_url, t["vac_url"], user, t["vac"], DRY)
+                        r = await _do_hr(client, oa, name, resume, hh_url, t["vac_url"], user, t["vac"], DRY, src)
                         if r is True:  # написали один раз -> дело закрыто, дальше юзер сам
                             if LIVE:
                                 _mark_done(t["id"])
                             nh += 1
-                    elif (PHONE.search(msg)
+                    elif (PHONE.search(blob)
                             and ("напиш" in low or "telegram" in low or "мессендж" in low)):
                         if nh >= MAX_HR:
                             continue
                         # «написать в мессенджер», но дан НОМЕР (нет @) -> пишем в TG по номеру
-                        phone = _norm_phone(PHONE.search(msg).group(0))
+                        phone = _norm_phone(PHONE.search(blob).group(0))
                         print(f"\n  [ТЕЛ] дело #{t['id']} «{t['vac'][:42]}» -> {phone}")
-                        r = await _do_phone(client, name, hh_url, t["vac_url"], phone, t["vac"], DRY)
+                        r = await _do_phone(client, name, hh_url, t["vac_url"], phone, t["vac"], DRY, src)
                         if r is True:  # написали в TG -> закрыто, слот потрачен
                             if LIVE:
                                 _mark_done(t["id"])
@@ -387,7 +407,8 @@ async def main():
                 print(f"  дело #{t['id']}: ошибка, пропускаю — {type(e).__name__}: {repr(e)[:120]}")
     finally:
         await client.disconnect()
-        await api.aclose()
+        if api:
+            await api.aclose()
     print(f"\nauto_screen: ботов {nb}, HR {nh} "
           f"({'DRY — ничего не отправлено' if DRY else 'LIVE — отправлено'})")
 

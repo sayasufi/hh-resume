@@ -139,3 +139,24 @@ class HabrAPI:
             files={"body": (None, cover or "")},
             headers={"x-csrf-token": csrf, "x-requested-with": "XMLHttpRequest"})
         return r
+
+    # ── чат с работодателями ──
+    async def conversations(self):
+        """Список диалогов: [{fullName, login, ...}]."""
+        r = await self._client().get("/api/frontend_v1/chat/conversations")
+        return (r.json() or {}).get("conversations", [])
+
+    async def messages(self, login, page=1):
+        """Сообщения диалога: [{id, body, isMine, read, createdAt, ...}]."""
+        r = await self._client().get("/api/frontend_v1/chat/messages",
+                                     params={"login": login, "page": page})
+        return (r.json() or {}).get("messages", [])
+
+    async def send_message(self, login, body):
+        """Отправить сообщение в чат: POST /api/frontend_v1/chat/messages (JSON + CSRF)."""
+        csrf = await self._csrf()
+        r = await self._client().post(
+            "/api/frontend_v1/chat/messages",
+            json={"login": login, "body": body, "chatAttachmentUuids": []},
+            headers={"x-csrf-token": csrf, "x-requested-with": "XMLHttpRequest"})
+        return r

@@ -290,9 +290,12 @@ async def main():
                         _mark_done(t["id"])
                     nb += 1
                 else:
-                    ma = ATRE.search(t["action"]) or ATRE.search(msg)
+                    # @ берём ТОЛЬКО из текста дела (LLM туда вынес нужный контакт), НЕ из сырого
+                    # сообщения работодателя (там может быть @канал/@бот — напишем не туда).
+                    ma = ATRE.search(t["action"])
                     low = t["action"].lower()
-                    if ma and ("напиш" in low or "telegram" in low or "@" in t["action"]):
+                    if (ma and not ma.group(1).lower().endswith("bot")
+                            and ("напиш" in low or "telegram" in low)):
                         user = ma.group(1)
                         print(f"\n  [HR] дело #{t['id']} «{t['vac'][:42]}» -> @{user}")
                         r = await _do_hr(client, oa, name, resume, hh_url, t["vac_url"], user, t["vac"], DRY)

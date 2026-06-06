@@ -362,7 +362,6 @@ function renderActions(items) {
     + `<div class="dlg-emp">${esc(a.vacancy)}</div>`
     + `<div class="dlg-date">${esc(a.created_at)} · нажми, чтобы раскрыть</div></div>`
     + `<div class="act-btns">`
-    + (a.action_url ? `<button class="abtn open" data-url="${esc(a.action_url)}">Открыть ↗</button>` : "")
     + (a.chat_url ? `<button class="abtn chat" data-url="${esc(a.chat_url)}">Чат</button>` : "")
     + `<button class="abtn del" data-id="${a.id}" title="Удалить — вакансия не интересна">🗑</button>`
     + `<button class="abtn done" data-id="${a.id}" title="Выполнено">✓</button></div></div>`).join("") + "</div>";

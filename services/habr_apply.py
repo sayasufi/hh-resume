@@ -106,40 +106,43 @@ async def run():
         oa = cfg.get("openai")
         resume = (cfg.get("resume_text") or "").strip()
         query = _query(account)
-        if query:
-            offers = await api.offers(q=query)
-            print(f"habr: вошли, по запросу «{query}»: {len(offers)}, лимит {limit}")
-        else:
-            offers = await api.offers(type="suitable")
-            print(f"habr: вошли, подходящие по профилю: {len(offers)}, лимит {limit}")
+        mode = {"q": query} if query else {"type": "suitable"}
+        print(f"habr: вошли, режим={'запрос «' + query + '»' if query else 'подходящие по профилю'}, лимит {limit}")
 
         seen = pgconn.seen_keys("habr")
         applied = 0
-        for v in offers:
-            if applied >= limit:
+        page = 1
+        MAX_PAGES = 8  # до ~200 вакансий за прогон
+        while applied < limit and page <= MAX_PAGES:
+            offers = await api.offers(page=page, **mode)
+            if not offers:
                 break
-            vid = str(v["id"])
-            kind = (v.get("response") or {}).get("kind")
-            if kind == "applied" or vid in seen:
-                continue
-            title = v.get("title", "")
-            company = (v.get("company") or {}).get("title", "")
-            cover = await _gen_letter(oa, resume, title, company)
-            if DRY:
-                print(f"habr[dry]: откликнулся бы на {title[:42]} (письмо={len(cover)} симв)")
-                applied += 1
-                continue
-            r = await api.apply(v["id"], cover)
-            if r.status_code == 200:
-                pgconn.add_seen("habr", vid)
-                seen.add(vid)
-                pgconn.bump_activity("habr", 1, account=account)
-                _record(account, v)
-                applied += 1
-                print(f"habr: откликнулся на {title[:42]}")
-            else:
-                print(f"habr: отклик не прошёл на {vid} ({r.status_code}) — повторю позже")
-            await asyncio.sleep(random.uniform(4, 12))
+            for v in offers:
+                if applied >= limit:
+                    break
+                vid = str(v["id"])
+                kind = (v.get("response") or {}).get("kind")
+                if kind == "applied" or vid in seen:
+                    continue
+                title = v.get("title", "")
+                company = (v.get("company") or {}).get("title", "")
+                cover = await _gen_letter(oa, resume, title, company)
+                if DRY:
+                    print(f"habr[dry]: откликнулся бы на {title[:42]} (письмо={len(cover)} симв)")
+                    applied += 1
+                    continue
+                r = await api.apply(v["id"], cover)
+                if r.status_code == 200:
+                    pgconn.add_seen("habr", vid)
+                    seen.add(vid)
+                    pgconn.bump_activity("habr", 1, account=account)
+                    _record(account, v)
+                    applied += 1
+                    print(f"habr: откликнулся на {title[:42]}")
+                else:
+                    print(f"habr: отклик не прошёл на {vid} ({r.status_code}) — повторю позже")
+                await asyncio.sleep(random.uniform(4, 12))
+            page += 1
         print(f"habr: готово, откликов {applied}")
     finally:
         if api is not None:

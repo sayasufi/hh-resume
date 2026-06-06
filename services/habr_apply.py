@@ -41,11 +41,6 @@ async def _gen_letter(oa, resume, title, company):
     return t
 
 
-def _query(account):
-    """Поисковый запрос (необязателен). Пусто -> откликаемся по «подходящим» (профиль Habr)."""
-    return (pgconn.get_setting("habr.query", account=account) or "").strip()
-
-
 def _record(account, v):
     """Записать отклик в habr_apps — для вкладки «Отклики» в кабинете."""
     conn = pgconn.connect()
@@ -105,16 +100,14 @@ async def run():
         limit = DEFAULT_MAX if _lim is None else int(_lim)
         oa = cfg.get("openai")
         resume = (cfg.get("resume_text") or "").strip()
-        query = _query(account)
-        mode = {"q": query} if query else {"type": "suitable"}
-        print(f"habr: вошли, режим={'запрос «' + query + '»' if query else 'подходящие по профилю'}, лимит {limit}")
+        print(f"habr: вошли, откликаемся по подходящим (профиль Habr), лимит {limit}")
 
         seen = pgconn.seen_keys("habr")
         applied = 0
         page = 1
         MAX_PAGES = 8  # до ~200 вакансий за прогон
         while applied < limit and page <= MAX_PAGES:
-            offers = await api.offers(page=page, **mode)
+            offers = await api.offers(page=page, type="suitable")
             if not offers:
                 break
             for v in offers:

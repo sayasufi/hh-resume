@@ -228,10 +228,6 @@ function bindConfig(cfg, resumes) {
     if ($("#cap-hlimit")) $("#cap-hlimit").textContent = "(макс " + capH + ")";
     clampWire($("#cfg-habr-limit"), "habr.max_per_day", capH);
   }
-  if ($("#cfg-habr-query")) {
-    $("#cfg-habr-query").value = cfg.habr_query || "";
-    $("#cfg-habr-query").onchange = () => save("habr.query", $("#cfg-habr-query").value.trim());
-  }
   const gph = $("#cfg-gph");
   if (gph) {
     gph.checked = !!cfg.civil_law_only;

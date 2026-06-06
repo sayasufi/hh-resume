@@ -796,8 +796,6 @@ async def api_settings(account: str = None,
         "habr_max_per_day": await asyncio.to_thread(
             pgconn.get_setting, "habr.max_per_day", HABR_CAP, account),
         "habr_max_per_day_cap": HABR_CAP,
-        "habr_query": await asyncio.to_thread(
-            pgconn.get_setting, "habr.query", "", account) or "",
         "max_per_day_cap": MAX_PER_DAY_CAP,   # серверный суточный потолок hh
         "tests_per_day_cap": TESTS_PER_DAY_CAP,  # практический потолок тест-флоу
     }
@@ -854,8 +852,6 @@ async def _set_config(account: str, key: str, value) -> None:
     elif key == "habr.max_per_day":
         await asyncio.to_thread(
             pgconn.set_setting, "habr.max_per_day", min(HABR_CAP, max(0, int(value))), account)
-    elif key == "habr.query":
-        await asyncio.to_thread(pgconn.set_setting, "habr.query", str(value).strip()[:80], account)
     elif key == "apply.resume_id":
         await asyncio.to_thread(pgconn.set_setting, "apply.resume_id", str(value), account)
     elif key == "apply.civil_law_only":

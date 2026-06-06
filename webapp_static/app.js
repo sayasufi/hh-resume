@@ -189,42 +189,69 @@ function bindToggles(features, tgConnected, gmLinked, habrLinked) {
 function resumeTitle(id) { const r = RESUMES.find((x) => String(x.id) === String(id)); return r ? (r.title || r.id) : (id || "—"); }
 
 // категории TG-каналов: тумблеры ниш (вместо текстового поля)
-function renderTgCats(catalog, catsStr) {
-  const box = $("#tg-cats"), title = $("#tg-cats-title"), bar = $("#tg-chans-bar"), chans = $("#tg-chans");
+function _tgChanChips(arr, rm) {  // чипы каналов (кликабельны -> t.me); rm=true -> с ✕ для удаления
+  return arr.map((u) => `<button class="chip" data-${rm ? "rm" : "u"}="${esc(u)}">@${esc(u)}${rm ? " ✕" : ""}</button>`).join("");
+}
+function _wireChanOpen(box) {
+  box.querySelectorAll(".chip[data-u]").forEach((b) => {
+    b.onclick = () => { const l = "https://t.me/" + b.dataset.u; if (tg && tg.openLink) tg.openLink(l); else window.open(l, "_blank"); };
+  });
+}
+function renderTgCats(catalog, catsStr, customStr) {
+  const box = $("#tg-cats"), title = $("#tg-cats-title");
   if (!box) return;
   catalog = catalog || [];
-  const show = catalog.length > 0;
-  if (title) title.style.display = show ? "" : "none";
-  if (bar) bar.style.display = show ? "" : "none";
-  if (!show) { box.innerHTML = ""; if (chans) chans.innerHTML = ""; return; }
+  if (title) title.style.display = catalog.length ? "" : "none";
+  if (!catalog.length) { box.innerHTML = ""; renderTgCustom(customStr); return; }
   const sel = new Set((catsStr || "").split(",").map((s) => s.trim()).filter(Boolean));
+  box.innerHTML = catalog.map((c) =>
+    `<div class="cell toggle cat-row">`
+    + `<span class="t cat-name" data-exp="${esc(c.key)}"><b>${esc(c.label)} <em class="dim">${c.channels.length}</em></b>`
+    + `<small>нажми, чтобы посмотреть каналы ⌄</small></span>`
+    + `<input type="checkbox" data-cat="${esc(c.key)}"${sel.has(c.key) ? " checked" : ""}><i data-sw="${esc(c.key)}"></i></div>`
+    + `<div class="cat-chans chips" data-chans="${esc(c.key)}" style="display:none">${_tgChanChips(c.channels)}</div>`
+  ).join("");
+  box.querySelectorAll(".cat-name[data-exp]").forEach((el) => {
+    el.onclick = () => { const d = box.querySelector(`.cat-chans[data-chans="${el.dataset.exp}"]`); if (d) d.style.display = d.style.display === "none" ? "" : "none"; hap("sel"); };
+  });
+  box.querySelectorAll("i[data-sw]").forEach((sw) => {
+    sw.onclick = async () => {
+      const inp = box.querySelector(`input[data-cat="${sw.dataset.sw}"]`);
+      inp.checked = !inp.checked;
+      if (inp.checked) sel.add(sw.dataset.sw); else sel.delete(sw.dataset.sw);
+      try { await save("tg.cats", [...sel].join(",")); hap("light"); }
+      catch (e) { inp.checked = !inp.checked; err("Не удалось сохранить"); }
+    };
+  });
+  _wireChanOpen(box);
+  renderTgCustom(customStr);
+}
+function renderTgCustom(customStr) {
+  const box = $("#tg-custom"), title = $("#tg-custom-title");
+  if (!box) return;
+  if (title) title.style.display = "";
+  let list = (customStr || "").split(",").map((s) => s.trim().replace(/^@/, "")).filter(Boolean);
   const draw = () => {
-    box.innerHTML = catalog.map((c) =>
-      `<button class="chip${sel.has(c.key) ? " active" : ""}" data-cat="${esc(c.key)}">${esc(c.label)} · ${c.channels.length}</button>`
-    ).join("");
-    box.querySelectorAll(".chip").forEach((ch) => {
-      ch.onclick = async () => {
-        const k = ch.dataset.cat;
-        if (sel.has(k)) sel.delete(k); else sel.add(k);
-        hap("sel"); draw();
-        try { await save("tg.cats", [...sel].join(",")); } catch (e) { err("Не удалось сохранить"); }
+    box.innerHTML = '<div class="cell"><input type="text" id="tg-custom-input" placeholder="добавить @канал" autocapitalize="off" autocomplete="off" spellcheck="false" style="flex:1;background:transparent;border:none;color:var(--accent);font:inherit;outline:none">'
+      + '<button class="chip" id="tg-custom-add">Добавить</button></div>'
+      + (list.length ? '<div class="cat-chans chips">' + _tgChanChips(list, true) + '</div>' : "");
+    $("#tg-custom-add").onclick = async () => {
+      const v = (($("#tg-custom-input").value || "").trim().replace(/^@/, "").replace(/[^a-zA-Z0-9_]/g, ""));
+      if (!v || list.includes(v)) return;
+      list.push(v);
+      try { await save("tg.channels", list.join(",")); hap("light"); draw(); }
+      catch (e) { list.pop(); err("Не удалось сохранить"); }
+    };
+    $("#tg-custom-input").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("#tg-custom-add").click(); } };
+    box.querySelectorAll(".chip[data-rm]").forEach((b) => {
+      b.onclick = async () => {
+        const prev = list.slice(); list = list.filter((x) => x !== b.dataset.rm);
+        try { await save("tg.channels", list.join(",")); hap("sel"); draw(); }
+        catch (e) { list = prev; err("Не удалось сохранить"); }
       };
-    });
-    const uniq = [...new Set(catalog.filter((c) => sel.has(c.key)).flatMap((c) => c.channels))];
-    if ($("#tg-chans-count")) $("#tg-chans-count").textContent = uniq.length;
-    if (chans) chans.innerHTML = uniq.map((u) =>
-      `<button class="chip" data-u="${esc(u)}">@${esc(u)}</button>`).join("");
-    if (chans) chans.querySelectorAll(".chip[data-u]").forEach((b) => {
-      b.onclick = () => { const l = "https://t.me/" + b.dataset.u; if (tg && tg.openLink) tg.openLink(l); else window.open(l, "_blank"); };
     });
   };
   draw();
-  const tgl = $("#tg-chans-toggle");
-  if (tgl) tgl.onclick = () => {
-    const open = chans.style.display === "none";
-    chans.style.display = open ? "" : "none";
-    tgl.textContent = open ? "скрыть ⌃" : "показать ⌄";
-  };
 }
 function bindConfig(cfg, resumes) {
   RESUMES = resumes || []; RESUME_ID = cfg.resume_id || (RESUMES[0] && RESUMES[0].id) || "";
@@ -272,7 +299,7 @@ function bindConfig(cfg, resumes) {
     if ($("#cap-hlimit")) $("#cap-hlimit").textContent = "(макс " + capH + ")";
     clampWire($("#cfg-habr-limit"), "habr.max_per_day", capH);
   }
-  renderTgCats(cfg.tg_catalog, cfg.tg_cats);
+  renderTgCats(cfg.tg_catalog, cfg.tg_cats, cfg.tg_channels);
   const gph = $("#cfg-gph");
   if (gph) {
     gph.checked = !!cfg.civil_law_only;

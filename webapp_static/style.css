@@ -243,8 +243,11 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 .seg.src button{flex:1;padding:9px 2px;font-weight:600}
 .seg.subtabs{margin:12px 14px;overflow-x:auto;-webkit-overflow-scrolling:touch}
 .seg.subtabs button{flex:0 0 auto;padding:8px 13px;white-space:nowrap}
-.set-panel{animation:fade .15s ease}
-@keyframes fade{from{opacity:.4}to{opacity:1}}
+.set-panel{animation:fade .18s ease}
+.cat-name{cursor:pointer;flex:1;min-width:0}
+.cat-row i{cursor:pointer}
+.cat-chans{padding-top:4px}
+.dim{color:var(--hint);font-weight:400;font-size:13px}
 
 /* карта настроек: секции по платформам */
 .sect-head{display:flex;align-items:center;gap:8px;font-size:17px;font-weight:700;color:var(--text);margin:20px 14px 2px}

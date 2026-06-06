@@ -171,13 +171,14 @@ function renderGmLink(st) {
     + "(код придёт в @g_jobbot).";
 }
 function wireGmLink() {}  // привязка перенесена в бот, инлайн-форма убрана
-function bindToggles(features, tgConnected, gmLinked) {
+function bindToggles(features, tgConnected, gmLinked, habrLinked) {
   document.querySelectorAll(".toggle input[data-feat]").forEach((inp) => {
     inp.checked = !!features[inp.dataset.feat];
-    // giga нужен Telegram; getmatch — Telegram ИЛИ привязка логином+кодом
+    // giga нужен Telegram; getmatch — Telegram ИЛИ логин+код; habr — вход на career.habr.com
     const lockGiga = inp.dataset.feat === "giga" && !tgConnected;
     const lockGm = inp.dataset.feat === "getmatch" && !tgConnected && !gmLinked;
-    const lock = lockGiga || lockGm;
+    const lockHabr = inp.dataset.feat === "habr" && !habrLinked;
+    const lock = lockGiga || lockGm || lockHabr;
     inp.disabled = lock;
     if (lock) inp.checked = false;
     inp.closest(".toggle").classList.toggle("disabled", lock);
@@ -513,7 +514,11 @@ async function boot() {
     if ($("#d-from")) { $("#d-from").value = PERIOD.dfrom; $("#d-to").value = PERIOD.dto; }
     const [me, st] = await Promise.all([api("/api/me" + qp()), api("/api/settings")]);
     renderMe(me); setupAdmin(me);
-    bindToggles(st.features, st.tg_connected, st.getmatch_linked); bindConfig(st.config, st.resumes || []);
+    bindToggles(st.features, st.tg_connected, st.getmatch_linked, st.habr_linked); bindConfig(st.config, st.resumes || []);
+    if ($("#habr-hint")) {
+      $("#habr-hint").style.display = st.habr_linked ? "none" : "";
+      $("#habr-hint").textContent = st.habr_linked ? "" : "Чтобы включить — подключите Habr Career: /addaccount → Habr (логин + пароль).";
+    }
     renderSources(st.sources); renderGmLink(st); wireGmLink();
     $("#giga-hint").textContent = st.tg_connected
       ? ""

@@ -27,7 +27,7 @@ FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga", "getmatch", "
 MAX_PER_DAY_CAP = 200   # серверный суточный потолок откликов hh (защита от бана)
 TESTS_PER_DAY_CAP = 30  # практический потолок браузерного тест-флоу
 GETMATCH_CAP = 50       # практический потолок откликов GetMatch в сутки
-HABR_CAP = 30           # практический потолок откликов Habr Career в сутки
+HABR_CAP = 50           # практический потолок откликов Habr Career в сутки
 _INITDATA_MAX_AGE = 86400  # сутки
 
 app = FastAPI(title="hh Mini App")

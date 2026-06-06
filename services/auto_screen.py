@@ -37,7 +37,8 @@ def _norm_phone(p):
     elif len(d) == 10:
         d = "7" + d
     return "+" + d
-MAX_TASKS = 5
+MAX_BOTS = 5    # боты-скрининги за прогон (приоритет — пройти скрининг = остаться в воронке)
+MAX_HR = 8      # сообщений HR за прогон (отдельный бюджет, чтобы боты и HR не голодали друг за друга)
 MAX_TURNS = 30  # боты проходим ВСЕГДА до конца — лимит высокий (длинные анкеты 15-25 вопросов)
 REPLY_TIMEOUT = 70  # AI-боты (напр. «Василиса») генерят следующий вопрос медленно
 RUN_BUDGET_SEC = 1500  # не начинать новые дела после 25 мин (текущее доводим до конца)
@@ -319,17 +320,25 @@ async def main():
         await api.aclose()
         return
     nb = nh = 0
-    seen = set()
+    seen = set()  # контактированные боты И @HR за прогон — дедуп, не писать одному дважды
     deadline = time.time() + RUN_BUDGET_SEC
+
+    def _bot_first(t):  # бот-дела вперёд (скрининг важнее и боты медленные) — по ссылке в тексте/урле
+        m = TME.search(f"{t['action']} {t.get('action_url') or ''}")
+        return 0 if (m and m.group(1).lower().endswith("bot") and "giga" not in m.group(1).lower()) else 1
+    tasks = sorted(tasks, key=_bot_first)
+
     try:
         for t in tasks:
-            if nb + nh >= MAX_TASKS or time.time() > deadline:
+            if (nb >= MAX_BOTS and nh >= MAX_HR) or time.time() > deadline:
                 break
             try:  # одно плохое дело не должно ронять весь прогон (и ложно флагать здоровье)
                 msg = await _last_employer_msg(api, t["nid"])
                 blob = f"{t['action']} {t['action_url']} {msg}"
                 mt = TME.search(blob)
                 if mt and mt.group(1).lower().endswith("bot") and "giga" not in mt.group(1).lower():
+                    if nb >= MAX_BOTS:
+                        continue
                     bot = mt.group(1)
                     if bot in seen:
                         continue
@@ -346,21 +355,34 @@ async def main():
                     low = t["action"].lower()
                     if (ma and not ma.group(1).lower().endswith("bot")
                             and ("напиш" in low or "telegram" in low)):
+                        if nh >= MAX_HR:
+                            continue
                         user = ma.group(1)
+                        if user in seen:  # этому HR уже писали в этом прогоне -> дубль вакансии, закрываем
+                            if LIVE:
+                                _mark_done(t["id"])
+                            print(f"  [HR-дубль] дело #{t['id']} -> @{user}: уже написали, закрываю")
+                            continue
+                        seen.add(user)
                         print(f"\n  [HR] дело #{t['id']} «{t['vac'][:42]}» -> @{user}")
                         r = await _do_hr(client, oa, name, resume, hh_url, t["vac_url"], user, t["vac"], DRY)
-                        if r is True and LIVE:  # написали один раз -> дело закрыто, дальше юзер сам
-                            _mark_done(t["id"])
-                        nh += 1
+                        if r is True:  # написали один раз -> дело закрыто, дальше юзер сам
+                            if LIVE:
+                                _mark_done(t["id"])
+                            nh += 1
                     elif (PHONE.search(msg)
                             and ("напиш" in low or "telegram" in low or "мессендж" in low)):
+                        if nh >= MAX_HR:
+                            continue
                         # «написать в мессенджер», но дан НОМЕР (нет @) -> пишем в TG по номеру
                         phone = _norm_phone(PHONE.search(msg).group(0))
                         print(f"\n  [ТЕЛ] дело #{t['id']} «{t['vac'][:42]}» -> {phone}")
                         r = await _do_phone(client, name, hh_url, t["vac_url"], phone, t["vac"], DRY)
-                        if r is True and LIVE:  # написали -> закрыто; нет TG -> None, оставляем (звонок)
-                            _mark_done(t["id"])
-                        nh += 1
+                        if r is True:  # написали в TG -> закрыто, слот потрачен
+                            if LIVE:
+                                _mark_done(t["id"])
+                            nh += 1
+                        # r is None -> нет TG, это звонок: дело оставляем, слот лимита НЕ тратим
             except Exception as e:
                 print(f"  дело #{t['id']}: ошибка, пропускаю — {type(e).__name__}: {repr(e)[:120]}")
     finally:

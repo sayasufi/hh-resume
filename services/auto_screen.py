@@ -78,7 +78,7 @@ def _pending(account):
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, action, action_url, vacancy, nid, vacancy_url FROM action_items "
-                "WHERE account=%s AND coalesce(done,false)=false AND nid IS NOT NULL "
+                "WHERE account=%s AND coalesce(done,false)=false "  # дела всех источников (nid может быть NULL — Habr и др.)
                 "ORDER BY created_at DESC", (account,))
             return [{"id": r[0], "action": r[1] or "", "action_url": r[2] or "",
                      "vac": r[3] or "", "nid": r[4], "vac_url": r[5] or ""}

@@ -271,7 +271,7 @@ function renderGiga(g) {
   box.classList.remove("hidden");
   const last = g.last && g.last.vacancy
     ? `<div class="giga-last">Последнее: ${esc(g.last.vacancy)} · ${esc(g.last.at)}</div>` : "";
-  box.innerHTML = '<div class="giga-h">🤖 ГигаРекрутер сам проходит интервью</div>'
+  box.innerHTML = '<div class="giga-h">🤖 Бот сам проходит анкеты и интервью в Telegram</div>'
     + '<div class="giga-row">'
     + `<span class="gnum"><b>${g.done | 0}</b> пройдено</span>`
     + `<span class="gnum"><b>${g.pending | 0}</b> в очереди</span>`
@@ -464,7 +464,7 @@ async function boot() {
     renderSources(st.sources); renderGmLink(st); wireGmLink();
     $("#giga-hint").textContent = st.tg_connected
       ? ""
-      : "⚠️ Чтобы включить ГигаРекрутера, дайте доступ к Telegram: команда /connect в боте.";
+      : "⚠️ Чтобы включить «Авто-задачи в Telegram», дайте доступ к Telegram: команда /connect в боте.";
     loadDialogs(); loadActivity(); loadActions(); loadGiga(); loadGetmatchApps();
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {

@@ -521,11 +521,11 @@ def _source_health(account: str) -> list:
 
     h_g = pgconn.read_health("giga", account)
     if not cfg.get("tg_user_session"):
-        out.append(row("ГигаРекрутер", "off", "не подключён", "дай доступ: /connect в боте", None))
+        out.append(row("Авто-задачи в Telegram", "off", "не подключён", "дай доступ: /connect в боте", None))
     elif not pgconn.get_setting("feat.giga", None, account):
-        out.append(row("ГигаРекрутер", "off", "выключено", "", h_g))
+        out.append(row("Авто-задачи в Telegram", "off", "выключено", "", h_g))
     else:
-        out.append(row("ГигаРекрутер", *by_run(h_g), h_g))
+        out.append(row("Авто-задачи в Telegram", *by_run(h_g), h_g))
     return out
 
 
@@ -782,7 +782,7 @@ async def _set_config(account: str, key: str, value) -> None:
             if not cfg.get("tg_user_session"):
                 raise HTTPException(
                     400, "Подключите Telegram (кнопка «Подключить» / команда /connect "
-                         "в боте), чтобы включить ГигаРекрутера.")
+                         "в боте), чтобы включить «Авто-задачи в Telegram».")
         if key == "getmatch" and bool(value):
             cfg = await asyncio.to_thread(pgconn.app_config, account)
             linked = await asyncio.to_thread(pgconn.get_setting, "getmatch.session", "", account)

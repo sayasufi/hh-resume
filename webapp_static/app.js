@@ -277,8 +277,9 @@ const loadActivity = () => api("/api/activity" + qp()).then(renderActivity).catc
 
 // прогресс авто-ГигаРекрутера (giga_queue) — раньше был полностью невидим
 function renderGiga(g) {
-  const box = $("#giga-card");
   if ($("#a-giga")) $("#a-giga").textContent = (g && g.done) || 0;  // блок «Авто-задачи в Telegram» в Стате
+  const box = $("#giga-card");
+  if (!box) return;  // карточка убрана с профиля — прогресс теперь в Стате
   if (!g || (!g.pending && !g.done && !g.active)) { box.classList.add("hidden"); return; }
   box.classList.remove("hidden");
   const last = g.last && g.last.vacancy
@@ -332,12 +333,9 @@ function _statusRows(box, empty, apps) {
   if (!apps.length) { box.innerHTML = ""; return; }
   const c = { wait: 0, ok: 0, bad: 0 };
   apps.forEach((a) => { c[gmCls(a)]++; });
-  const row = (lbl, n, kind) =>
-    `<div class="cell"><span class="dlg-title">${lbl}</span><span class="gm-st ${kind}">${n}</span></div>`;
-  box.innerHTML = row("Всего отправлено", apps.length, "wait")
-    + row("⏳ Ждём ответа", c.wait, "wait")
-    + row("✅ Одобрены / приглашения", c.ok, "ok")
-    + row("🔴 Отказы", c.bad, "bad");
+  const card = (n, lbl) => `<div class="stat"><div class="num">${n}</div><div class="lbl">${lbl}</div></div>`;
+  box.innerHTML = card(apps.length, "Откликов отправлено") + card(c.wait, "Ждём ответа")
+    + card(c.ok, "Одобрены / приглашения") + card(c.bad, "Отказы");
 }
 function renderGmStats() { _statusRows($("#gm-stats"), $("#gm-empty"), GM_APPS); }
 const loadGetmatchApps = () => api("/api/getmatch").then((r) => {

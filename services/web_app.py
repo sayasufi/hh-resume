@@ -538,14 +538,6 @@ def _source_health(account: str) -> list:
     else:
         out.append(row("GetMatch", *by_run(h_gm), h_gm))
 
-    h_g = pgconn.read_health("giga", account)
-    if not cfg.get("tg_user_session"):
-        out.append(row("Авто-задачи в Telegram", "off", "не подключён", "дай доступ: /connect в боте", None))
-    elif not pgconn.get_setting("feat.giga", None, account):
-        out.append(row("Авто-задачи в Telegram", "off", "выключено", "", h_g))
-    else:
-        out.append(row("Авто-задачи в Telegram", *by_run(h_g), h_g))
-
     h_hb = pgconn.read_health("habr", account)
     if not pgconn.get_setting("habr.session", "", account):
         out.append(row("Habr Career", "off", "не подключён", "подключи: /addaccount → Habr", None))
@@ -553,6 +545,14 @@ def _source_health(account: str) -> list:
         out.append(row("Habr Career", "off", "выключено", "", h_hb))
     else:
         out.append(row("Habr Career", *by_run(h_hb), h_hb))
+
+    h_g = pgconn.read_health("giga", account)
+    if not cfg.get("tg_user_session"):
+        out.append(row("Авто-задачи в Telegram", "off", "не подключён", "дай доступ: /connect в боте", None))
+    elif not pgconn.get_setting("feat.giga", None, account):
+        out.append(row("Авто-задачи в Telegram", "off", "выключено", "", h_g))
+    else:
+        out.append(row("Авто-задачи в Telegram", *by_run(h_g), h_g))
     return out
 
 

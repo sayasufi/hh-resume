@@ -63,8 +63,8 @@ function renderMe(d) {
 function renderSources(sources) {
   const box = $("#sources");
   if (!box) return;
-  const cls = { ok: "ok", warn: "wait", down: "bad", off: "wait" };
-  const ico = { ok: "✅", warn: "⚠️", down: "🔴", off: "⏸" };
+  const cls = { ok: "ok", warn: "wait", down: "bad", off: "wait", unlinked: "bad" };
+  const ico = { ok: "✅", warn: "⚠️", down: "🔴", off: "⏸", unlinked: "🔴" };
   box.innerHTML = (sources || []).map((s) => {
     const sub = [s.detail, s.run].filter(Boolean).join(" · ");
     return '<div class="cell"><div class="dlg-main">'

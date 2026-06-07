@@ -529,7 +529,7 @@ def _source_health(account: str) -> list:
     if not pgconn.feature_enabled("apply", account):
         out.append(row("hh.ru", "off", "авто-отклики выключены", "", h_apply))
     elif not (tok.get("access_token") or tok.get("refresh_token")):
-        out.append(row("hh.ru", "down", "не привязан", "нет hh-аккаунта", None))
+        out.append(row("hh.ru", "unlinked", "не привязан", "нет hh-аккаунта", None))
     elif tok.get("access_expires_at", 0) < now and not tok.get("refresh_token"):
         out.append(row("hh.ru", "down", "токен истёк", "нужна переавторизация hh", h_apply))
     else:
@@ -538,8 +538,8 @@ def _source_health(account: str) -> list:
     # GetMatch и ГигаРекрутер — opt-in: «не подключён» (нет привязки) ≠ «выключено» (привязан, но
     # фича выкл) ≠ «работает». feat смотрим ЯВНО (не дефолт-True), чтобы не путать дефолт с включением.
     h_gm = pgconn.read_health("getmatch", account)
-    if not (pgconn.get_setting("getmatch.session", "", account) or cfg.get("tg_user_session")):
-        out.append(row("GetMatch", "off", "не подключён", "подключи в боте: /addaccount → GetMatch", None))
+    if not pgconn.get_setting("getmatch.session", "", account):
+        out.append(row("GetMatch", "unlinked", "не подключён", "подключи в боте: /addaccount → GetMatch", None))
     elif not pgconn.get_setting("feat.getmatch", None, account):
         out.append(row("GetMatch", "off", "выключено", "", h_gm))
     else:
@@ -547,7 +547,7 @@ def _source_health(account: str) -> list:
 
     h_hb = pgconn.read_health("habr", account)
     if not pgconn.get_setting("habr.session", "", account):
-        out.append(row("Habr Career", "off", "не подключён", "подключи: /addaccount → Habr", None))
+        out.append(row("Habr Career", "unlinked", "не подключён", "подключи: /addaccount → Habr", None))
     elif not pgconn.get_setting("feat.habr", None, account):
         out.append(row("Habr Career", "off", "выключено", "", h_hb))
     else:
@@ -555,7 +555,7 @@ def _source_health(account: str) -> list:
 
     h_g = pgconn.read_health("giga", account)
     if not cfg.get("tg_user_session"):
-        out.append(row("Авто-задачи в Telegram", "off", "не подключён", "дай доступ: /connect в боте", None))
+        out.append(row("Авто-задачи в Telegram", "unlinked", "не подключён", "дай доступ: /connect в боте", None))
     elif not pgconn.get_setting("feat.giga", None, account):
         out.append(row("Авто-задачи в Telegram", "off", "выключено", "", h_g))
     else:

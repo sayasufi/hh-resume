@@ -45,8 +45,16 @@ JOBS: list[dict] = [
          feature="habr",   cron="35 6-18/4 * * *",  jitter=200,  tags=["llm"],     timeout=1200),
     dict(name="habr-chat",      command=["python", "/app/services/habr_chat.py"],
          feature="habr_chat", cron="15 8-20/3 * * *", jitter=200, tags=["llm"],    timeout=600),
-    dict(name="tg-channels",    command=["python", "/app/services/tg_channels.py", "--live"],
+    # рассылка кандидатам из tg_vacancies — DRY (БЕЗ --live): пока ничего не пишется эйчарам.
+    # Чтобы включить реальные ЛС — добавить "--live" в command.
+    dict(name="tg-channels",    command=["python", "/app/services/tg_channels.py"],
          feature="tg_channels", cron="40 9-19/4 * * *", jitter=300, tags=["llm"],  timeout=1200),
+    # центральный краулер вакансий (наш аккаунт-краулер) — broadcast-каналы через t.me/s, без флуда
+    dict(name="tg-crawl",       command=["python", "/app/services/tg_crawler.py"],
+         feature=None,     cron="20 6-21/3 * * *",  jitter=300,  tags=["llm"],     timeout=2400),
+    # вступление в чаты (постепенно, аккаунт-краулер новый) + краул групп — раз в день
+    dict(name="tg-join-crawl",  command=["python", "/app/services/tg_crawler_groups.py"],
+         feature=None,     cron="35 7 * * *",       jitter=600,  tags=["llm"],     timeout=2400),
 ]
 JOBS_BY_NAME: dict[str, dict] = {j["name"]: j for j in JOBS}
 

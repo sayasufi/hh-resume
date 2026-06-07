@@ -118,6 +118,30 @@ async def _hh_resume_url(cfg, account):
         await api.aclose()
 
 
+def _cats(account):
+    raw = (pgconn.get_setting("tg.cats", account=account)
+           or pgconn.get_setting("tg.cats_default", account="_global") or "")
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+def _db_vacancies(cats, limit=150):
+    """Свежие вакансии из tg_vacancies под категории кандидата, с прямым @контактом рекрутёра."""
+    if not cats:
+        return []
+    conn = pgconn.connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, channel, category, title, text, contact FROM tg_vacancies "
+            "WHERE is_vacancy AND contact LIKE '@%%' AND category = ANY(%s) "
+            "AND posted_at > now() - make_interval(days => 4) "
+            "ORDER BY posted_at DESC LIMIT %s",
+            (cats, limit))
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
 async def run():
     account = pgconn.get_account()
     if not pgconn.feature_enabled("tg_channels"):
@@ -133,76 +157,61 @@ async def run():
     if not resume:
         print("tg_channels: нет resume_text — пропуск (матчинг будет мусорным)")
         return
-    channels = _channels(account)
-    if not channels:
-        print("tg_channels: список каналов пуст — пропуск")
+    cats = _cats(account)
+    out_seen = pgconn.seen_keys(f"tg_out_{account}")
+    vacs = [v for v in _db_vacancies(cats) if str(v[0]) not in out_seen]
+    if not vacs:
+        print(f"tg_channels[{account}]: нет свежих вакансий под {cats} — пропуск")
         return
 
     hh_url = await _hh_resume_url(cfg, account)
-    api_id, api_hash = pgconn.tg_api()
-    client = TelegramClient(StringSession(pgconn.dec_session(enc)), api_id, api_hash)
-    await client.connect()
-    if not await client.is_user_authorized():
-        print("tg_channels: tg-сессия слетела — пропуск")
-        return
-    seen = pgconn.seen_keys("tg_channels")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=FRESH_DAYS)
-    dm = evals = deals = 0
-    print(f"tg_channels[{account}] режим={'LIVE' if LIVE else 'DRY'}: каналов {len(channels)}")
+    # ЛС рекрутёру шлём ТОЛЬКО в LIVE. В DRY сессию кандидата вообще не подключаем —
+    # гарантия, что эйчарам ничего не пишется, пока не разрешат.
+    client = None
+    if LIVE:
+        api_id, api_hash = pgconn.tg_api()
+        client = TelegramClient(StringSession(pgconn.dec_session(enc)), api_id, api_hash)
+        await client.connect()
+        if not await client.is_user_authorized():
+            print("tg_channels: tg-сессия слетела — пропуск")
+            return
+    dm = evals = 0
+    print(f"tg_channels[{account}] режим={'LIVE' if LIVE else 'DRY'}: вакансий-кандидатов {len(vacs)} (категории {cats})")
     try:
-        for ch in channels:
+        for vid, channel, category, title, text, contact in vacs:
             if dm >= MAX_DM or evals >= MAX_EVAL:
                 break
-            try:
-                msgs = await client.get_messages(ch, limit=POSTS_PER_CH)
-            except Exception as e:
-                print(f"  @{ch}: не прочитать ({type(e).__name__})")
+            evals += 1
+            match, c2, letter = await _decide(oa, resume, text)
+            if not match:
+                pgconn.add_seen(f"tg_out_{account}", str(vid))  # не по профилю — больше не оцениваем
+                out_seen.add(str(vid))
                 continue
-            for m in msgs:
-                if dm >= MAX_DM or evals >= MAX_EVAL:
-                    break
-                if not m.message or (m.date and m.date < cutoff):
-                    continue
-                key = f"{ch}:{m.id}"
-                if key in seen:
-                    continue
-                post = _strip(m.message)
-                evals += 1
-                match, contact, letter = await _decide(oa, resume, post)
-                pgconn.add_seen("tg_channels", key)
-                seen.add(key)
-                if not match:
-                    continue
-                bot = next((u for u in TME.findall(m.message)
-                            if u.lower().endswith("bot") and "giga" not in u.lower()), None)
-                if contact and letter:
-                    body = letter + (f"\nМоё резюме: {hh_url}" if hh_url else "")
-                    if DRY:
-                        print(f"  [ЛС] @{contact} (из @{ch}): {letter[:80]}")
-                        dm += 1
-                        continue
-                    try:
-                        ent = await client.get_entity(contact)
-                        await client.send_message(ent, body, link_preview=False)
-                        pgconn.bump_activity("tg_channels", 1, account=account)
-                        dm += 1
-                        print(f"  [ЛС] написал @{contact} (из @{ch})")
-                    except Exception as e:
-                        print(f"  [ЛС] @{contact}: не отправилось ({type(e).__name__})")
-                    await asyncio.sleep(random.uniform(5, 14))
-                elif bot:
-                    if not DRY:
-                        pgconn.add_action_items([{
-                            "nid": None, "chat_id": None,
-                            "vacancy": f"Вакансия из @{ch}",
-                            "action": f"пройти анкету в Telegram-боте t.me/{bot}",
-                            "chat_url": f"https://t.me/{ch}", "vacancy_url": "",
-                            "action_url": f"https://t.me/{bot}"}])
-                    deals += 1
-                    print(f"  [ДЕЛО] бот t.me/{bot} (из @{ch})")
+            to = contact if (contact or "").startswith("@") else ("@" + c2 if c2 else "")
+            if not to:
+                continue
+            body = (letter or f"Здравствуйте! Заинтересовала ваша вакансия «{title}».") \
+                + (f"\nМоё резюме: {hh_url}" if hh_url else "")
+            if not LIVE:
+                # DRY — НИЧЕГО не отправляем, только показываем что отправили бы (вакансию НЕ помечаем seen — уйдёт при LIVE)
+                print(f"  [DRY ЛС→{to}] {category}/{title[:42]} (из @{channel}): {(letter or '')[:90]}")
+                dm += 1
+                continue
+            try:
+                ent = await client.get_entity(to)
+                await client.send_message(ent, body, link_preview=False)
+                pgconn.bump_activity("tg_channels", 1, account=account)
+                pgconn.add_seen(f"tg_out_{account}", str(vid))
+                out_seen.add(str(vid))
+                dm += 1
+                print(f"  [ЛС] написал {to} (из @{channel})")
+            except Exception as e:
+                print(f"  [ЛС] {to}: не отправилось ({type(e).__name__})")
+            await asyncio.sleep(random.uniform(6, 16))
     finally:
-        await client.disconnect()
-    print(f"tg_channels: готово — ЛС {dm}, дел {deals}, оценено постов {evals}")
+        if client:
+            await client.disconnect()
+    print(f"tg_channels: готово — {'ЛС' if LIVE else 'DRY-совпадений'} {dm}, оценено {evals}")
 
 
 if __name__ == "__main__":

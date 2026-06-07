@@ -17,7 +17,7 @@ from telethon.tl.types import User
 from telethon.errors import FloodWaitError, UserAlreadyParticipantError
 
 CRAWLER = "8510841974"
-JOIN_PER_RUN = int(os.environ.get("JOIN_N", "8"))
+JOIN_PER_RUN = int(os.environ.get("JOIN_N", "5"))
 JOIN_DELAY = int(os.environ.get("JOIN_DELAY", "25"))
 FRESH_DAYS = 5
 POSTS_PER_CH = 30

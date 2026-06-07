@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import KW_ONLY, dataclass
 
@@ -9,6 +10,86 @@ logger = logging.getLogger(__package__)
 
 
 DEFAULT_COMPLETION_ENDPOINT = "https://api.openai.com/v1/chat/completions"
+
+# --- глобальный (на весь сервис) лимит одновременных LLM-запросов ---
+# Кросс-процессный: все процессы/контейнеры/flow-раны делят N слотов через
+# Postgres advisory-locks. Число слотов берётся из настройки llm.max_concurrent
+# (_global, дефолт 8). Fail-open: если БД недоступна — НЕ блокируем LLM.
+_LLM_NS = 919191  # namespace для pg_advisory_lock (int4)
+_WAIT_TIMEOUT = 90.0  # сколько ждать свободный слот, потом идём без лимита
+
+
+def _max_concurrent() -> int:
+    try:
+        from hh_applicant_tool.storage import pgconn
+        return max(1, int(pgconn.get_setting("llm.max_concurrent", "8", account="_global")))
+    except Exception:
+        return 8
+
+
+def _sync_acquire(n):
+    """Возврат: conn (с ._llm_slot) если слот взят; 'busy' если все заняты; None при ошибке БД (fail-open)."""
+    try:
+        from hh_applicant_tool.storage import pgconn
+        conn = pgconn.connect()
+    except Exception:
+        return None
+    try:
+        cur = conn.cursor()
+        for slot in range(n):
+            cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (_LLM_NS, slot))
+            if cur.fetchone()[0]:
+                conn._llm_slot = slot
+                return conn
+        conn.close()
+        return "busy"
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return None
+
+
+def _sync_release(conn):
+    try:
+        slot = getattr(conn, "_llm_slot", None)
+        if slot is not None:
+            cur = conn.cursor()
+            cur.execute("SELECT pg_advisory_unlock(%s, %s)", (_LLM_NS, slot))
+            conn.commit()
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+async def _acquire_llm_slot():
+    """Ждёт свободный слот. Возврат: conn-объект (освободить через _sync_release) либо None (без лимита)."""
+    try:
+        n = await asyncio.to_thread(_max_concurrent)
+        loop = asyncio.get_event_loop()
+        start = loop.time()
+        waited = False
+        while True:
+            res = await asyncio.to_thread(_sync_acquire, n)
+            if res is None:            # БД недоступна -> fail-open
+                return None
+            if res == "busy":
+                if loop.time() - start > _WAIT_TIMEOUT:
+                    logger.warning("LLM-лимит: ждали слот >%ss — идём без лимита", int(_WAIT_TIMEOUT))
+                    return None
+                if not waited:
+                    logger.debug("LLM-лимит: все %s слотов заняты, ждём", n)
+                    waited = True
+                await asyncio.sleep(0.3)
+                continue
+            return res                 # conn со слотом
+    except Exception:
+        return None
 
 
 class OpenAIError(AIError):
@@ -69,26 +150,31 @@ class ChatOpenAI:
             "max_completion_tokens": self.max_completion_tokens,
         }
 
+        _slot = await _acquire_llm_slot()  # глобальный лимит одновременных запросов
         try:
-            async with httpx.AsyncClient(
-                proxy=self.proxy, timeout=self.timeout
-            ) as client:
-                model = await self._resolve_model(client)
-                if not model:
-                    raise OpenAIError(
-                        "LLM недоступна: не удалось определить модель "
-                        "(vLLM пуст/недоступен)"
+            try:
+                async with httpx.AsyncClient(
+                    proxy=self.proxy, timeout=self.timeout
+                ) as client:
+                    model = await self._resolve_model(client)
+                    if not model:
+                        raise OpenAIError(
+                            "LLM недоступна: не удалось определить модель "
+                            "(vLLM пуст/недоступен)"
+                        )
+                    payload["model"] = model
+                    response = await client.post(
+                        self.completion_endpoint,
+                        json=payload,
+                        headers=self._default_headers(),
                     )
-                payload["model"] = model
-                response = await client.post(
-                    self.completion_endpoint,
-                    json=payload,
-                    headers=self._default_headers(),
-                )
-                response.raise_for_status()
-                data = response.json()
-            if "error" in data:
-                raise OpenAIError(data["error"]["message"])
-            return data["choices"][0]["message"]["content"]
-        except httpx.HTTPError as ex:
-            raise OpenAIError(f"Network error: {ex}") from ex
+                    response.raise_for_status()
+                    data = response.json()
+                if "error" in data:
+                    raise OpenAIError(data["error"]["message"])
+                return data["choices"][0]["message"]["content"]
+            except httpx.HTTPError as ex:
+                raise OpenAIError(f"Network error: {ex}") from ex
+        finally:
+            if _slot is not None:
+                await asyncio.to_thread(_sync_release, _slot)

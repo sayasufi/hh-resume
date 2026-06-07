@@ -23,7 +23,7 @@ FRESH_DAYS = 5
 POSTS_PER_CH = 30
 MAX_LLM = int(os.environ.get("CRAWL_MAX", "500"))
 MIN_LEN = 40
-GROUPS = ["agile_jobs","analysts_hunter","android_jobs","arrowit","datajobs","devops_jobs","django_jobs",
+GROUPS = ["agile_jobs","analysts_hunter","android_jobs","datajobs","devops_jobs","django_jobs",
 "front_end_jobs","gogetajob","golang_jobs","golang_jobsgo","java_jobs","javascript_jobs","jobgeeks","jobs_it",
 "kotlinmppjobs","microsoftstackjobs","mindset_jobs","mobile_jobs","mobile_vacancies","myjobit","nodejs_jobs",
 "php_jobs","products_jobs","projects_jobs","projects_jobs_feed","python_django_work","python_jobs","qa_jobs",
@@ -36,7 +36,7 @@ SYS = (
   '{"is_vacancy":true|false,"category":"<один из: ' + ",".join(CATS) + '>",'
   '"title":"<должность кратко>","contact":"<@username/t.me рекрутёра, иначе пусто>",'
   '"salary":"<если есть>","remote":true|false}\n'
-  "is_vacancy=false если это болтовня/вопрос/резюме/реклама/не вакансия."
+  "is_vacancy=false если это болтовня/вопрос/резюме/реклама/не вакансия. Также is_vacancy=false если роль НЕ из IT/диджитал (оператор, курьер, продавец, бьюти, простые онлайн-задания, продажи не в IT)."
 )
 
 def _openai():

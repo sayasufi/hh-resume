@@ -499,7 +499,16 @@ def _src_age(h, now) -> str:
 def _tg_catalog() -> list:
     """Каталог TG-категорий для кабинета: [{key, label, channels:[...]}]."""
     cat = json.loads(pgconn.get_setting("tg.catalog", account="_global") or "{}")
-    return [{"key": k, "label": v.get("label", k), "channels": list(v.get("channels") or [])}
+    types = {}
+    conn = pgconn.connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT lower(username), type FROM tg_channels")
+        types = {u: (t or "broadcast") for u, t in cur.fetchall()}
+    finally:
+        conn.close()
+    return [{"key": k, "label": v.get("label", k),
+             "channels": [{"u": u, "t": types.get(u.lower(), "broadcast")} for u in (v.get("channels") or [])]}
             for k, v in cat.items()]
 
 

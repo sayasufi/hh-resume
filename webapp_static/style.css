@@ -104,6 +104,11 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 .chip { background: var(--sec); color: var(--text); border: none; border-radius: 999px;
   padding: 8px 14px; font-size: 14px; font-weight: 500; cursor: pointer; transition: .15s; }
 .chip.active { background: var(--accent); color: var(--accent-t); }
+.chip.chan-broadcast { background: rgba(59,130,246,.16); color: #bcd6ff; box-shadow: inset 0 0 0 1px rgba(59,130,246,.5); }
+.chip.chan-chat { background: rgba(245,158,11,.17); color: #ffdca0; box-shadow: inset 0 0 0 1px rgba(245,158,11,.5); }
+.chan-legend { display: flex; gap: 16px; padding: 8px 14px 2px; font-size: 12px; font-weight: 600; }
+.chan-legend .lg-broadcast { color: #7ab0ff; }
+.chan-legend .lg-chat { color: #f7b955; }
 .subbar { display: flex; justify-content: space-between; align-items: center; padding: 10px 18px 8px; }
 .seg { display: flex; background: var(--sec); border-radius: 9px; padding: 2px; }
 .seg button { border: none; background: transparent; color: var(--text); font: inherit; font-size: 13px;

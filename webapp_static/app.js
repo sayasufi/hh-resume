@@ -190,8 +190,13 @@ function bindToggles(features, tgConnected, gmLinked, habrLinked, hhConnected) {
 function resumeTitle(id) { const r = RESUMES.find((x) => String(x.id) === String(id)); return r ? (r.title || r.id) : (id || "—"); }
 
 // категории TG-каналов: тумблеры ниш (вместо текстового поля)
-function _tgChanChips(arr, rm) {  // чипы каналов (кликабельны -> t.me); rm=true -> с ✕ для удаления
-  return arr.map((u) => `<button class="chip" data-${rm ? "rm" : "u"}="${esc(u)}">@${esc(u)}${rm ? " ✕" : ""}</button>`).join("");
+function _tgChanChips(arr, rm) {  // чипы каналов; цвет по типу (синий=канал, янтарный=группа); rm=true -> с ✕
+  return arr.map((c) => {
+    const u = typeof c === "string" ? c : c.u;
+    const t = typeof c === "string" ? "" : (c.t || "");
+    const cls = t === "chat" ? " chan-chat" : t === "broadcast" ? " chan-broadcast" : "";
+    return `<button class="chip${cls}" data-${rm ? "rm" : "u"}="${esc(u)}">@${esc(u)}${rm ? " ✕" : ""}</button>`;
+  }).join("");
 }
 function _wireChanOpen(box) {
   box.querySelectorAll(".chip[data-u]").forEach((b) => {
@@ -206,7 +211,8 @@ function renderTgCats(catalog, catsStr, customStr, enabled) {
   if (title) title.style.display = catalog.length ? "" : "none";
   if (!catalog.length) { box.innerHTML = ""; renderTgCustom(customStr, enabled); return; }
   const sel = new Set((catsStr || "").split(",").map((s) => s.trim()).filter(Boolean));
-  box.innerHTML = catalog.map((c) =>
+  box.innerHTML = '<div class="chan-legend"><span class="lg lg-broadcast">● канал</span><span class="lg lg-chat">● группа</span></div>'
+    + catalog.map((c) =>
     `<div class="cell toggle cat-row">`
     + `<span class="t cat-name" data-exp="${esc(c.key)}"><b>${esc(c.label)} <em class="dim">${c.channels.length}</em></b>`
     + `<small>нажми, чтобы посмотреть каналы ⌄</small></span>`

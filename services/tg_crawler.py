@@ -25,7 +25,8 @@ SYS = (
   "Разбери пост из Telegram-канала с IT-вакансиями. Верни СТРОГО JSON одной строкой:\n"
   '{"is_vacancy":true|false,"category":"<один из: ' + ",".join(CATS) + '>",'
   '"title":"<должность кратко>","contact":"<@username или t.me/.. рекрутёра/HR для отклика в ЛС, иначе пусто>",'
-  '"salary":"<если есть, иначе пусто>","remote":true|false}\n'
+  '"salary":"<если есть, иначе пусто>","remote":true|false,'
+  '"region":"<город или страна вакансии: Москва/Россия/Грузия/Казахстан и т.п.; \'удалёнка\' если remote без города; \'релокация\' если переезд; пусто если не указан>"}\n'
   "is_vacancy=false если дайджест/реклама/резюме/опрос/не вакансия. Также is_vacancy=false если роль НЕ из IT/диджитал (оператор, курьер, продавец, бьюти, простые онлайн-задания, продажи не в IT). "
   "contact — ТОЛЬКО прямой контакт ЧЕЛОВЕКА (@user/t.me/user/ссылка на профиль); НЕ бот, НЕ канал, НЕ форма/hh/сайт."
 )
@@ -116,11 +117,11 @@ async def main():
                 if not contact:
                     continue  # без контакта не храним — связаться нельзя
                 cur.execute(
-                    "INSERT INTO tg_vacancies (channel,post_id,posted_at,text,is_vacancy,category,title,contact,contact_type,salary,remote,post_url) "
-                    "VALUES (%s,%s,%s,%s,true,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (channel,post_id) DO NOTHING",
+                    "INSERT INTO tg_vacancies (channel,post_id,posted_at,text,is_vacancy,category,title,contact,contact_type,salary,remote,region,post_url) "
+                    "VALUES (%s,%s,%s,%s,true,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (channel,post_id) DO NOTHING",
                     (ch, pid, dt, text[:4000], cat, (d.get("title") or "")[:200], contact,
                      ("dm" if contact else "none"), (d.get("salary") or "")[:100], bool(d.get("remote")),
-                     f"https://t.me/{ch}/{pid}"))
+                     (d.get("region") or "")[:60], f"https://t.me/{ch}/{pid}"))
                 stored += 1
                 if stored % 25 == 0: conn.commit()
             await asyncio.sleep(0.3)

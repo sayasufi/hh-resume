@@ -33,7 +33,8 @@ SYS = (
   "Разбери пост из Telegram-чата с IT-вакансиями. Верни СТРОГО JSON одной строкой:\n"
   '{"is_vacancy":true|false,"category":"<один из: ' + ",".join(CATS) + '>",'
   '"title":"<должность кратко>","contact":"<@username/t.me рекрутёра, иначе пусто>",'
-  '"salary":"<если есть>","remote":true|false}\n'
+  '"salary":"<если есть>","remote":true|false,'
+  '"region":"<город или страна вакансии: Москва/Россия/Грузия/Казахстан и т.п.; \'удалёнка\' если remote без города; \'релокация\' если переезд; пусто если не указан>"}\n'
   "is_vacancy=false если это болтовня/вопрос/резюме/реклама/не вакансия. Также is_vacancy=false если роль НЕ из IT/диджитал (оператор, курьер, продавец, бьюти, простые онлайн-задания, продажи не в IT)."
 )
 
@@ -112,10 +113,10 @@ async def main():
             if (contact or "").lower().lstrip("@") in ("gmail","yandex","mail","outlook","icloud","hotmail","ya","bk","list","inbox","rambler","proton","protonmail"): contact=""
             if not contact: continue  # без контакта не храним
             catg=d.get("category") if d.get("category") in CATS else cat_of.get(g.lower(),"general")
-            cur.execute("INSERT INTO tg_vacancies (channel,post_id,posted_at,text,is_vacancy,category,title,contact,contact_type,salary,remote,post_url) "
-              "VALUES (%s,%s,%s,%s,true,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (channel,post_id) DO NOTHING",
+            cur.execute("INSERT INTO tg_vacancies (channel,post_id,posted_at,text,is_vacancy,category,title,contact,contact_type,salary,remote,region,post_url) "
+              "VALUES (%s,%s,%s,%s,true,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (channel,post_id) DO NOTHING",
               (g,m.id,m.date,text[:4000],catg,(d.get("title") or "")[:200],contact,("author" if au else ("dm" if contact else "none")),
-               (d.get("salary") or "")[:100],bool(d.get("remote")),f"https://t.me/{g}/{m.id}"))
+               (d.get("salary") or "")[:100],bool(d.get("remote")),(d.get("region") or "")[:60],f"https://t.me/{g}/{m.id}"))
             stored+=1
             if stored%25==0: conn.commit()
         await asyncio.sleep(0.5)

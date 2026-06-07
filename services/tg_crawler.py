@@ -15,7 +15,11 @@ import httpx
 
 FRESH_DAYS = 5
 MAX_LLM = int(os.environ.get("CRAWL_MAX", "600"))
-MIN_LEN = 40
+MIN_LEN = 60
+VAC_RE = re.compile(r"(ваканс|ищ[еуа][мт]|требу[ею]|нужен|нужна|нужны|в команд|на проект|зарплат|з/?п|оклад|доход|gross|нетто|руб|usd|eur|опыт от|грейд|middle|senior|junior|стаж|разработчик|инженер|developer|программист|аналитик|тестировщик|девопс|devops|дизайнер|менеджер|architect|lead|удал[её]н|гибрид|офис|remote|релокац|hiring|position|обязанност|требован|услови|стек|занятост|резюме|откли|пиши|контакт)", re.I)
+def _looks_like_vacancy(text):  # дешёвый предфильтр: гнать через LLM только похожее на вакансию
+    return len(text) >= MIN_LEN and bool(VAC_RE.search(text))
+
 CATS = ("general","python","go","java","backend","frontend","ds_ml","devops","mobile","qa","gamedev","product","remote")
 SYS = (
   "Разбери пост из Telegram-канала с IT-вакансиями. Верни СТРОГО JSON одной строкой:\n"
@@ -91,7 +95,7 @@ async def main():
             for pid, dt, text, links in _parse(r.text):
                 key = f"{ch}:{pid}"
                 if key in seen: continue
-                if (dt and dt < cutoff) or len(text) < MIN_LEN:
+                if (dt and dt < cutoff) or not _looks_like_vacancy(text):
                     pgconn.add_seen("tg_crawl", key); seen.add(key); continue
                 if llm >= MAX_LLM: break
                 scanned += 1

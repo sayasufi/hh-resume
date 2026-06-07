@@ -22,7 +22,11 @@ JOIN_DELAY = int(os.environ.get("JOIN_DELAY", "25"))
 FRESH_DAYS = 5
 POSTS_PER_CH = 60
 MAX_LLM = int(os.environ.get("CRAWL_MAX", "500"))
-MIN_LEN = 40
+MIN_LEN = 60
+VAC_RE = re.compile(r"(ваканс|ищ[еуа][мт]|требу[ею]|нужен|нужна|нужны|в команд|на проект|зарплат|з/?п|оклад|доход|gross|нетто|руб|usd|eur|опыт от|грейд|middle|senior|junior|стаж|разработчик|инженер|developer|программист|аналитик|тестировщик|девопс|devops|дизайнер|менеджер|architect|lead|удал[её]н|гибрид|офис|remote|релокац|hiring|position|обязанност|требован|услови|стек|занятост|резюме|откли|пиши|контакт)", re.I)
+def _looks_like_vacancy(text):  # дешёвый предфильтр: гнать через LLM только похожее на вакансию
+    return len(text) >= MIN_LEN and bool(VAC_RE.search(text))
+
 GROUPS = ["python_jobs","java_jobs","golang_jobs","golang_jobsgo","php_jobs","scala_jobs","rust_jobs","qa_jobs","qajobsru","react_js_jobs","reactjs_jobs","react_native_jobs","javascript_jobs","nodejs_jobs","kotlinmppjobs","mobile_jobs","mobile_vacancies","gdtalents","gamedevjobtinder","cvjobge","uzjobit","georgiaitjobs","itkazahstan","jobgeeks","jobs_it","myjobit","microsoftstackjobs","mindset_jobs","products_jobs","projects_jobs","projects_jobs_feed","python_django_work","sysadm_in_job","sysadmin_rabota","tzprofi_job","relocaty_jobs","analysts_hunter","gogetajob","front_end_jobs","django_jobs","agile_jobs","android_jobs","datajobs","devops_jobs"]
 CATS = ("general","python","go","java","backend","frontend","ds_ml","devops","mobile","qa","gamedev","product","remote")
 SYS = (
@@ -93,7 +97,7 @@ async def main():
             if llm>=MAX_LLM: break
             text=m.message or ""; key=f"{g}:{m.id}"
             if key in seen: continue
-            if (m.date and m.date<cutoff) or len(text)<MIN_LEN:
+            if (m.date and m.date<cutoff) or not _looks_like_vacancy(text):
                 pgconn.add_seen("tg_crawl",key); seen.add(key); continue
             scanned+=1
             try: d=await _llm(oa,text); llm+=1

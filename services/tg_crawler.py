@@ -109,6 +109,8 @@ async def main():
                 cat = d.get("category") if d.get("category") in CATS else "general"
                 contact = _norm_contact(d.get("contact"), links)
                 if contact.lower() == "@" + ch.lower(): contact = ""
+                if not contact:
+                    continue  # без контакта не храним — связаться нельзя
                 cur.execute(
                     "INSERT INTO tg_vacancies (channel,post_id,posted_at,text,is_vacancy,category,title,contact,contact_type,salary,remote,post_url) "
                     "VALUES (%s,%s,%s,%s,true,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (channel,post_id) DO NOTHING",

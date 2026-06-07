@@ -65,10 +65,6 @@ CREATE TABLE IF NOT EXISTS settings (
     account text NOT NULL DEFAULT '', key text NOT NULL, value text NOT NULL,
     PRIMARY KEY (account, key)
 );
-CREATE TABLE IF NOT EXISTS app_config (
-    account text NOT NULL DEFAULT '', key text NOT NULL, value jsonb NOT NULL,
-    updated_at timestamptz DEFAULT now(), PRIMARY KEY (account, key)
-);
 CREATE TABLE IF NOT EXISTS seen_keys (
     account text NOT NULL DEFAULT '', kind text NOT NULL, key text NOT NULL,
     created_at timestamptz DEFAULT now(), PRIMARY KEY (account, kind, key)
@@ -202,8 +198,7 @@ async def locked_token_refresh(api_client) -> bool:
                 "SELECT pg_advisory_xact_lock(hashtext(%s))", (acc + ":token",)
             )
             await cur.execute(
-                "SELECT value FROM app_config WHERE account=%s AND key='token'",
-                (acc,),
+                "SELECT hh_token FROM users WHERE account=%s", (acc,)
             )
             row = await cur.fetchone()
             pg_tok = row[0] if row else None
@@ -217,9 +212,8 @@ async def locked_token_refresh(api_client) -> bool:
             )
             api_client.handle_access_token(new)
             await cur.execute(
-                "INSERT INTO app_config(account, key, value) "
-                "VALUES (%s, 'token', %s::jsonb) ON CONFLICT(account, key) "
-                "DO UPDATE SET value=excluded.value, updated_at=now()",
+                "INSERT INTO users(account, hh_token) VALUES (%s, %s::jsonb) "
+                "ON CONFLICT(account) DO UPDATE SET hh_token=excluded.hh_token, updated_at=now()",
                 (acc, _json.dumps(new, ensure_ascii=False)),
             )
             await conn.commit()
@@ -268,11 +262,10 @@ def set_app_config(key: str, value, account: str | None = None) -> None:
             elif key in _M.APP_COL:
                 col = _M.APP_COL[key]
                 _users_set(cur, acc, col, _M.coerce_user(col, value), jsonb=(col in _M.APP_JSONB))
-            else:  # незамапленный ключ -> старая таблица (back-compat)
-                cur.execute(
-                    "INSERT INTO app_config(account, key, value) VALUES (%s, %s, %s::jsonb) "
-                    "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value, updated_at=now()",
-                    (acc, key, _json.dumps(value, ensure_ascii=False)),
+            else:  # незамапленный app_config-ключ — добавь его в _cfgmap.APP_COL (+ колонку users)
+                raise ValueError(
+                    f"set_app_config: незамапленный ключ {key!r} — добавьте в _cfgmap.APP_COL "
+                    "и колонку в users (таблица app_config удалена)"
                 )
         conn.commit()
     finally:

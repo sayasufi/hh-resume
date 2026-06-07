@@ -140,7 +140,7 @@ def _account_for_user(tg_user_id) -> str | None:
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT account, value FROM app_config WHERE key='tg_user_id'")
+            cur.execute("SELECT account, tg_user_id FROM users WHERE tg_user_id IS NOT NULL")
             for acc, val in cur.fetchall():
                 if str(val) == str(tg_user_id):
                     return acc

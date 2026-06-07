@@ -12,6 +12,20 @@ import os
 
 import psycopg
 
+from . import _cfgmap as _M  # единый маппинг legacy-ключей -> нормализованные таблицы
+
+
+def _users_set(cur, acc, col, value, jsonb=False):
+    """Upsert одной колонки users (создаёт строку юзера при необходимости)."""
+    import json as _json
+    val = _json.dumps(value, ensure_ascii=False) if (jsonb and value is not None) else value
+    cast = "::jsonb" if jsonb else ""
+    cur.execute(
+        f"INSERT INTO users(account, {col}) VALUES (%s, %s{cast}) "
+        f"ON CONFLICT(account) DO UPDATE SET {col}=excluded.{col}, updated_at=now()",
+        (acc, val),
+    )
+
 TABLES_DDL = """
 CREATE TABLE IF NOT EXISTS employers (
     id bigint PRIMARY KEY, name text NOT NULL, type text, description text,
@@ -192,13 +206,24 @@ async def locked_token_refresh(api_client) -> bool:
 
 def app_config(account: str | None = None) -> dict:
     acc = account or get_account()
+    out: dict = {}
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT key, value FROM app_config WHERE account=%s", (acc,))
-            return {k: v for k, v in cur.fetchall()}
+            cols = [c for _, c in _M.APP_ORDER]
+            cur.execute(f"SELECT {', '.join(cols)} FROM users WHERE account=%s", (acc,))
+            row = cur.fetchone()
+            if row:
+                for (k, _c), v in zip(_M.APP_ORDER, row):
+                    if v is not None:
+                        out[k] = v
+            cur.execute("SELECT state FROM web_state WHERE account=%s", (acc,))
+            ws = cur.fetchone()
+            if ws and ws[0] is not None:
+                out["web_state"] = ws[0]
     finally:
         conn.close()
+    return out
 
 
 def set_app_config(key: str, value, account: str | None = None) -> None:
@@ -207,12 +232,21 @@ def set_app_config(key: str, value, account: str | None = None) -> None:
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO app_config(account, key, value) VALUES (%s, %s, %s::jsonb) "
-                "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value, "
-                "updated_at=now()",
-                (acc, key, _json.dumps(value, ensure_ascii=False)),
-            )
+            if key == "web_state":
+                cur.execute(
+                    "INSERT INTO web_state(account, state) VALUES (%s, %s::jsonb) "
+                    "ON CONFLICT(account) DO UPDATE SET state=excluded.state, updated_at=now()",
+                    (acc, _json.dumps(value, ensure_ascii=False)),
+                )
+            elif key in _M.APP_COL:
+                col = _M.APP_COL[key]
+                _users_set(cur, acc, col, _M.coerce_user(col, value), jsonb=(col in _M.APP_JSONB))
+            else:  # незамапленный ключ -> старая таблица (back-compat)
+                cur.execute(
+                    "INSERT INTO app_config(account, key, value) VALUES (%s, %s, %s::jsonb) "
+                    "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value, updated_at=now()",
+                    (acc, key, _json.dumps(value, ensure_ascii=False)),
+                )
         conn.commit()
     finally:
         conn.close()
@@ -248,12 +282,23 @@ def register_user(name: str, account: str) -> None:
 def get_setting(key: str, default=None, account: str | None = None):
     import json as _json
     acc = account or get_account()
+    kind = _M.resolve_setting(key)
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT value FROM settings WHERE account=%s AND key=%s", (acc, key)
-            )
+            if kind[0] == "feature":
+                cur.execute("SELECT enabled FROM user_features WHERE account=%s AND feature=%s", (acc, kind[1]))
+                r = cur.fetchone()
+                return bool(r[0]) if r else default
+            if kind[0] == "health":
+                cur.execute("SELECT ts, ok, detail FROM health WHERE account=%s AND feature=%s", (acc, kind[1]))
+                r = cur.fetchone()
+                return {"ts": r[0], "ok": r[1], "detail": r[2]} if r else default
+            if kind[0] == "users":
+                cur.execute(f"SELECT {kind[1]} FROM users WHERE account=%s", (acc,))
+                r = cur.fetchone()
+                return r[0] if (r and r[0] is not None) else default
+            cur.execute("SELECT value FROM settings WHERE account=%s AND key=%s", (acc, key))
             row = cur.fetchone()
     finally:
         conn.close()
@@ -266,17 +311,37 @@ def get_setting(key: str, default=None, account: str | None = None):
 
 
 def set_setting(key: str, value, account: str | None = None) -> None:
-    """Запись settings (значение json-кодируется, как читает get_setting)."""
+    """Запись настройки в нормализованную таблицу по маппингу (_cfgmap).
+    feat.* -> user_features, _health.* -> health, замапленные -> users,
+    глобальные/прочие -> settings (json-кодированно, как читает get_setting)."""
     import json as _json
     acc = account or get_account()
+    kind = _M.resolve_setting(key)
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO settings(account, key, value) VALUES (%s, %s, %s) "
-                "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value",
-                (acc, key, _json.dumps(value, ensure_ascii=False)),
-            )
+            if kind[0] == "feature":
+                cur.execute(
+                    "INSERT INTO user_features(account, feature, enabled) VALUES (%s, %s, %s) "
+                    "ON CONFLICT(account, feature) DO UPDATE SET enabled=excluded.enabled",
+                    (acc, kind[1], bool(value)),
+                )
+            elif kind[0] == "health":
+                v = value if isinstance(value, dict) else {}
+                cur.execute(
+                    "INSERT INTO health(account, feature, ts, ok, detail) VALUES (%s, %s, %s, %s, %s) "
+                    "ON CONFLICT(account, feature) DO UPDATE SET ts=excluded.ts, ok=excluded.ok, detail=excluded.detail",
+                    (acc, kind[1], v.get("ts"), v.get("ok"), str(v.get("detail") or "")[:300]),
+                )
+            elif kind[0] == "users":
+                col = kind[1]
+                _users_set(cur, acc, col, _M.coerce_user(col, value), jsonb=(col in _M.APP_JSONB))
+            else:
+                cur.execute(
+                    "INSERT INTO settings(account, key, value) VALUES (%s, %s, %s) "
+                    "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value",
+                    (acc, key, _json.dumps(value, ensure_ascii=False)),
+                )
         conn.commit()
     finally:
         conn.close()

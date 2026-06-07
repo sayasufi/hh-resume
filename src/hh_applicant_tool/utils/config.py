@@ -30,46 +30,26 @@ class Config(dict):
         self.load()
 
     def load(self) -> None:
-        from ..storage.pgconn import connect, get_account
+        # читаем из нормализованной таблицы users (через pgconn.app_config);
+        # web_state (~650KB Playwright storage_state) утилите не нужен — выкидываем.
+        from ..storage.pgconn import app_config, get_account
 
-        conn = connect()
-        try:
-            with conn.cursor() as cur:
-                # web_state (~650KB Playwright storage_state) не нужен утилите —
-                # его читает только apply_tests через pgconn.app_config(). Не тянем.
-                cur.execute(
-                    "SELECT key, value FROM app_config "
-                    "WHERE account=%s AND key <> 'web_state'",
-                    (get_account(),),
-                )
-                with self._lock:
-                    for key, value in cur.fetchall():
-                        self[key] = value
-        finally:
-            conn.close()
+        cfg = app_config(get_account())
+        cfg.pop("web_state", None)
+        with self._lock:
+            self.update(cfg)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        import json as _json
-
-        from ..storage.pgconn import connect, get_account
+        # пишем через pgconn.set_app_config -> нормализованная таблица users
+        # (маршрутизация ключ->колонка в _cfgmap, единый источник).
+        from ..storage.pgconn import set_app_config, get_account
 
         changed = dict(*args, **kwargs)
         self.update(changed)
         items = changed.items() if changed else self.items()
         acc = get_account()
-        conn = connect()
-        try:
-            with conn.cursor() as cur:
-                for key, value in items:
-                    cur.execute(
-                        "INSERT INTO app_config(account, key, value) "
-                        "VALUES (%s, %s, %s::jsonb) ON CONFLICT(account, key) "
-                        "DO UPDATE SET value = excluded.value, updated_at = now()",
-                        (acc, key, _json.dumps(value, ensure_ascii=False)),
-                    )
-            conn.commit()
-        finally:
-            conn.close()
+        for key, value in items:
+            set_app_config(key, value, acc)
 
     __getitem__ = dict.get
 

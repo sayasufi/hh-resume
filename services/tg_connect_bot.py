@@ -164,13 +164,16 @@ def _png(data: str) -> bytes:
 
 def _account_by(col_key, value):
     """Найти account, у которого app_config[col_key] совпадает (single schema)."""
+    from hh_applicant_tool.storage import _cfgmap as _M
+    col = _M.APP_COL.get(col_key)
     conn = psycopg.connect(pgconn.get_dsn())
     try:
         with conn.cursor() as cur:
             cur.execute("SET search_path TO public")
-            cur.execute(
-                "SELECT account, value FROM app_config WHERE key=%s", (col_key,)
-            )
+            if col:
+                cur.execute(f"SELECT account, {col} FROM users WHERE {col} IS NOT NULL")
+            else:
+                cur.execute("SELECT account, value FROM app_config WHERE key=%s", (col_key,))
             for acc, val in cur.fetchall():
                 if col_key == "hh_phone":
                     if pgconn._norm_phone(val) == pgconn._norm_phone(value):
@@ -183,20 +186,9 @@ def _account_by(col_key, value):
 
 
 def save_link(account, enc_sess, tg_id):
-    conn = psycopg.connect(pgconn.get_dsn())
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SET search_path TO public")
-            for k, v in (("tg_user_session", enc_sess), ("tg_user_id", tg_id)):
-                cur.execute(
-                    "INSERT INTO app_config(account, key, value) "
-                    "VALUES (%s, %s, %s::jsonb) ON CONFLICT(account, key) DO UPDATE "
-                    "SET value=excluded.value, updated_at=now()",
-                    (account, k, json.dumps(v)),
-                )
-        conn.commit()
-    finally:
-        conn.close()
+    # пишем в нормализованную таблицу users через pgconn (маршрутизация в _cfgmap)
+    pgconn.set_app_config("tg_user_session", enc_sess, account)
+    pgconn.set_app_config("tg_user_id", tg_id, account)
     # Telegram подключён = кандидат хочет авто-интервью → сразу включаем ГигаРекрутера,
     # иначе ГР не запустится (нужен feat.giga) и приглашения-скрининги зависнут.
     pgconn.set_setting("feat.giga", True, account=account)

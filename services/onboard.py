@@ -506,18 +506,18 @@ def setup_account(name, account, login, password, token, web_state, me,
         with conn.cursor() as cur:
             cur.execute("SET search_path TO public")
             # openai-конфиг копируем с любого существующего аккаунта (общий vLLM)
-            cur.execute("SELECT value FROM app_config WHERE key='openai' LIMIT 1")
+            cur.execute("SELECT openai FROM users WHERE openai IS NOT NULL LIMIT 1")
             row = cur.fetchone()
             openai_cfg = row[0] if row else None
 
+            # запись через pgconn -> нормализованные таблицы (маршрутизация в _cfgmap)
             def setcfg(k, v):
-                cur.execute(
-                    "INSERT INTO app_config(account, key, value) VALUES (%s, %s, %s::jsonb) "
-                    "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value, updated_at=now()",
-                    (account, k, json.dumps(v)),
-                )
+                pgconn.set_app_config(k, v, account)
 
             def setset(k, v):
+                pgconn.set_setting(k, v, account)
+
+            def _unused_setset(k, v):
                 cur.execute(
                     "INSERT INTO settings(account, key, value) VALUES (%s, %s, %s) "
                     "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value",

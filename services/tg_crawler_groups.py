@@ -106,6 +106,7 @@ async def main():
                 c=(d.get("contact") or "").strip()
                 mm=re.search(r"@[A-Za-z]\w{3,}",c) or re.search(r"t\.me/([A-Za-z]\w{3,})",c)
                 if mm: contact = mm.group(0) if mm.group(0).startswith("@") else "@"+mm.group(1)
+            if (contact or "").lower().lstrip("@") in ("gmail","yandex","mail","outlook","icloud","hotmail","ya","bk","list","inbox","rambler","proton","protonmail"): contact=""
             catg=d.get("category") if d.get("category") in CATS else cat_of.get(g.lower(),"general")
             cur.execute("INSERT INTO tg_vacancies (channel,post_id,posted_at,text,is_vacancy,category,title,contact,contact_type,salary,remote,post_url) "
               "VALUES (%s,%s,%s,%s,true,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (channel,post_id) DO NOTHING",

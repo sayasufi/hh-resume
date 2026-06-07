@@ -248,6 +248,8 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 .cat-row i{cursor:pointer}
 .cat-chans{padding-top:4px}
 .dim{color:var(--hint);font-weight:400;font-size:13px}
+.off{opacity:.4;pointer-events:none}
+.off input,.off .v,.off .chip{color:var(--sub) !important}
 
 /* карта настроек: секции по платформам */
 .sect-head{display:flex;align-items:center;gap:8px;font-size:17px;font-weight:700;color:var(--text);margin:20px 14px 2px}

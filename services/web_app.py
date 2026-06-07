@@ -813,8 +813,8 @@ async def api_settings(account: str = None,
     }
     return {"features": features, "config": config,
             "resumes": await _resume_list(account),
-            # привязан ли hh (есть токен)
-            "hh_linked": bool(cfg.get("token")),
+            # привязан ли hh (есть рабочий токен)
+            "hh_linked": bool((cfg.get("token") or {}).get("access_token")),
             # подключён ли Telegram-юзербот (нужен для авто-ГигаРекрутера)
             "tg_connected": bool(cfg.get("tg_user_session")),
             # привязан ли GetMatch (по сессии) — можно включать без Telegram

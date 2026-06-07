@@ -165,15 +165,16 @@ function renderGmLink(st) {
     + "(код придёт в @g_jobbot).";
 }
 function wireGmLink() {}  // привязка перенесена в бот, инлайн-форма убрана
-function bindToggles(features, tgConnected, gmLinked, habrLinked) {
+function bindToggles(features, tgConnected, gmLinked, habrLinked, hhConnected) {
   document.querySelectorAll(".toggle input[data-feat]").forEach((inp) => {
     inp.checked = !!features[inp.dataset.feat];
-    // giga нужен Telegram; getmatch — Telegram ИЛИ логин+код; habr — вход на career.habr.com
+    // giga нужен Telegram; getmatch — Telegram ИЛИ логин+код; habr — вход на career.habr.com; hh-функции — привязка hh
     const lockGiga = inp.dataset.feat === "giga" && !tgConnected;
     const lockGm = inp.dataset.feat === "getmatch" && !tgConnected && !gmLinked;
     const lockHabr = (inp.dataset.feat === "habr" || inp.dataset.feat === "habr_chat") && !habrLinked;
     const lockTg = inp.dataset.feat === "tg_channels" && !tgConnected;
-    const lock = lockGiga || lockGm || lockHabr || lockTg;
+    const lockHh = ["apply", "tests", "reply", "browse"].includes(inp.dataset.feat) && !hhConnected;
+    const lock = lockGiga || lockGm || lockHabr || lockTg || lockHh;
     inp.disabled = lock;
     if (lock) inp.checked = false;
     inp.closest(".toggle").classList.toggle("disabled", lock);
@@ -197,12 +198,13 @@ function _wireChanOpen(box) {
     b.onclick = () => { const l = "https://t.me/" + b.dataset.u; if (tg && tg.openLink) tg.openLink(l); else window.open(l, "_blank"); };
   });
 }
-function renderTgCats(catalog, catsStr, customStr) {
+function renderTgCats(catalog, catsStr, customStr, enabled) {
   const box = $("#tg-cats"), title = $("#tg-cats-title");
   if (!box) return;
   catalog = catalog || [];
+  box.classList.toggle("off", !enabled);   // нет Telegram → категории неактивны
   if (title) title.style.display = catalog.length ? "" : "none";
-  if (!catalog.length) { box.innerHTML = ""; renderTgCustom(customStr); return; }
+  if (!catalog.length) { box.innerHTML = ""; renderTgCustom(customStr, enabled); return; }
   const sel = new Set((catsStr || "").split(",").map((s) => s.trim()).filter(Boolean));
   box.innerHTML = catalog.map((c) =>
     `<div class="cell toggle cat-row">`
@@ -224,12 +226,13 @@ function renderTgCats(catalog, catsStr, customStr) {
     };
   });
   _wireChanOpen(box);
-  renderTgCustom(customStr);
+  renderTgCustom(customStr, enabled);
 }
-function renderTgCustom(customStr) {
+function renderTgCustom(customStr, enabled) {
   const box = $("#tg-custom"), title = $("#tg-custom-title");
   if (!box) return;
   if (title) title.style.display = "";
+  box.classList.toggle("off", !enabled);   // нет Telegram → поле «добавить канал» неактивно
   let list = (customStr || "").split(",").map((s) => s.trim().replace(/^@/, "")).filter(Boolean);
   const draw = () => {
     box.innerHTML = '<div class="cell"><input type="text" id="tg-custom-input" placeholder="добавить @канал" autocapitalize="off" autocomplete="off" spellcheck="false" style="flex:1;background:transparent;border:none;color:var(--accent);font:inherit;outline:none">'
@@ -253,7 +256,7 @@ function renderTgCustom(customStr) {
   };
   draw();
 }
-function bindConfig(cfg, resumes) {
+function bindConfig(cfg, resumes, hhConnected, tgConnected) {
   RESUMES = resumes || []; RESUME_ID = cfg.resume_id || (RESUMES[0] && RESUMES[0].id) || "";
   const capL = cfg.max_per_day_cap || 200;
   $("#cfg-salary").value = cfg.salary || "";
@@ -299,7 +302,14 @@ function bindConfig(cfg, resumes) {
     if ($("#cap-hlimit")) $("#cap-hlimit").textContent = "(макс " + capH + ")";
     clampWire($("#cfg-habr-limit"), "habr.max_per_day", capH);
   }
-  renderTgCats(cfg.tg_catalog, cfg.tg_cats, cfg.tg_channels);
+  renderTgCats(cfg.tg_catalog, cfg.tg_cats, cfg.tg_channels, !!tgConnected);
+  // hh не привязан → профиль откликов (зарплата, резюме, лимит, ГПХ) неактивен
+  const hhOff = !hhConnected;
+  ["#cfg-salary", "#cfg-limit"].forEach((id) => {
+    const el = $(id); if (el) { el.disabled = hhOff; const c = el.closest(".cell"); if (c) c.classList.toggle("off", hhOff); }
+  });
+  if ($("#resume-row")) { $("#resume-row").disabled = hhOff; $("#resume-row").classList.toggle("off", hhOff); }
+  if ($("#cfg-gph")) { $("#cfg-gph").disabled = hhOff; const c = $("#cfg-gph").closest(".cell"); if (c) c.classList.toggle("off", hhOff); }
   const gph = $("#cfg-gph");
   if (gph) {
     gph.checked = !!cfg.civil_law_only;
@@ -586,7 +596,12 @@ async function boot() {
     if ($("#d-from")) { $("#d-from").value = PERIOD.dfrom; $("#d-to").value = PERIOD.dto; }
     const [me, st] = await Promise.all([api("/api/me" + qp()), api("/api/settings")]);
     renderMe(me); setupAdmin(me);
-    bindToggles(st.features, st.tg_connected, st.getmatch_linked, st.habr_linked); bindConfig(st.config, st.resumes || []);
+    bindToggles(st.features, st.tg_connected, st.getmatch_linked, st.habr_linked, st.hh_linked);
+    bindConfig(st.config, st.resumes || [], st.hh_linked, st.tg_connected);
+    if ($("#hh-hint")) {
+      $("#hh-hint").style.display = st.hh_linked ? "none" : "";
+      $("#hh-hint").textContent = st.hh_linked ? "" : "Чтобы пользоваться функциями hh — подключите аккаунт: /addaccount в боте.";
+    }
     if ($("#habr-hint")) {
       $("#habr-hint").style.display = st.habr_linked ? "none" : "";
       $("#habr-hint").textContent = st.habr_linked ? "" : "Чтобы включить — подключите Habr Career: /addaccount → Habr (логин + пароль).";

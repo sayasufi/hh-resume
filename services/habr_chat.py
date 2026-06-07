@@ -45,6 +45,20 @@ def _too_old(created_at):
         return False
 
 
+# мета-маркеры: LLM иногда выдаёт рассуждение/варианты вместо самого ответа — такое не шлём рекрутёру
+_META = (
+    "отвечать не требуется", "не требует ответа", "отвечать не нужно", "можно не отвечать",
+    "можно написать", "можно ответить", "вы можете написать", "достаточно написать",
+    "переписка завершена", "в данной ситуации", "в этой ситуации", "в качестве ассистента",
+    "как ассистент", "я ассистент", "как ии", "я не могу", "следующий шаг",
+)
+
+
+def _is_meta(v):
+    low = (v or "").lower()
+    return any(p in low for p in _META) or len(v) > 600
+
+
 async def _decide(oa, resume, convo_text):
     """LLM -> (reply, task). reply='' если SKIP; task='' если действие человека не нужно."""
     if not (oa and oa.get("token") and resume):
@@ -62,8 +76,8 @@ async def _decide(oa, resume, convo_text):
     for line in t.splitlines():
         s = line.strip()
         if s.upper().startswith("ОТВЕТ:"):
-            v = s.split(":", 1)[1].strip()
-            if v and not v.upper().startswith("SKIP") and len(v) >= 12:
+            v = s.split(":", 1)[1].strip().strip('"«». ')
+            if v and not v.upper().startswith("SKIP") and len(v) >= 12 and not _is_meta(v):
                 reply = v
         elif s.upper().startswith("ДЕЛО:"):
             v = s.split(":", 1)[1].strip()

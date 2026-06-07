@@ -44,12 +44,11 @@ def _openai():
     return None
 
 def _catalog_groups():
-    cat=json.loads(pgconn.get_setting("tg.catalog","{}",account="_global"))
-    incat={u.lower() for v in cat.values() for u in v.get("channels",[])}
-    cat_of={}
-    for k,v in cat.items():
-        for u in v.get("channels",[]): cat_of[u.lower()]=k
-    return [g for g in GROUPS if g.lower() in incat], cat_of
+    conn=pgconn.connect();cur=conn.cursor()
+    cur.execute("SELECT username,category FROM tg_channels WHERE status='active' AND type='chat'")
+    rows=cur.fetchall(); conn.close()
+    cat_of={u.lower():(c or "general") for u,c in rows}
+    return [u for u,c in rows], cat_of
 
 async def _llm(oa,text):
     chat=ChatOpenAI(token=oa["token"],model=oa.get("model"),completion_endpoint=oa.get("completion_endpoint"),system_prompt=SYS,temperature=0,max_completion_tokens=300)

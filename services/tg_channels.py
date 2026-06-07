@@ -118,6 +118,40 @@ async def _hh_resume_url(cfg, account):
         await api.aclose()
 
 
+CATS_ALL = ("general", "python", "go", "java", "backend", "frontend", "ds_ml",
+            "devops", "mobile", "qa", "gamedev", "product", "remote")
+CAT_SYS = (
+    "Тебе дают резюме IT-кандидата. Определи, в каких нишах ему искать вакансии — куда он реально "
+    "может откликаться по своему опыту. Ниши (ключи): general — общие IT; python; go; "
+    "java — java/kotlin/scala; backend — php/c#/rust/ruby/1c/общий бэкенд; frontend — js/react/vue/angular; "
+    "ds_ml — data/ml/ai/аналитика; devops — sre/сисадмин/инфра; mobile — ios/android/flutter; "
+    "qa — тестирование; gamedev; product — продукт/проджект; remote — удалёнка/релокация. "
+    "Верни ТОЛЬКО ключи через запятую (2-5 самых релевантных). Всегда добавляй general. "
+    "Если по опыту кандидат открыт к удалёнке — добавь remote."
+)
+
+
+async def _derive_cats(oa, resume):
+    """LLM по резюме -> список ниш кандидата (ключи из CATS_ALL)."""
+    if not (oa and oa.get("token") and resume):
+        return []
+    try:
+        chat = ChatOpenAI(token=oa["token"], model=oa.get("model"),
+                          completion_endpoint=oa.get("completion_endpoint"),
+                          system_prompt=CAT_SYS, temperature=0, max_completion_tokens=60)
+        t = ((await chat.send_message(resume[:3000])) or "").strip().lower()
+    except Exception as e:
+        print(f"tg_channels: авто-категории не вышли ({type(e).__name__})")
+        return []
+    out = []
+    for c in re.split(r"[^a-z_]+", t):
+        if c in CATS_ALL and c not in out:
+            out.append(c)
+    if out and "general" not in out:
+        out.insert(0, "general")
+    return out
+
+
 def _cats(account):
     raw = (pgconn.get_setting("tg.cats", account=account)
            or pgconn.get_setting("tg.cats_default", account="_global") or "")
@@ -157,7 +191,17 @@ async def run():
     if not resume:
         print("tg_channels: нет resume_text — пропуск (матчинг будет мусорным)")
         return
-    cats = _cats(account)
+    # категории кандидата: явные (кабинет/ранее авто) ИЛИ авто-вывод из резюме (B)
+    explicit = pgconn.get_setting("tg.cats", account=account)
+    if explicit:
+        cats = [c.strip() for c in explicit.split(",") if c.strip()]
+    else:
+        cats = await _derive_cats(oa, resume)
+        if cats:
+            pgconn.set_setting("tg.cats", ",".join(cats), account)
+            print(f"tg_channels[{account}]: авто-категории из резюме -> {cats}")
+        else:
+            cats = _cats(account)  # фоллбэк на дефолт
     out_seen = pgconn.seen_keys(f"tg_out_{account}")
     vacs = [v for v in _db_vacancies(cats) if str(v[0]) not in out_seen]
     if not vacs:

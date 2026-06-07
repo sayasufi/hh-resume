@@ -20,7 +20,7 @@ VAC_RE = re.compile(r"(ваканс|ищ[еуа][мт]|требу[ею]|нуже
 def _looks_like_vacancy(text):  # дешёвый предфильтр: гнать через LLM только похожее на вакансию
     return len(text) >= MIN_LEN and bool(VAC_RE.search(text))
 
-CATS = ("general","python","go","java","backend","frontend","ds_ml","devops","mobile","qa","gamedev","product","remote")
+CATS = ("general","python","go","java","backend","frontend","ds_ml","devops","mobile","qa","gamedev","product","remote","design")
 SYS = (
   "Разбери пост из Telegram-канала с IT-вакансиями. Верни СТРОГО JSON одной строкой:\n"
   '{"is_vacancy":true|false,"category":"<один из: ' + ",".join(CATS) + '>",'

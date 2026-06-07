@@ -28,7 +28,7 @@ def _looks_like_vacancy(text):  # дешёвый предфильтр: гнат�
     return len(text) >= MIN_LEN and bool(VAC_RE.search(text))
 
 GROUPS = ["python_jobs","java_jobs","golang_jobs","golang_jobsgo","php_jobs","scala_jobs","rust_jobs","qa_jobs","qajobsru","react_js_jobs","reactjs_jobs","react_native_jobs","javascript_jobs","nodejs_jobs","kotlinmppjobs","mobile_jobs","mobile_vacancies","gdtalents","gamedevjobtinder","cvjobge","uzjobit","georgiaitjobs","itkazahstan","jobgeeks","jobs_it","myjobit","microsoftstackjobs","mindset_jobs","products_jobs","projects_jobs","projects_jobs_feed","python_django_work","sysadm_in_job","sysadmin_rabota","tzprofi_job","relocaty_jobs","analysts_hunter","gogetajob","front_end_jobs","django_jobs","agile_jobs","android_jobs","datajobs","devops_jobs"]
-CATS = ("general","python","go","java","backend","frontend","ds_ml","devops","mobile","qa","gamedev","product","remote")
+CATS = ("general","python","go","java","backend","frontend","ds_ml","devops","mobile","qa","gamedev","product","remote","design")
 SYS = (
   "Разбери пост из Telegram-чата с IT-вакансиями. Верни СТРОГО JSON одной строкой:\n"
   '{"is_vacancy":true|false,"category":"<один из: ' + ",".join(CATS) + '>",'

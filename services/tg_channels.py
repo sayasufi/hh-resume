@@ -119,13 +119,13 @@ async def _hh_resume_url(cfg, account):
 
 
 CATS_ALL = ("general", "python", "go", "java", "backend", "frontend", "ds_ml",
-            "devops", "mobile", "qa", "gamedev", "product", "remote")
+            "devops", "mobile", "qa", "gamedev", "product", "remote", "design")
 CAT_SYS = (
     "Тебе дают резюме IT-кандидата. Определи, в каких нишах ему искать вакансии — куда он реально "
     "может откликаться по своему опыту. Ниши (ключи): general — общие IT; python; go; "
     "java — java/kotlin/scala; backend — php/c#/rust/ruby/1c/общий бэкенд; frontend — js/react/vue/angular; "
     "ds_ml — data/ml/ai/аналитика; devops — sre/сисадмин/инфра; mobile — ios/android/flutter; "
-    "qa — тестирование; gamedev; product — продукт/проджект; remote — удалёнка/релокация. "
+    "qa — тестирование; gamedev; product — продукт/проджект; design — ui/ux/графический/продуктовый дизайн; remote — удалёнка/релокация. "
     "Верни ТОЛЬКО ключи через запятую (2-5 самых релевантных). Всегда добавляй general. "
     "Если по опыту кандидат открыт к удалёнке — добавь remote."
 )

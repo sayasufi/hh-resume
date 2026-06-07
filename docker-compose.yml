@@ -3,6 +3,8 @@ services:
     container_name: hh_db
     image: postgres:16-alpine
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_USER: hh
       POSTGRES_PASSWORD: hh_local_pw

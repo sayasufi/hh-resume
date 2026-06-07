@@ -104,13 +104,40 @@ CREATE TABLE IF NOT EXISTS app_users (
     id serial PRIMARY KEY, name text, account text UNIQUE NOT NULL,
     active boolean DEFAULT true, created_at timestamptz DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS users (
+    account text PRIMARY KEY,
+    name text, full_name text, email text, phone text, hh_phone text, active boolean DEFAULT true,
+    hh_token jsonb, openai jsonb, telegram jsonb, preferences jsonb,
+    resume_text text, tg_user_id bigint, tg_user_session text,
+    getmatch_session text, getmatch_username text, getmatch_max_per_day int,
+    habr_login text, habr_password text, habr_session text,
+    habr_2captcha_key text, habr_query text, habr_max_per_day int,
+    auth_username text, auth_password text, auth_last_login bigint,
+    apply_resume_id text, apply_max_per_day int, apply_tests_per_day int,
+    apply_use_ai boolean, apply_force_message boolean,
+    apply_civil_law_only boolean, apply_excluded_terms text,
+    applications_count text, applications_date text, applications_pause_until text,
+    tg_cats text, reply_ignore_names text,
+    created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS user_features (
+    account text, feature text, enabled boolean DEFAULT false,
+    PRIMARY KEY (account, feature)
+);
+CREATE TABLE IF NOT EXISTS health (
+    account text, feature text, ts bigint, ok boolean, detail text,
+    PRIMARY KEY (account, feature)
+);
+CREATE TABLE IF NOT EXISTS web_state (
+    account text PRIMARY KEY, state jsonb, updated_at timestamptz DEFAULT now()
+);
 CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $func$
 BEGIN NEW.updated_at = now(); RETURN NEW; END;
 $func$ LANGUAGE plpgsql;
 DO $do$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['employers','vacancy_contacts','vacancies','negotiations','resumes']
+  FOREACH t IN ARRAY ARRAY['employers','vacancy_contacts','vacancies','negotiations','resumes','users','web_state']
   LOOP
     EXECUTE format(
       'CREATE OR REPLACE TRIGGER trg_%1$s_updated BEFORE UPDATE ON %1$s

@@ -78,10 +78,35 @@ def _norm_contact(c, links):
             return "@" + m.group(1)
     return ""
 
+
+SYS_HANDLES = {"addlist", "joinchat", "proxy", "socks", "share", "s", "c", "iv",
+               "setlanguage", "msg", "addstickers", "addtheme", "addemoji", "boost"}
+
+
+def _known_channels():
+    """Все известные каналы (каталог + dropped + new) — для отсева контактов-каналов."""
+    conn = pgconn.connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT lower(username) FROM tg_channels")
+        return set(r[0] for r in cur.fetchall())
+    except Exception:
+        return set()
+    finally:
+        conn.close()
+
+
+def _bad_contact(contact, channels):
+    """Контакт НЕ рекрутёр-человек: системный хэндл Telegram или известный канал из каталога."""
+    u = (contact or "").lstrip("@").lower()
+    return (not u) or u in SYS_HANDLES or u in channels or u.endswith("bot")
+
+
 async def main():
     oa = _openai()
     if not oa: print("tg_crawler: нет openai — стоп"); return
     channels = _channels()
+    known = _known_channels()  # все известные каналы — для отсева контактов-каналов
     seen = pgconn.seen_keys("tg_crawl")
     cutoff = datetime.now(timezone.utc) - timedelta(days=FRESH_DAYS)
     conn = pgconn.connect(); cur = conn.cursor()
@@ -114,6 +139,7 @@ async def main():
                 cat = d.get("category") if d.get("category") in CATS else "general"
                 contact = _norm_contact(d.get("contact"), links)
                 if contact.lower() == "@" + ch.lower(): contact = ""
+                if _bad_contact(contact, known): contact = ""  # канал/системный хэндл — не рекрутёр
                 if not contact:
                     continue  # без контакта не храним — связаться нельзя
                 cur.execute(

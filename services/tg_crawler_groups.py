@@ -57,10 +57,33 @@ async def _llm(oa,text):
     mm=re.search(r"\{.*\}",resp,re.S)
     return json.loads(mm.group(0)) if mm else {}
 
+
+SYS_HANDLES = {"addlist", "joinchat", "proxy", "socks", "share", "s", "c", "iv",
+               "setlanguage", "msg", "addstickers", "addtheme", "addemoji", "boost"}
+
+
+def _known_channels():
+    conn=pgconn.connect()
+    try:
+        cur=conn.cursor(); cur.execute("SELECT lower(username) FROM tg_channels")
+        return set(r[0] for r in cur.fetchall())
+    except Exception:
+        return set()
+    finally:
+        conn.close()
+
+
+def _bad_contact(contact, channels):
+    """Контакт НЕ рекрутёр-человек: системный хэндл Telegram или известный канал из каталога."""
+    u=(contact or "").lstrip("@").lower()
+    return (not u) or u in SYS_HANDLES or u in channels or u.endswith("bot")
+
+
 async def main():
     oa=_openai()
     if not oa: print("нет openai"); return
     groups,cat_of=_catalog_groups()
+    known=_known_channels()  # для отсева контактов-каналов
     cfg=pgconn.app_config(CRAWLER)
     client=TelegramClient(StringSession(pgconn.dec_session(cfg["tg_user_session"])), *pgconn.tg_api())
     await client.connect()
@@ -111,6 +134,7 @@ async def main():
                 mm=re.search(r"@[A-Za-z]\w{3,}",c) or re.search(r"t\.me/([A-Za-z]\w{3,})",c)
                 if mm: contact = mm.group(0) if mm.group(0).startswith("@") else "@"+mm.group(1)
             if (contact or "").lower().lstrip("@") in ("gmail","yandex","mail","outlook","icloud","hotmail","ya","bk","list","inbox","rambler","proton","protonmail"): contact=""
+            if _bad_contact(contact, known): contact=""  # канал/системный хэндл — не рекрутёр
             if not contact: continue  # без контакта не храним
             catg=d.get("category") if d.get("category") in CATS else cat_of.get(g.lower(),"general")
             cur.execute("INSERT INTO tg_vacancies (channel,post_id,posted_at,text,is_vacancy,category,title,contact,contact_type,salary,remote,region,post_url) "

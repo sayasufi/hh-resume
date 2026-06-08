@@ -243,6 +243,60 @@ def _record_outreach(account, vid, channel, contact, title, category, letter, st
         conn.close()
 
 
+FOLDER_TITLE = "Отклики"
+
+
+async def _ensure_outreach_folder(client, new_entities):
+    """Сложить чаты с рекрутёрами (кому написали) в отдельную папку Telegram кандидата
+    (создать если нет, доливать к существующим)."""
+    from telethon.utils import get_input_peer
+    from telethon.tl.functions.messages import GetDialogFiltersRequest, UpdateDialogFilterRequest
+    from telethon.tl.types import DialogFilter
+    new_peers = []
+    for ent in new_entities:
+        try:
+            new_peers.append(get_input_peer(ent))
+        except Exception:
+            pass
+    if not new_peers:
+        return
+    res = await client(GetDialogFiltersRequest())
+    filters = getattr(res, "filters", res)
+
+    def _tstr(f):
+        t = getattr(f, "title", None)
+        if t is None:
+            return ""
+        return getattr(t, "text", t) if not isinstance(t, str) else t
+
+    def _pkey(p):
+        return (getattr(p, "user_id", None), getattr(p, "channel_id", None), getattr(p, "chat_id", None))
+
+    existing, ids = None, set()
+    for f in filters:
+        fid = getattr(f, "id", None)
+        if isinstance(fid, int):
+            ids.add(fid)
+        if isinstance(f, DialogFilter) and _tstr(f) == FOLDER_TITLE:
+            existing = f
+    merged = list(getattr(existing, "include_peers", []) or []) if existing else []
+    seen = {_pkey(p) for p in merged}
+    for p in new_peers:
+        if _pkey(p) not in seen:
+            merged.append(p)
+            seen.add(_pkey(p))
+    merged = merged[:100]
+    fid = existing.id if existing else (max([i for i in ids if i >= 2] + [1]) + 1)
+    try:
+        from telethon.tl.types import TextWithEntities
+        title = TextWithEntities(text=FOLDER_TITLE, entities=[])
+    except Exception:
+        title = FOLDER_TITLE
+    flt = DialogFilter(id=fid, title=title, pinned_peers=[], include_peers=merged, exclude_peers=[])
+    await client(UpdateDialogFilterRequest(id=fid, filter=flt))
+    print(f"  [папка] «{FOLDER_TITLE}» {'обновлена' if existing else 'создана'}: {len(merged)} чатов")
+
+
 async def run():
     account = pgconn.get_account()
     if not pgconn.feature_enabled("tg_channels"):
@@ -289,6 +343,7 @@ async def run():
             print("tg_channels: tg-сессия слетела — пропуск")
             return
     dm = evals = 0
+    sent_entities = []  # чаты с рекрутёрами, кому написали -> в папку «Отклики» (LIVE)
     _h = (datetime.now(timezone.utc) + timedelta(hours=3)).hour  # МСК
     greet = ("Доброе утро" if 5 <= _h < 12 else "Добрый день" if 12 <= _h < 18
              else "Добрый вечер" if 18 <= _h < 23 else "Здравствуйте")
@@ -329,11 +384,17 @@ async def run():
                 pgconn.bump_activity("tg_channels", 1, account=account)
                 pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
                 _record_outreach(account, vid, channel, to, title, category, letter, "sent")
+                sent_entities.append(ent)  # для папки «Отклики»
                 dm += 1
                 print(f"  [ЛС{'+PDF' if pdf_path else ''}] написал {to} (из @{channel})")
             except Exception as e:
                 print(f"  [ЛС] {to}: не отправилось ({type(e).__name__})")
             await asyncio.sleep(random.uniform(6, 16))
+        if LIVE and client and sent_entities:  # чаты с рекрутёрами -> отдельная папка кандидата
+            try:
+                await _ensure_outreach_folder(client, sent_entities)
+            except Exception as e:
+                print(f"  [папка] {type(e).__name__}: {e}")
     finally:
         if client:
             await client.disconnect()

@@ -403,6 +403,10 @@ def seen_keys(kind: str) -> set:
 
 
 def add_seen(kind: str, keys) -> None:
+    # keys может быть как списком, так и ОДНОЙ строкой. Без этого str итерировался бы
+    # посимвольно (add_seen(kind, "5565") -> ключи '5','6'…), и vid не помечался seen.
+    if isinstance(keys, (str, bytes, int)):
+        keys = [keys]
     acc = get_account()
     conn = connect()
     try:

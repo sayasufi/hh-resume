@@ -38,12 +38,11 @@ SYS = (
     "или вакансия не по профилю.\n"
     "CONTACT: @username — если в посте есть прямой Telegram-контакт рекрутёра/нанимающего для отклика "
     "(«пишите @...», «резюме @...»); иначе НЕТ. НЕ бери @каналы/@ботов и не выдумывай.\n"
-    "ПИСЬМО: <если MATCH=да и есть CONTACT — КОРОТКОЕ деловое сообщение рекрутёру (1-2 предложения, "
-    "БЕЗ переносов строк). Начни с делового приветствия, ВАРЬИРУЙ: «Здравствуйте»/«Добрый день»/«Доброе утро»/"
-    "«Добрый вечер» — НЕ «Привет», НЕ «Приветствую». Кратко: интерес к вакансии + ОДНО конкретное пересечение её "
-    "стека с опытом кандидата. Резюме приложено отдельным файлом — НЕ перечисляй весь опыт и не дублируй резюме. "
-    "Заверши готовностью обсудить/созвониться. Без markdown, без слова «резюме», БЕЗ выдуманных навыков. "
-    "Если зацепить нечем — оставь пусто. Иначе: ->>\n\n"
+    "ПИСЬМО: <если MATCH=да и есть CONTACT — ОЧЕНЬ короткое деловое сообщение в ОДНУ строку: начни РОВНО с "
+    "приветствия «{greet}», затем интерес к вакансии (назови её) и готовность обсудить/созвониться — и всё. "
+    "НЕ описывай опыт, навыки, стек, проекты и не объясняй почему подходишь — резюме приложено отдельным файлом, "
+    "оно само всё расскажет. Без markdown, без слова «резюме». Пример: «{greet}! Заинтересовала ваша вакансия X, "
+    "буду рад обсудить детали». Иначе: ->>\n\n"
     "=== ОПЫТ КАНДИДАТА ===\n{resume}\n=== КОНЕЦ ===")
 
 
@@ -51,14 +50,14 @@ def _strip(s):
     return re.sub(r"\s+", " ", s or "").strip()
 
 
-async def _decide(oa, resume, post):
-    """LLM -> (match: bool, contact: '@x'|'', letter: str)."""
+async def _decide(oa, resume, post, greet="Здравствуйте"):
+    """LLM -> (match: bool, contact: '@x'|'', letter: str). greet — приветствие по времени отправки."""
     if not (oa and oa.get("token") and resume):
         return False, "", ""
     try:
         chat = ChatOpenAI(token=oa["token"], model=oa.get("model"),
                           completion_endpoint=oa.get("completion_endpoint"),
-                          system_prompt=SYS.format(resume=resume[:3000]),
+                          system_prompt=SYS.format(resume=resume[:3000], greet=greet),
                           temperature=0.4, max_completion_tokens=320)
         t = ((await chat.send_message(post[:2500])) or "").strip()
     except Exception as e:
@@ -290,14 +289,17 @@ async def run():
             print("tg_channels: tg-сессия слетела — пропуск")
             return
     dm = evals = 0
+    _h = (datetime.now(timezone.utc) + timedelta(hours=3)).hour  # МСК
+    greet = ("Доброе утро" if 5 <= _h < 12 else "Добрый день" if 12 <= _h < 18
+             else "Добрый вечер" if 18 <= _h < 23 else "Здравствуйте")
     print(f"tg_channels[{account}] режим={'LIVE' if LIVE else 'DRY'}: вакансий-кандидатов {len(vacs)} "
-          f"(категории {cats}), резюме-PDF={'есть' if pdf_path else 'нет'}")
+          f"(категории {cats}), резюме-PDF={'есть' if pdf_path else 'нет'}, приветствие={greet}")
     try:
         for vid, channel, category, title, text, contact in vacs:
             if dm >= MAX_DM or evals >= MAX_EVAL:
                 break
             evals += 1
-            match, c2, letter = await _decide(oa, resume, text)
+            match, c2, letter = await _decide(oa, resume, text, greet)
             if not match:
                 pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
                 continue

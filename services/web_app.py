@@ -433,13 +433,19 @@ def _breakdown(c: dict) -> list:
             for e, lbl, v in rows]
 
 
-def _giga_summary(account: str) -> dict:
-    """Сводка авто-ГигаРекрутера из giga_queue (прогресс интервью)."""
+def _giga_summary(account: str, dfrom=None, dto=None) -> dict:
+    """Сводка авто-ГигаРекрутера из giga_queue (прогресс интервью). Период — по updated_at."""
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT status, count(*) FROM giga_queue WHERE account=%s "
-                        "GROUP BY status", (account,))
+            q = "SELECT status, count(*) FROM giga_queue WHERE account=%s"
+            p = [account]
+            if dfrom:
+                q += " AND updated_at::date >= %s"; p.append(dfrom)
+            if dto:
+                q += " AND updated_at::date <= %s"; p.append(dto)
+            q += " GROUP BY status"
+            cur.execute(q, p)
             by = {k: int(v) for k, v in cur.fetchall()}
             cur.execute("SELECT vacancy, updated_at FROM giga_queue WHERE account=%s "
                         "AND status='done' ORDER BY updated_at DESC LIMIT 1", (account,))
@@ -503,11 +509,17 @@ def _tg_outreach_list(account: str, limit: int = 200) -> list:
         conn.close()
 
 
-def _tg_outreach_count(account: str) -> int:
+def _tg_outreach_count(account: str, dfrom=None, dto=None) -> int:
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM tg_outreach WHERE account=%s", (account,))
+            q = "SELECT count(*) FROM tg_outreach WHERE account=%s"
+            p = [account]
+            if dfrom:
+                q += " AND created_at::date >= %s"; p.append(dfrom)
+            if dto:
+                q += " AND created_at::date <= %s"; p.append(dto)
+            cur.execute(q, p)
             return int(cur.fetchone()[0])
     except Exception:
         return 0
@@ -799,7 +811,7 @@ async def _build_me(account: str, dfrom=None, dto=None) -> dict:
         "stats": {
             "funnel": funnel,
             "breakdown": _breakdown(counts) if has_cache else [],
-            "tg_outreach": await asyncio.to_thread(_tg_outreach_count, account),
+            "tg_outreach": await asyncio.to_thread(_tg_outreach_count, account, dfrom, dto),
         },
         "next_apply": _next_apply(
             flags[0],
@@ -1019,10 +1031,10 @@ async def api_trends(account: str = None,
 
 
 @app.get("/api/giga")
-async def api_giga(account: str = None,
+async def api_giga(dfrom: str = None, dto: str = None, account: str = None,
                    x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data, account)
-    return await asyncio.to_thread(_giga_summary, account)
+    return await asyncio.to_thread(_giga_summary, account, dfrom, dto)
 
 
 @app.get("/api/getmatch")

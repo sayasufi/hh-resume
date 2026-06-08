@@ -370,7 +370,7 @@ function renderGiga(g) {
     + (g.active ? `<span class="gnum"><b>${g.active | 0}</b> сейчас</span>` : "")
     + '</div>' + last;
 }
-const loadGiga = () => api("/api/giga").then(renderGiga).catch(() => {});
+const loadGiga = () => api("/api/giga" + qp()).then(renderGiga).catch(() => {});
 
 // отклики GetMatch со статусами: список во вкладке «Отклики» + разбивка в «Стате»
 let GM_APPS = [], GM_FILTER = "all";
@@ -416,7 +416,13 @@ function _statusRows(box, empty, apps) {
   box.innerHTML = card(apps.length, "Откликов отправлено") + card(c.wait, "Ждём ответа")
     + card(c.ok, "Одобрены / приглашения") + card(c.bad, "Отказы");
 }
-function renderGmStats() { _statusRows($("#gm-stats"), $("#gm-empty"), GM_APPS); }
+function _inPeriod(at) {  // at = "YYYY-MM-DD"; PERIOD.dfrom/dto — даты периода (ISO, сравнение строк)
+  at = (at || "").slice(0, 10);
+  if (!PERIOD.dfrom && !PERIOD.dto) return true;
+  if (!at) return false;
+  return (!PERIOD.dfrom || at >= PERIOD.dfrom) && (!PERIOD.dto || at <= PERIOD.dto);
+}
+function renderGmStats() { _statusRows($("#gm-stats"), $("#gm-empty"), GM_APPS.filter((a) => _inPeriod(a.at))); }
 const loadGetmatchApps = () => api("/api/getmatch").then((r) => {
   GM_APPS = r.applications || []; renderGmApps(); renderGmStats();
 }).catch(() => {});
@@ -594,8 +600,8 @@ function refreshAll() {
   api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
 }
 if ($("#refresh")) $("#refresh").onclick = refreshAll;
-// период влияет на воронку, детали, активность бота и список откликов
-const _reloadPeriod = () => { loadStats(); loadActivity(); loadDialogs(); };
+// период влияет на воронку, детали, активность бота, GetMatch/giga/TG-счётчики, список откликов
+const _reloadPeriod = () => { loadStats(); loadActivity(); loadDialogs(); loadGiga(); renderGmStats(); };
 document.querySelectorAll(".period button").forEach((b) => {
   b.onclick = () => {
     const key = b.dataset.p;

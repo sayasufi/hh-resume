@@ -252,6 +252,8 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 .cat-name{cursor:pointer;flex:1;min-width:0}
 .cat-row i{cursor:pointer}
 .cat-chans{padding-top:4px}
+.tg-out .tg-letter{display:none;margin-top:8px;font-size:13px;color:var(--sub);line-height:1.45;white-space:pre-wrap}
+.tg-out.expanded .tg-letter{display:block}
 .dim{color:var(--hint);font-weight:400;font-size:13px}
 .off{opacity:.4;pointer-events:none}
 .off input,.off .v,.off .chip{color:var(--sub) !important}

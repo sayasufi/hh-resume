@@ -500,15 +500,19 @@ function renderTgApps() {
       ? '<span class="gm-st ok">отправлено</span>'
       : '<span class="gm-st wait">DRY</span>';
     const uname = (a.contact || "").replace(/^@/, "");
-    return '<div class="cell act"><div class="dlg-main">'
+    return '<div class="cell act tg-out"><div class="dlg-main act-text">'
       + `<div class="dlg-title">${esc(a.contact || "—")} ${st}</div>`
       + `<div class="dlg-emp">${esc(a.title)}</div>`
-      + `<div class="dlg-date">${esc(sub)}</div></div>`
+      + `<div class="dlg-date">${esc(sub)} · нажми — текст письма</div>`
+      + `<div class="tg-letter">📎 PDF-резюме + письмо:<br>${esc(a.letter || "(без письма)")}</div></div>`
       + (uname ? `<button class="abtn open" data-url="https://t.me/${esc(uname)}">↗</button>` : "")
       + "</div>";
   }).join("") + "</div>";
   box.querySelectorAll(".abtn[data-url]").forEach((el) => {
-    el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
+    el.onclick = (e) => { e.stopPropagation(); hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
+  });
+  box.querySelectorAll(".tg-out .act-text").forEach((el) => {
+    el.onclick = () => { el.closest(".tg-out").classList.toggle("expanded"); hap("sel"); };
   });
 }
 const loadTgApps = () => api("/api/tg_outreach").then((r) => {

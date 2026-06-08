@@ -499,13 +499,14 @@ def _tg_outreach_list(account: str, limit: int = 200) -> list:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT o.contact, o.channel, o.title, o.category, o.status, o.created_at, o.letter, "
-                "COALESCE(NULLIF(v.post_url,''), 'https://t.me/' || o.channel || '/' || v.post_id::text) "
+                "COALESCE(NULLIF(v.post_url,''), 'https://t.me/' || o.channel || '/' || v.post_id::text), "
+                "o.replied "
                 "FROM tg_outreach o LEFT JOIN tg_vacancies v ON v.id = o.vac_id "
                 "WHERE o.account=%s ORDER BY o.created_at DESC LIMIT %s", (account, limit))
             return [{"contact": r[0] or "", "channel": r[1] or "", "title": r[2] or "",
                      "category": r[3] or "", "status": r[4] or "dry",
                      "at": (str(r[5])[:10] if r[5] else ""), "letter": r[6] or "",
-                     "url": r[7] or ""}
+                     "url": r[7] or "", "replied": bool(r[8])}
                     for r in cur.fetchall()]
     except Exception:
         return []

@@ -507,9 +507,11 @@ function renderTgApps() {
   }
   box.innerHTML = '<div class="list">' + TG_APPS.map((a) => {
     const sub = [a.channel ? "@" + a.channel : "", a.category, a.at].filter(Boolean).join(" · ");
-    const st = a.status === "sent"
-      ? '<span class="gm-st ok">отправлено</span>'
-      : '<span class="gm-st wait">DRY</span>';
+    const st = a.status !== "sent"
+      ? '<span class="gm-st wait">DRY</span>'
+      : (a.replied
+          ? '<span class="gm-st ok">✓ ответили</span>'
+          : '<span class="gm-st wait">отправлено · ждём</span>');
     const uname = (a.contact || "").replace(/^@/, "");
     const vacLink = a.url ? `<a class="vac-open" href="#" data-vurl="${esc(a.url)}" style="color:var(--accent);text-decoration:none">открыть пост ↗</a>` : "(ссылка недоступна)";
     return '<div class="cell act tg-out"><div class="dlg-main act-text">'

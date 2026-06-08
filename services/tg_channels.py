@@ -244,6 +244,48 @@ def _record_outreach(account, vid, channel, contact, title, category, letter, st
         conn.close()
 
 
+async def _check_replies(client, account):
+    """Отметить в tg_outreach рекрутёров, которые ОТВЕТИЛИ (входящее сообщение в ЛС).
+    iter_dialogs — без резолва, без флуда. Флаг только ставим (не снимаем)."""
+    conn = pgconn.connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT lower(contact) FROM tg_outreach WHERE account=%s AND status='sent' "
+                    "AND NOT replied AND contact LIKE '@%%'", (account,))
+        pending = {r[0] for r in cur.fetchall()}  # '@username' в нижнем регистре
+    except Exception:
+        conn.close()
+        return
+    if not pending:
+        conn.close()
+        return
+    replied = set()
+    try:
+        async for d in client.iter_dialogs():
+            u = getattr(d.entity, "username", None)
+            if not u:
+                continue
+            key = "@" + u.lower()
+            if key not in pending:
+                continue
+            msg = d.message
+            if (msg is not None and not msg.out) or (d.unread_count or 0) > 0:
+                replied.add(key)  # есть входящее / непрочитанное -> ответили
+    except Exception:
+        pass
+    if replied:
+        try:
+            cur = conn.cursor()
+            for key in replied:
+                cur.execute("UPDATE tg_outreach SET replied=true, replied_at=now() "
+                            "WHERE account=%s AND lower(contact)=%s", (account, key))
+            conn.commit()
+            print(f"  [ответы] отметил ответивших рекрутёров: {len(replied)}")
+        except Exception:
+            pass
+    conn.close()
+
+
 FOLDER_TITLE = "Отклики"
 
 
@@ -343,6 +385,7 @@ async def run():
         if not await client.is_user_authorized():
             print("tg_channels: tg-сессия слетела — пропуск")
             return
+        await _check_replies(client, account)  # отметить, кто из рекрутёров ответил
     dm = evals = 0
     sent_entities = []  # чаты с рекрутёрами, кому написали -> в папку «Отклики» (LIVE)
     _h = (datetime.now(timezone.utc) + timedelta(hours=3)).hour  # МСК

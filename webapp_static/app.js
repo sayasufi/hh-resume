@@ -51,10 +51,10 @@ function renderMe(d) {
   st.className = "pill " + (sk === "ok" ? "good" : sk === "off" ? "bad" : "warn");
   $("#p-name").textContent = p.name || "—";
   const bd = s.breakdown || [];
-  let bdHtml = bd.map((b) =>
-    `<div class="stat"><div class="num">${b.value}</div><div class="lbl">${b.emoji} ${esc(b.label)}</div></div>`).join("");
-  if (s.tg_outreach) bdHtml += `<div class="stat"><div class="num">${s.tg_outreach}</div><div class="lbl">✈️ TG-отклики</div></div>`;
-  $("#breakdown").innerHTML = bdHtml || '<div class="empty">Нет данных за период</div>';
+  $("#breakdown").innerHTML = bd.length ? bd.map((b) =>
+    `<div class="stat"><div class="num">${b.value}</div><div class="lbl">${b.emoji} ${esc(b.label)}</div></div>`).join("")
+    : '<div class="empty">Нет данных за период</div>';
+  if ($("#a-tgout")) $("#a-tgout").textContent = s.tg_outreach || 0;
   $("#next-apply").textContent = d.next_apply
     ? "⏱ Следующие обычные отклики: " + d.next_apply
     : "⏸ Обычные отклики на паузе — включи «Авто-отклики» в Функциях.";

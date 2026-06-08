@@ -246,6 +246,20 @@ class Operation(BaseOperation):
                 "приоритетный (первый) указывай как предпочтительный, остальные — как тоже приемлемые. "
                 "Форматы, которых нет в списке, не называй."
             )
+        tg_username = (await self.tool.storage.settings.get_value("tg_username") or "").strip()
+        if tg_username:
+            system_prompt += (
+                f"\n\nКОНТАКТ ДЛЯ СВЯЗИ: твой реальный ник в Telegram — {tg_username}. Если работодатель "
+                f"просит контакт/Telegram/связаться вне hh — дай именно {tg_username}. НИКОГДА не пиши "
+                "плейсхолдеры-заглушки вроде «@username», «(замените на ваш ник)», «ваш реальный ник», "
+                "«укажите контакт», «[ваш ник]» — только реальный ник выше."
+            )
+        else:
+            system_prompt += (
+                "\n\nКОНТАКТ: у тебя НЕТ ника/телефона для передачи. Если работодатель просит "
+                "Telegram/телефон/связаться вне hh — НЕ выдумывай контакт и НЕ пиши плейсхолдеры-заглушки; "
+                "вежливо предложи продолжить общение здесь, в чате hh."
+            )
         if candidate_name:
             system_prompt += (
                 f"\n\nВАЖНО ПРО ИМЕНА: тебя (кандидата) зовут {candidate_name} — это ТЫ, а НЕ собеседник. "
@@ -488,6 +502,17 @@ class Operation(BaseOperation):
                         if any(p in _low for p in _META) or len(send_message) > 600:
                             print(f"⚠️ AI вернул мета-текст — НЕ отправляю (чат {nid})")
                             logger.warning("meta-reply skipped %s: %.200s", nid, send_message)
+                            continue
+                        # GUARD: LLM иногда вставляет контакт-плейсхолдер («@username (замените на ваш
+                        # реальный ник)») — это шаблон-заглушка, слать работодателю НЕЛЬЗЯ.
+                        _PLACEHOLDER = (
+                            "@username", "замените на", "замени на", "реальный ник", "ваш ник",
+                            "ваш реальный", "укажите ваш", "укажите свой", "впишите", "вставьте ваш",
+                            "your_username", "your username", "[ваш", "<ваш", "[имя", "<имя", "вашник",
+                        )
+                        if any(p in _low for p in _PLACEHOLDER):
+                            print(f"⚠️ AI вставил плейсхолдер-контакт — НЕ отправляю (чат {nid})")
+                            logger.warning("placeholder-reply skipped %s: %.200s", nid, send_message)
                             continue
                     else:
                         print("🏢", placeholders["employer_name"])

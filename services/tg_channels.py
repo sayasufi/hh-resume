@@ -38,9 +38,12 @@ SYS = (
     "или вакансия не по профилю.\n"
     "CONTACT: @username — если в посте есть прямой Telegram-контакт рекрутёра/нанимающего для отклика "
     "(«пишите @...», «резюме @...»); иначе НЕТ. НЕ бери @каналы/@ботов и не выдумывай.\n"
-    "ПИСЬМО: <если MATCH=да и есть CONTACT — короткое персональное сообщение рекрутёру в одну строку: "
-    "поздоровайся, скажи что заинтересовала вакансия (назови её), 1-2 релевантных факта строго из опыта "
-    "ниже, готовность обсудить. Без markdown, без слова «резюме», не выдумывай навыки. Иначе: ->>\n\n"
+    "ПИСЬМО: <если MATCH=да и есть CONTACT — живое персональное сообщение рекрутёру (2-3 предложения, "
+    "БЕЗ переносов строк): НЕ начинай шаблонно «Меня заинтересовала вакансия»; зацепи 1-2 КОНКРЕТНЫМИ "
+    "пересечениями стека вакансии с реальным опытом кандидата ниже (назови технологии/задачи из вакансии, "
+    "которые он реально делал), упомяни вакансию естественно, заверши готовностью созвониться. По-человечески, "
+    "каждый раз разными формулировками, без markdown, без слова «резюме», БЕЗ выдуманных навыков. "
+    "Если зацепить нечем — оставь пусто. Иначе: ->>\n\n"
     "=== ОПЫТ КАНДИДАТА ===\n{resume}\n=== КОНЕЦ ===")
 
 
@@ -116,6 +119,53 @@ async def _hh_resume_url(cfg, account):
         return f"https://hh.ru/resume/{rid}"
     finally:
         await api.aclose()
+
+
+async def _hh_resume_pdf(cfg, account):
+    """Скачать PDF резюме с hh -> путь к файлу (или None, если не вышло)."""
+    rid = pgconn.get_setting("apply.resume_id", account=account)
+    tok = (cfg.get("token") or {})
+    if not (rid and tok.get("access_token")):
+        return None
+    api = ApiClient(access_token=tok["access_token"], refresh_token=tok.get("refresh_token"),
+                    access_expires_at=tok.get("access_expires_at"),
+                    user_agent=generate_android_useragent(), refresh_hook=pgconn.locked_token_refresh)
+    try:
+        r = await api.get(f"/resumes/{rid}")
+        url = (((r.get("download") or {}).get("pdf") or {}).get("url"))
+        if not url:
+            return None
+        import httpx
+        async with httpx.AsyncClient(timeout=40, follow_redirects=True) as h:
+            resp = await h.get(url, headers={"Authorization": f"Bearer {tok['access_token']}",
+                                             "User-Agent": generate_android_useragent()})
+            resp.raise_for_status()
+            data = resp.content
+        if not data or len(data) < 1000:  # подозрительно мелкий -> не PDF
+            return None
+        path = f"/tmp/resume_{account}.pdf"
+        with open(path, "wb") as f:
+            f.write(data)
+        print(f"  [PDF] резюме скачано ({len(data)//1024} КБ)")
+        return path
+    except Exception as e:
+        print(f"  [PDF] не скачалось: {type(e).__name__}")
+        return None
+    finally:
+        await api.aclose()
+
+
+def _outreach_contacts(account) -> set:
+    """Кому уже писали (из tg_outreach) — для дедупа по рекрутёру."""
+    conn = pgconn.connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT lower(contact) FROM tg_outreach WHERE account=%s AND contact<>''", (account,))
+        return set(r[0] for r in cur.fetchall())
+    except Exception:
+        return set()
+    finally:
+        conn.close()
 
 
 CATS_ALL = ("general", "python", "go", "java", "backend", "frontend", "ds_ml",
@@ -227,6 +277,8 @@ async def run():
         return
 
     hh_url = await _hh_resume_url(cfg, account)
+    pdf_path = await _hh_resume_pdf(cfg, account)   # PDF резюме для прикрепления (LIVE)
+    done_contacts = _outreach_contacts(account)     # кому уже писали -> дедуп по рекрутёру (антиспам)
     # ЛС рекрутёру шлём ТОЛЬКО в LIVE. В DRY сессию кандидата вообще не подключаем —
     # гарантия, что эйчарам ничего не пишется, пока не разрешат.
     client = None
@@ -238,7 +290,8 @@ async def run():
             print("tg_channels: tg-сессия слетела — пропуск")
             return
     dm = evals = 0
-    print(f"tg_channels[{account}] режим={'LIVE' if LIVE else 'DRY'}: вакансий-кандидатов {len(vacs)} (категории {cats})")
+    print(f"tg_channels[{account}] режим={'LIVE' if LIVE else 'DRY'}: вакансий-кандидатов {len(vacs)} "
+          f"(категории {cats}), резюме-PDF={'есть' if pdf_path else 'нет'}")
     try:
         for vid, channel, category, title, text, contact in vacs:
             if dm >= MAX_DM or evals >= MAX_EVAL:
@@ -246,29 +299,36 @@ async def run():
             evals += 1
             match, c2, letter = await _decide(oa, resume, text)
             if not match:
-                pgconn.add_seen(f"tg_out_{account}", str(vid))  # не по профилю — больше не оцениваем
-                out_seen.add(str(vid))
+                pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
+                continue
+            letter = _strip(letter)
+            if not letter:  # без персонального текста НЕ пишем (дженерик-заглушку не шлём)
+                pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
                 continue
             to = contact if (contact or "").startswith("@") else ("@" + c2 if c2 else "")
             if not to:
                 continue
-            body = (letter or f"Здравствуйте! Заинтересовала ваша вакансия «{title}».") \
-                + (f"\nМоё резюме: {hh_url}" if hh_url else "")
+            if to.lower() in done_contacts:  # этому рекрутёру уже писали -> не дублируем
+                pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
+                continue
+            done_contacts.add(to.lower())
             if not LIVE:
                 # DRY — НИЧЕГО не отправляем, только показываем что отправили бы (вакансию НЕ помечаем seen — уйдёт при LIVE)
-                print(f"  [DRY ЛС→{to}] {category}/{title[:42]} (из @{channel}): {(letter or '')[:90]}")
+                print(f"  [DRY ЛС→{to}{' +PDF' if pdf_path else ''}] {category}/{title[:42]} (из @{channel}): {letter[:90]}")
                 _record_outreach(account, vid, channel, to, title, category, letter, "dry")
                 dm += 1
                 continue
             try:
                 ent = await client.get_entity(to)
-                await client.send_message(ent, body, link_preview=False)
+                if pdf_path:  # прикрепляем PDF-резюме, письмо — подписью
+                    await client.send_file(ent, pdf_path, caption=letter, force_document=True)
+                else:
+                    await client.send_message(ent, letter + (f"\nМоё резюме: {hh_url}" if hh_url else ""), link_preview=False)
                 pgconn.bump_activity("tg_channels", 1, account=account)
-                pgconn.add_seen(f"tg_out_{account}", str(vid))
-                out_seen.add(str(vid))
+                pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
                 _record_outreach(account, vid, channel, to, title, category, letter, "sent")
                 dm += 1
-                print(f"  [ЛС] написал {to} (из @{channel})")
+                print(f"  [ЛС{'+PDF' if pdf_path else ''}] написал {to} (из @{channel})")
             except Exception as e:
                 print(f"  [ЛС] {to}: не отправилось ({type(e).__name__})")
             await asyncio.sleep(random.uniform(6, 16))

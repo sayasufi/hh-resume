@@ -208,9 +208,11 @@ function renderTgCats(catalog, catsStr, customStr, enabled) {
   const box = $("#tg-cats"), title = $("#tg-cats-title");
   if (!box) return;
   catalog = catalog || [];
+  // множество наших каналов (из всех категорий) — чтобы не дать добавить дубль в «свои»
+  const our = new Set(catalog.flatMap((c) => (c.channels || []).map((x) => (typeof x === "string" ? x : x.u || "").toLowerCase())));
   box.classList.toggle("off", !enabled);   // нет Telegram → категории неактивны
   if (title) title.style.display = catalog.length ? "" : "none";
-  if (!catalog.length) { box.innerHTML = ""; renderTgCustom(customStr, enabled); return; }
+  if (!catalog.length) { box.innerHTML = ""; renderTgCustom(customStr, enabled, our); return; }
   const sel = new Set((catsStr || "").split(",").map((s) => s.trim()).filter(Boolean));
   box.innerHTML = '<div class="chan-legend"><span class="lg lg-broadcast">● канал</span><span class="lg lg-chat">● группа</span></div>'
     + catalog.map((c) =>
@@ -233,9 +235,9 @@ function renderTgCats(catalog, catsStr, customStr, enabled) {
     };
   });
   _wireChanOpen(box);
-  renderTgCustom(customStr, enabled);
+  renderTgCustom(customStr, enabled, our);
 }
-function renderTgCustom(customStr, enabled) {
+function renderTgCustom(customStr, enabled, our) {
   const box = $("#tg-custom"), title = $("#tg-custom-title");
   if (!box) return;
   if (title) title.style.display = "";
@@ -248,6 +250,9 @@ function renderTgCustom(customStr, enabled) {
     $("#tg-custom-add").onclick = async () => {
       const v = (($("#tg-custom-input").value || "").trim().replace(/^@/, "").replace(/[^a-zA-Z0-9_]/g, ""));
       if (!v || list.includes(v)) return;
+      if (our && our.has(v.toLowerCase())) {  // уже есть среди наших каналов — не дублируем
+        err("Этот канал уже есть в наших категориях"); $("#tg-custom-input").value = ""; hap("sel"); return;
+      }
       list.push(v);
       try { await save("tg.channels", list.join(",")); hap("light"); draw(); }
       catch (e) { list.pop(); err("Не удалось сохранить"); }

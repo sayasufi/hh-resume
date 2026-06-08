@@ -159,7 +159,7 @@ def _outreach_contacts(account) -> set:
     conn = pgconn.connect()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT DISTINCT lower(contact) FROM tg_outreach WHERE account=%s AND contact<>''", (account,))
+        cur.execute("SELECT DISTINCT lower(contact) FROM tg_outreach WHERE account=%s AND status='sent' AND contact<>''", (account,))
         return set(r[0] for r in cur.fetchall())
     except Exception:
         return set()

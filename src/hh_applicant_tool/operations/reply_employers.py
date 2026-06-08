@@ -14,6 +14,14 @@ from ..storage import pgconn
 from ..utils.date import parse_api_datetime
 from ..utils.string import rand_text
 
+MAX_REJECT_REPLIES = 6  # вежливых ответов на отказы за прогон (чтобы не залпом по накопленным)
+REJECT_TEMPLATES = (
+    "Спасибо за ответ! Буду рад, если вспомните обо мне, когда появятся подходящие позиции. Удачи в поиске!",
+    "Благодарю за рассмотрение моей кандидатуры. Если появится что-то подходящее — буду рад вернуться к диалогу.",
+    "Спасибо, что рассмотрели! Остаюсь открытым к общению, если в будущем будет интересная вакансия.",
+    "Понял, спасибо за обратную связь! Успехов в поиске, и буду признателен, если вспомните обо мне позже.",
+)
+
 # Классификатор хэндоффа: приглашение на ЖИВОЙ разговор с человеком -> человеку.
 HANDOFF_SYS = (
     "Тебе дают ПОСЛЕДНЕЕ сообщение работодателя в чате на hh.ru. Ответь РОВНО одним "
@@ -339,6 +347,9 @@ class Operation(BaseOperation):
             "phone": user.get("phone") or "",
         }
 
+        reject_replies = 0
+        reject_seen = set(map(str, pgconn.seen_keys("reject_reply")))
+
         async for negotiation in self.tool.get_negotiations():
             try:
                 # try:
@@ -361,6 +372,31 @@ class Operation(BaseOperation):
 
                 state_id = negotiation["state"]["id"]
                 if state_id == "discard":
+                    # Вежливый ответ на отказ = активность аккаунта. Только свежие
+                    # (<=7 дней), с лимитом за прогон и дедупом (не дважды один отказ).
+                    nid = negotiation["id"]
+                    if reject_replies >= MAX_REJECT_REPLIES:
+                        continue
+                    if (datetime.now(updated_at.tzinfo) - updated_at).days > 7:
+                        continue
+                    if str(nid) in reject_seen:
+                        continue
+                    try:
+                        await self.api_client.post(
+                            f"/negotiations/{nid}/messages",
+                            message=random.choice(REJECT_TEMPLATES),
+                            delay=random.uniform(1, 3),
+                        )
+                        pgconn.add_seen("reject_reply", str(nid))
+                        reject_seen.add(str(nid))
+                        pgconn.bump_activity("reply", 1)
+                        reject_replies += 1
+                        print(
+                            "🙏 Ответ на отказ",
+                            (negotiation.get("vacancy") or {}).get("alternate_url", nid),
+                        )
+                    except ApiError as ex:
+                        logger.warning("reject-reply %s: %s", nid, ex)
                     continue
 
                 if self.only_invitations and not state_id.startswith("inv"):

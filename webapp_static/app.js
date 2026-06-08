@@ -511,12 +511,12 @@ function renderTgApps() {
       ? '<span class="gm-st ok">отправлено</span>'
       : '<span class="gm-st wait">DRY</span>';
     const uname = (a.contact || "").replace(/^@/, "");
-    const vacLink = a.url ? ` · <a class="vac-open" href="#" data-vurl="${esc(a.url)}" style="color:var(--accent);text-decoration:none">открыть пост ↗</a>` : "";
+    const vacLink = a.url ? `<a class="vac-open" href="#" data-vurl="${esc(a.url)}" style="color:var(--accent);text-decoration:none">открыть пост ↗</a>` : "(ссылка недоступна)";
     return '<div class="cell act tg-out"><div class="dlg-main act-text">'
       + `<div class="dlg-title">${esc(a.contact || "—")} ${st}</div>`
       + `<div class="dlg-emp">${esc(a.title)}</div>`
       + `<div class="dlg-date">${esc(sub)} · нажми — вакансия + письмо</div>`
-      + `<div class="tg-letter"><b>Вакансия</b>${vacLink}<br><span class="vac-txt" style="display:block;margin-top:4px;max-height:220px;overflow:auto">${esc(a.vac_text || "(текст вакансии не сохранён)")}</span>`
+      + `<div class="tg-letter"><b>Вакансия:</b> ${vacLink}`
       + `<br><br><b>📎 Письмо (с резюме-PDF)</b><br>${esc(a.letter || "(без письма)")}</div></div>`
       + (uname ? `<button class="abtn open" data-url="https://t.me/${esc(uname)}">↗</button>` : "")
       + "</div>";

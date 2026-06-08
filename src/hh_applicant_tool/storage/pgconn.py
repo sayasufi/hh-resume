@@ -85,6 +85,9 @@ CREATE TABLE IF NOT EXISTS activity_daily (
     account text NOT NULL, day date NOT NULL, kind text NOT NULL,
     count int NOT NULL DEFAULT 0, PRIMARY KEY (account, day, kind)
 );
+CREATE TABLE IF NOT EXISTS or_usage (
+    day date PRIMARY KEY, count int NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS giga_queue (
     account text NOT NULL, token text NOT NULL, vacancy text, nid bigint,
     status text NOT NULL DEFAULT 'pending', turns int NOT NULL DEFAULT 0,
@@ -459,6 +462,77 @@ def bump_activity(kind: str, n: int = 1, account: str | None = None) -> None:
                     "DO UPDATE SET count = activity_daily.count + excluded.count",
                     (acc, kind, n),
                 )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+# --- OpenRouter роутинг (часть LLM-трафика гоним в OpenRouter, при исчерпании дневного
+#     лимита — полностью на локалку). Конфиг в _global: or.token/or.model/or.endpoint/
+#     or.share/or.daily_limit. Счётчик запросов за день — таблица or_usage. ---
+
+def or_config() -> dict:
+    """Конфиг OpenRouter из _global. Пустой dict, если не настроен (тогда 100% локалка)."""
+    try:
+        tok = get_setting("or.token", "", account="_global")
+        if not tok:
+            return {}
+        return {
+            "token": tok,
+            "model": get_setting("or.model", "", account="_global"),
+            "endpoint": get_setting("or.endpoint",
+                                    "https://openrouter.ai/api/v1/chat/completions", account="_global"),
+            "share": float(get_setting("or.share", "0.5", account="_global") or 0.5),
+            "daily_limit": int(get_setting("or.daily_limit", "1000", account="_global") or 1000),
+        }
+    except Exception:
+        return {}
+
+
+def or_count_today() -> int:
+    try:
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT count FROM or_usage WHERE day = current_date")
+                r = cur.fetchone()
+                return int(r[0]) if r else 0
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def or_bump() -> int:
+    """Атомарно +1 к счётчику OpenRouter за сегодня, возвращает новое значение (0 при сбое БД)."""
+    try:
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO or_usage(day, count) VALUES (current_date, 1) "
+                    "ON CONFLICT(day) DO UPDATE SET count = or_usage.count + 1 RETURNING count")
+                n = int(cur.fetchone()[0])
+            conn.commit()
+            return n
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def or_exhaust() -> None:
+    """Пометить дневной лимит OpenRouter исчерпанным (получили 429) — до конца суток на локалку."""
+    try:
+        lim = int(get_setting("or.daily_limit", "1000", account="_global") or 1000)
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO or_usage(day, count) VALUES (current_date, %s) "
+                    "ON CONFLICT(day) DO UPDATE SET count = GREATEST(or_usage.count, %s)", (lim, lim))
             conn.commit()
         finally:
             conn.close()

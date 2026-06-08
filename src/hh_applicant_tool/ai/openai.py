@@ -92,6 +92,42 @@ async def _acquire_llm_slot():
         return None
 
 
+# --- роутинг провайдера LLM: часть трафика в OpenRouter, при исчерпании дневного лимита
+#     или ошибке OR — фолбэк на локалку. Всё fail-open: любая ошибка -> локалка. ---
+
+def _pick_provider():
+    """Per-call: вернуть конфиг OpenRouter (доля or.share, пока лимит не исчерпан) либо None (локалка)."""
+    try:
+        import random
+        from hh_applicant_tool.storage import pgconn
+        orc = pgconn.or_config()
+        if not (orc.get("token") and orc.get("model")):
+            return None
+        if pgconn.or_count_today() >= orc["daily_limit"]:
+            return None
+        if random.random() >= orc.get("share", 0.5):
+            return None
+        return orc
+    except Exception:
+        return None
+
+
+def _orbump():
+    try:
+        from hh_applicant_tool.storage import pgconn
+        return pgconn.or_bump()
+    except Exception:
+        return 0
+
+
+def _orexhaust():
+    try:
+        from hh_applicant_tool.storage import pgconn
+        pgconn.or_exhaust()
+    except Exception:
+        pass
+
+
 class OpenAIError(AIError):
     pass
 
@@ -138,17 +174,27 @@ class ChatOpenAI:
             self._resolved_model = None
         return self._resolved_model
 
+    async def _post_chat(self, client, messages, token, model, endpoint, max_param):
+        body = {
+            "messages": messages,
+            "temperature": self.temperature,
+            max_param: self.max_completion_tokens,
+            "model": model,
+        }
+        response = await client.post(
+            endpoint, json=body, headers={"Authorization": f"Bearer {token}"}
+        )
+        response.raise_for_status()
+        data = response.json()
+        if "error" in data:
+            raise OpenAIError(data["error"]["message"])
+        return data["choices"][0]["message"]["content"]
+
     async def send_message(self, message: str) -> str:
         messages = []
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
         messages.append({"role": "user", "content": message})
-
-        payload = {
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_completion_tokens": self.max_completion_tokens,
-        }
 
         _slot = await _acquire_llm_slot()  # глобальный лимит одновременных запросов
         try:
@@ -156,23 +202,31 @@ class ChatOpenAI:
                 async with httpx.AsyncClient(
                     proxy=self.proxy, timeout=self.timeout
                 ) as client:
+                    provider = await asyncio.to_thread(_pick_provider)
+                    if provider:  # часть трафика -> OpenRouter (пока дневной лимит не исчерпан)
+                        try:
+                            await asyncio.to_thread(_orbump)
+                            return await self._post_chat(
+                                client, messages, provider["token"],
+                                provider["model"], provider["endpoint"], "max_tokens")
+                        except httpx.HTTPStatusError as ex:
+                            if ex.response is not None and ex.response.status_code == 429:
+                                await asyncio.to_thread(_orexhaust)  # лимит выбран -> на сегодня локалка
+                            logger.warning("OpenRouter %s — фолбэк на локалку",
+                                           getattr(ex.response, "status_code", "?"))
+                        except Exception as ex:
+                            logger.warning("OpenRouter ошибка (%s) — фолбэк на локалку",
+                                           type(ex).__name__)
+                    # локалка: выпало на неё / OR не настроен / исчерпан / упал
                     model = await self._resolve_model(client)
                     if not model:
                         raise OpenAIError(
                             "LLM недоступна: не удалось определить модель "
                             "(vLLM пуст/недоступен)"
                         )
-                    payload["model"] = model
-                    response = await client.post(
-                        self.completion_endpoint,
-                        json=payload,
-                        headers=self._default_headers(),
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-                if "error" in data:
-                    raise OpenAIError(data["error"]["message"])
-                return data["choices"][0]["message"]["content"]
+                    return await self._post_chat(
+                        client, messages, self.token, model,
+                        self.completion_endpoint, "max_completion_tokens")
             except httpx.HTTPError as ex:
                 raise OpenAIError(f"Network error: {ex}") from ex
         finally:

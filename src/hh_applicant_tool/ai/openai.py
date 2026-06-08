@@ -206,9 +206,13 @@ class ChatOpenAI:
                     if provider:  # часть трафика -> OpenRouter (пока дневной лимит не исчерпан)
                         try:
                             await asyncio.to_thread(_orbump)
-                            return await self._post_chat(
+                            _out = await self._post_chat(
                                 client, messages, provider["token"],
                                 provider["model"], provider["endpoint"], "max_tokens")
+                            if _out and _out.strip():
+                                return _out
+                            # пустой content (reasoning-модель/обрезка) — не отдаём мусор, фолбэк
+                            logger.warning("OpenRouter вернул пустой content — фолбэк на локалку")
                         except httpx.HTTPStatusError as ex:
                             if ex.response is not None and ex.response.status_code == 429:
                                 await asyncio.to_thread(_orexhaust)  # лимит выбран -> на сегодня локалка

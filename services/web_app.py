@@ -623,6 +623,21 @@ def _source_health(account: str) -> list:
         if st == "ok" and lbl == "работает":
             lbl, det = "работает (DRY)", "подбор без реальной отправки"
         out.append(row("Telegram-отклики", st, lbl, det, h_tc))
+
+    # Telegram-сессия (userbot) — общий фундамент для «Авто-задач» и «Telegram-откликов»:
+    # если словит флуд/бан, обе фичи встанут молча, поэтому отдельный health + алерт.
+    if cfg.get("tg_user_session"):
+        h_sess = pgconn.read_health("tg_session", account)
+        if not h_sess or not h_sess.get("ts"):
+            out.append(row("Telegram-сессия", "ok", "включено", "ждёт первой проверки", h_sess))
+        elif not h_sess.get("ok"):
+            out.append(row("Telegram-сессия", "down", "проблема с сессией",
+                           (h_sess.get("detail") or "")[:80], h_sess))
+        elif (now - h_sess["ts"]) > 24 * 3600:
+            out.append(row("Telegram-сессия", "warn", "давно не проверялась",
+                           "probe-джоб не запускался", h_sess))
+        else:
+            out.append(row("Telegram-сессия", "ok", h_sess.get("detail") or "жива", "", h_sess))
     return out
 
 

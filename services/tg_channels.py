@@ -20,6 +20,7 @@ from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
 from telethon import TelegramClient
+from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
 
 LIVE = "--live" in sys.argv
@@ -387,6 +388,14 @@ async def run():
                 sent_entities.append(ent)  # для папки «Отклики»
                 dm += 1
                 print(f"  [ЛС{'+PDF' if pdf_path else ''}] написал {to} (из @{channel})")
+            except FloodWaitError as e:
+                # сессия во флуд-вейте — продолжать опасно (усугубим/бан). Фиксируем для
+                # health-check (tg_session) и СТОП рассылки до следующего прогона.
+                import time as _t
+                pgconn.set_setting("tg_flood_until", str(int(_t.time()) + int(e.seconds)), account)
+                pgconn.record_health("tg_session", False, f"флуд-вейт ~{int(e.seconds)//60} мин (рассылка)", account=account)
+                print(f"  [ЛС] ФЛУД {e.seconds}s — стоп рассылки")
+                break
             except Exception as e:
                 print(f"  [ЛС] {to}: не отправилось ({type(e).__name__})")
             await asyncio.sleep(random.uniform(6, 16))

@@ -37,6 +37,10 @@ JOBS: list[dict] = [
          feature=None,     cron="5 5 * * *",        jitter=0,    tags=[],          timeout=600),
     dict(name="send-digest",    command=["python", "/app/services/send_digest.py"],
          feature="notify", cron="15,45 5-19 * * *", jitter=0,    tags=[],          timeout=300),
+    # probe TG-userbot-сессий (per-account): жива/слетела/флуд -> _health.tg_session.
+    # Ставим ДО health-check, чтобы статус был свежим к дневному алерту.
+    dict(name="tg-session-health", command=["python", "/app/services/tg_session_health.py"],
+         feature=None,     cron="30 8,16 * * *",    jitter=0,    tags=[],          timeout=300),
     dict(name="health-check",   command=["python", "/app/services/health_check.py"],
          feature=None,     cron="0 9,17 * * *",     jitter=0,    tags=[],          timeout=300),
     dict(name="auto-screen",    command=["python", "/app/services/auto_screen.py", "--live"],

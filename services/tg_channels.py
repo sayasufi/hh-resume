@@ -176,6 +176,24 @@ def _db_vacancies(cats, limit=150):
         conn.close()
 
 
+def _record_outreach(account, vid, channel, contact, title, category, letter, status):
+    """Запись TG-отклика (кому/что написали). dry в DRY, sent в LIVE. Идемпотентно по (account, vac_id)."""
+    conn = pgconn.connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO tg_outreach(account, vac_id, channel, contact, title, category, letter, status) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT(account, vac_id) DO UPDATE SET status=excluded.status, "
+            "contact=excluded.contact, title=excluded.title, letter=excluded.letter",
+            (account, vid, channel, contact, (title or "")[:200], category, (letter or "")[:600], status))
+        conn.commit()
+    except Exception as e:
+        print(f"  [tg_outreach] не записалось: {type(e).__name__}")
+    finally:
+        conn.close()
+
+
 async def run():
     account = pgconn.get_account()
     if not pgconn.feature_enabled("tg_channels"):
@@ -239,6 +257,7 @@ async def run():
             if not LIVE:
                 # DRY — НИЧЕГО не отправляем, только показываем что отправили бы (вакансию НЕ помечаем seen — уйдёт при LIVE)
                 print(f"  [DRY ЛС→{to}] {category}/{title[:42]} (из @{channel}): {(letter or '')[:90]}")
+                _record_outreach(account, vid, channel, to, title, category, letter, "dry")
                 dm += 1
                 continue
             try:
@@ -247,6 +266,7 @@ async def run():
                 pgconn.bump_activity("tg_channels", 1, account=account)
                 pgconn.add_seen(f"tg_out_{account}", str(vid))
                 out_seen.add(str(vid))
+                _record_outreach(account, vid, channel, to, title, category, letter, "sent")
                 dm += 1
                 print(f"  [ЛС] написал {to} (из @{channel})")
             except Exception as e:
@@ -255,6 +275,8 @@ async def run():
     finally:
         if client:
             await client.disconnect()
+    pgconn.record_health("tg_channels", True,
+                         f"{'LIVE' if LIVE else 'DRY'}: откликов {dm}, оценено {evals}", account=account)
     print(f"tg_channels: готово — {'ЛС' if LIVE else 'DRY-совпадений'} {dm}, оценено {evals}")
 
 

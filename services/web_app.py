@@ -485,6 +485,36 @@ def _habr_apps(account: str, limit: int = 200) -> list:
         conn.close()
 
 
+def _tg_outreach_list(account: str, limit: int = 200) -> list:
+    """Реестр TG-откликов (кому/что написали по вакансиям из TG-каналов). status: dry|sent."""
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT contact, channel, title, category, status, created_at, letter "
+                        "FROM tg_outreach WHERE account=%s "
+                        "ORDER BY created_at DESC LIMIT %s", (account, limit))
+            return [{"contact": r[0] or "", "channel": r[1] or "", "title": r[2] or "",
+                     "category": r[3] or "", "status": r[4] or "dry",
+                     "at": (str(r[5])[:10] if r[5] else ""), "letter": r[6] or ""}
+                    for r in cur.fetchall()]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def _tg_outreach_count(account: str) -> int:
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM tg_outreach WHERE account=%s", (account,))
+            return int(cur.fetchone()[0])
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
 def _src_age(h, now) -> str:
     if not h or not h.get("ts"):
         return ""
@@ -569,6 +599,18 @@ def _source_health(account: str) -> list:
         out.append(row("Авто-задачи в Telegram", "off", "выключено", "", h_g))
     else:
         out.append(row("Авто-задачи в Telegram", *by_run(h_g), h_g))
+
+    # Telegram-отклики (рассылка по вакансиям из TG-каналов) — пока DRY (реально не пишем)
+    h_tc = pgconn.read_health("tg_channels", account)
+    if not cfg.get("tg_user_session"):
+        out.append(row("Telegram-отклики", "unlinked", "не подключён", "дай доступ: /connect в боте", None))
+    elif not pgconn.get_setting("feat.tg_channels", None, account):
+        out.append(row("Telegram-отклики", "off", "выключено", "", h_tc))
+    else:
+        st, lbl, det = by_run(h_tc)
+        if st == "ok" and lbl == "работает":
+            lbl, det = "работает (DRY)", "подбор без реальной отправки"
+        out.append(row("Telegram-отклики", st, lbl, det, h_tc))
     return out
 
 
@@ -757,6 +799,7 @@ async def _build_me(account: str, dfrom=None, dto=None) -> dict:
         "stats": {
             "funnel": funnel,
             "breakdown": _breakdown(counts) if has_cache else [],
+            "tg_outreach": await asyncio.to_thread(_tg_outreach_count, account),
         },
         "next_apply": _next_apply(
             flags[0],
@@ -994,6 +1037,13 @@ async def api_habr(account: str = None,
                    x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data, account)
     return {"applications": await asyncio.to_thread(_habr_apps, account)}
+
+
+@app.get("/api/tg_outreach")
+async def api_tg_outreach(account: str = None,
+                          x_init_data: str = Header(None, alias="X-Init-Data")):
+    account = await _auth(x_init_data, account)
+    return {"applications": await asyncio.to_thread(_tg_outreach_list, account)}
 
 
 @app.post("/api/getmatch/otp")

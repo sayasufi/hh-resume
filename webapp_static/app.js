@@ -51,9 +51,10 @@ function renderMe(d) {
   st.className = "pill " + (sk === "ok" ? "good" : sk === "off" ? "bad" : "warn");
   $("#p-name").textContent = p.name || "—";
   const bd = s.breakdown || [];
-  $("#breakdown").innerHTML = bd.length ? bd.map((b) =>
-    `<div class="stat"><div class="num">${b.value}</div><div class="lbl">${b.emoji} ${esc(b.label)}</div></div>`).join("")
-    : '<div class="empty">Нет данных за период</div>';
+  let bdHtml = bd.map((b) =>
+    `<div class="stat"><div class="num">${b.value}</div><div class="lbl">${b.emoji} ${esc(b.label)}</div></div>`).join("");
+  if (s.tg_outreach) bdHtml += `<div class="stat"><div class="num">${s.tg_outreach}</div><div class="lbl">✈️ TG-отклики</div></div>`;
+  $("#breakdown").innerHTML = bdHtml || '<div class="empty">Нет данных за период</div>';
   $("#next-apply").textContent = d.next_apply
     ? "⏱ Следующие обычные отклики: " + d.next_apply
     : "⏸ Обычные отклики на паузе — включи «Авто-отклики» в Функциях.";
@@ -439,8 +440,10 @@ if ($("#dlg-src")) $("#dlg-src").querySelectorAll("button").forEach((b) => {
     $("#src-hh").style.display = src === "hh" ? "" : "none";
     $("#src-getmatch").style.display = src === "getmatch" ? "" : "none";
     $("#src-habr").style.display = src === "habr" ? "" : "none";
+    $("#src-tg").style.display = src === "tg" ? "" : "none";
     if (src === "getmatch") loadGetmatchApps();  // свежие отклики (надёжно, не по тайму boot)
     if (src === "habr") loadHabrApps();
+    if (src === "tg") loadTgApps();
     hap("sel");
   };
 });
@@ -480,6 +483,38 @@ function renderHabrStats() { _statusRows($("#habr-stats"), $("#habr-empty"), HAB
 const loadHabrApps = () => api("/api/habr").then((r) => {
   HABR_APPS = r.applications || []; renderHabrApps(); renderHabrStats();
 }).catch(() => {});
+
+// ── TG-отклики (рассылка по вакансиям из Telegram-каналов; пока DRY) ──
+let TG_APPS = [];
+function renderTgApps() {
+  const box = $("#tg-apps"), cnt = $("#tg-count");
+  if (!box) return;
+  if (cnt) cnt.textContent = TG_APPS.length;
+  if (!TG_APPS.length) {
+    box.innerHTML = '<div class="empty">Пока нет TG-откликов. Включи «Telegram-отклики» в Настройках — бот подберёт вакансии из каналов и покажет, кому написал бы (в DRY реально не пишем).</div>';
+    return;
+  }
+  box.innerHTML = '<div class="list">' + TG_APPS.map((a) => {
+    const sub = [a.channel ? "@" + a.channel : "", a.category, a.at].filter(Boolean).join(" · ");
+    const st = a.status === "sent"
+      ? '<span class="gm-st ok">отправлено</span>'
+      : '<span class="gm-st wait">DRY</span>';
+    const uname = (a.contact || "").replace(/^@/, "");
+    return '<div class="cell act"><div class="dlg-main">'
+      + `<div class="dlg-title">${esc(a.contact || "—")} ${st}</div>`
+      + `<div class="dlg-emp">${esc(a.title)}</div>`
+      + `<div class="dlg-date">${esc(sub)}</div></div>`
+      + (uname ? `<button class="abtn open" data-url="https://t.me/${esc(uname)}">↗</button>` : "")
+      + "</div>";
+  }).join("") + "</div>";
+  box.querySelectorAll(".abtn[data-url]").forEach((el) => {
+    el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
+  });
+}
+const loadTgApps = () => api("/api/tg_outreach").then((r) => {
+  TG_APPS = r.applications || []; renderTgApps();
+}).catch(() => {});
+
 if ($("#habr-filter")) $("#habr-filter").querySelectorAll(".chip").forEach((c) => {
   c.onclick = () => {
     $("#habr-filter").querySelectorAll(".chip").forEach((x) => x.classList.remove("active"));

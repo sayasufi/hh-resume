@@ -22,6 +22,7 @@ from hh_applicant_tool.storage import pgconn
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
+from telethon.tl.types import DocumentAttributeFilename
 
 LIVE = "--live" in sys.argv
 DRY = not LIVE
@@ -34,9 +35,13 @@ TME = re.compile(r"t\.me/([A-Za-z0-9_]{4,32})")
 SYS = (
     "Тебе дают пост из Telegram-канала с IT-вакансиями. Оцени его относительно опыта кандидата ниже.\n"
     "Верни СТРОГО три строки:\n"
-    "MATCH: да — если это ОДНА конкретная вакансия, подходящая кандидату по стеку/уровню; "
-    "нет — если это дайджест из многих вакансий, реклама/курс/инфопродукт, не про конкретную работу, "
-    "или вакансия не по профилю.\n"
+    "MATCH: да — если это ОДНА конкретная вакансия и кандидат подходит по ОСНОВНОМУ языку/направлению "
+    "(например backend Python) и уровню. Узкий ДОМЕН вакансии (AI/ML, финтех, gamedev, e-com и т.п.) "
+    "может НЕ совпадать с прошлым опытом кандидата — это ОК, домен вторичен. "
+    "нет — если: дайджест из многих вакансий, реклама/курс/инфопродукт, не про конкретную работу; "
+    "ИЛИ другой основной язык/стек (не его); ИЛИ другая профессия (для backend-разработчика НЕ подходят "
+    "чисто Data Scientist/ML-research, аналитик, QA, дизайн, менеджмент); ИЛИ уровень явно не тянется "
+    "(требуют существенно больше опыта, чем у кандидата).\n"
     "CONTACT: @username — если в посте есть прямой Telegram-контакт рекрутёра/нанимающего для отклика "
     "(«пишите @...», «резюме @...»); иначе НЕТ. НЕ бери @каналы/@ботов и не выдумывай.\n"
     "ПИСЬМО: <если MATCH=да и есть CONTACT — ОЧЕНЬ короткое деловое сообщение в ОДНУ строку: начни РОВНО с "
@@ -122,11 +127,11 @@ async def _hh_resume_url(cfg, account):
 
 
 async def _hh_resume_pdf(cfg, account):
-    """Скачать PDF резюме с hh -> путь к файлу (или None, если не вышло)."""
+    """Скачать PDF резюме с hh -> (путь, имя_файла=«Фамилия Имя Отчество.pdf») или (None, None)."""
     rid = pgconn.get_setting("apply.resume_id", account=account)
     tok = (cfg.get("token") or {})
     if not (rid and tok.get("access_token")):
-        return None
+        return None, None
     api = ApiClient(access_token=tok["access_token"], refresh_token=tok.get("refresh_token"),
                     access_expires_at=tok.get("access_expires_at"),
                     user_agent=generate_android_useragent(), refresh_hook=pgconn.locked_token_refresh)
@@ -134,7 +139,9 @@ async def _hh_resume_pdf(cfg, account):
         r = await api.get(f"/resumes/{rid}")
         url = (((r.get("download") or {}).get("pdf") or {}).get("url"))
         if not url:
-            return None
+            return None, None
+        fio = " ".join(x for x in (r.get("last_name"), r.get("first_name"), r.get("middle_name")) if x).strip()
+        fname = (fio + ".pdf") if fio else "resume.pdf"
         import httpx
         async with httpx.AsyncClient(timeout=40, follow_redirects=True) as h:
             resp = await h.get(url, headers={"Authorization": f"Bearer {tok['access_token']}",
@@ -142,15 +149,15 @@ async def _hh_resume_pdf(cfg, account):
             resp.raise_for_status()
             data = resp.content
         if not data or len(data) < 1000:  # подозрительно мелкий -> не PDF
-            return None
+            return None, None
         path = f"/tmp/resume_{account}.pdf"
         with open(path, "wb") as f:
             f.write(data)
-        print(f"  [PDF] резюме скачано ({len(data)//1024} КБ)")
-        return path
+        print(f"  [PDF] резюме скачано ({len(data)//1024} КБ) -> {fname}")
+        return path, fname
     except Exception as e:
         print(f"  [PDF] не скачалось: {type(e).__name__}")
-        return None
+        return None, None
     finally:
         await api.aclose()
 
@@ -373,7 +380,7 @@ async def run():
         return
 
     hh_url = await _hh_resume_url(cfg, account)
-    pdf_path = await _hh_resume_pdf(cfg, account)   # PDF резюме для прикрепления (LIVE)
+    pdf_path, pdf_name = await _hh_resume_pdf(cfg, account)   # PDF резюме + имя файла (ФИО) для LIVE
     done_contacts = _outreach_contacts(account)     # кому уже писали -> дедуп по рекрутёру (антиспам)
     # ЛС рекрутёру шлём ТОЛЬКО в LIVE. В DRY сессию кандидата вообще не подключаем —
     # гарантия, что эйчарам ничего не пишется, пока не разрешат.
@@ -421,8 +428,9 @@ async def run():
                 continue
             try:
                 ent = await client.get_entity(to)
-                if pdf_path:  # прикрепляем PDF-резюме, письмо — подписью
-                    await client.send_file(ent, pdf_path, caption=letter, force_document=True)
+                if pdf_path:  # прикрепляем PDF-резюме (имя файла = ФИО), письмо — подписью
+                    await client.send_file(ent, pdf_path, caption=letter, force_document=True,
+                                           attributes=[DocumentAttributeFilename(pdf_name)])
                 else:
                     await client.send_message(ent, letter + (f"\nМоё резюме: {hh_url}" if hh_url else ""), link_preview=False)
                 pgconn.bump_activity("tg_channels", 1, account=account)

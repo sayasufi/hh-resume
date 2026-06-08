@@ -511,16 +511,21 @@ function renderTgApps() {
       ? '<span class="gm-st ok">отправлено</span>'
       : '<span class="gm-st wait">DRY</span>';
     const uname = (a.contact || "").replace(/^@/, "");
+    const vacLink = a.url ? ` · <a class="vac-open" href="#" data-vurl="${esc(a.url)}" style="color:var(--accent);text-decoration:none">открыть пост ↗</a>` : "";
     return '<div class="cell act tg-out"><div class="dlg-main act-text">'
       + `<div class="dlg-title">${esc(a.contact || "—")} ${st}</div>`
       + `<div class="dlg-emp">${esc(a.title)}</div>`
-      + `<div class="dlg-date">${esc(sub)} · нажми — текст письма</div>`
-      + `<div class="tg-letter">📎 PDF-резюме + письмо:<br>${esc(a.letter || "(без письма)")}</div></div>`
+      + `<div class="dlg-date">${esc(sub)} · нажми — вакансия + письмо</div>`
+      + `<div class="tg-letter"><b>Вакансия</b>${vacLink}<br><span class="vac-txt" style="display:block;margin-top:4px;max-height:220px;overflow:auto">${esc(a.vac_text || "(текст вакансии не сохранён)")}</span>`
+      + `<br><br><b>📎 Письмо (с резюме-PDF)</b><br>${esc(a.letter || "(без письма)")}</div></div>`
       + (uname ? `<button class="abtn open" data-url="https://t.me/${esc(uname)}">↗</button>` : "")
       + "</div>";
   }).join("") + "</div>";
   box.querySelectorAll(".abtn[data-url]").forEach((el) => {
     el.onclick = (e) => { e.stopPropagation(); hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
+  });
+  box.querySelectorAll(".vac-open[data-vurl]").forEach((el) => {
+    el.onclick = (e) => { e.preventDefault(); e.stopPropagation(); hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.vurl); else window.open(el.dataset.vurl, "_blank"); };
   });
   box.querySelectorAll(".tg-out .act-text").forEach((el) => {
     el.onclick = () => { el.closest(".tg-out").classList.toggle("expanded"); hap("sel"); };

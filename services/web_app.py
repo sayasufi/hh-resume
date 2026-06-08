@@ -492,16 +492,21 @@ def _habr_apps(account: str, limit: int = 200) -> list:
 
 
 def _tg_outreach_list(account: str, limit: int = 200) -> list:
-    """Реестр TG-откликов (кому/что написали по вакансиям из TG-каналов). status: dry|sent."""
+    """Реестр TG-откликов (кому/что написали). + ссылка на пост вакансии и её текст (из tg_vacancies),
+    чтобы видеть, на что именно откликнулись. status: dry|sent."""
     conn = pgconn.connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT contact, channel, title, category, status, created_at, letter "
-                        "FROM tg_outreach WHERE account=%s "
-                        "ORDER BY created_at DESC LIMIT %s", (account, limit))
+            cur.execute(
+                "SELECT o.contact, o.channel, o.title, o.category, o.status, o.created_at, o.letter, "
+                "COALESCE(NULLIF(v.post_url,''), 'https://t.me/' || o.channel || '/' || v.post_id::text), "
+                "left(v.text, 1500) "
+                "FROM tg_outreach o LEFT JOIN tg_vacancies v ON v.id = o.vac_id "
+                "WHERE o.account=%s ORDER BY o.created_at DESC LIMIT %s", (account, limit))
             return [{"contact": r[0] or "", "channel": r[1] or "", "title": r[2] or "",
                      "category": r[3] or "", "status": r[4] or "dry",
-                     "at": (str(r[5])[:10] if r[5] else ""), "letter": r[6] or ""}
+                     "at": (str(r[5])[:10] if r[5] else ""), "letter": r[6] or "",
+                     "url": r[7] or "", "vac_text": r[8] or ""}
                     for r in cur.fetchall()]
     except Exception:
         return []

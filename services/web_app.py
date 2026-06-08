@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from hh_applicant_tool.api.client import ApiClient
@@ -1095,7 +1095,21 @@ async def healthz():
 
 @app.get("/")
 async def index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    # инжектим ?v=<mtime> к app.js/style.css — Telegram WebApp кэширует статику даже с no-cache,
+    # смена URL заставляет перекачать свежий файл при каждом деплое.
+    path = os.path.join(STATIC_DIR, "index.html")
+    try:
+        html = open(path, encoding="utf-8").read()
+        def _ver(fn):
+            try:
+                return str(int(os.path.getmtime(os.path.join(STATIC_DIR, fn))))
+            except Exception:
+                return "1"
+        html = html.replace('/app.js"', f'/app.js?v={_ver("app.js")}"')
+        html = html.replace('/style.css"', f'/style.css?v={_ver("style.css")}"')
+        return HTMLResponse(html)
+    except Exception:
+        return FileResponse(path)
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR), name="static")

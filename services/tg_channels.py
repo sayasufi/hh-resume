@@ -59,7 +59,7 @@ async def _decide(oa, resume, post, greet="Здравствуйте"):
         chat = ChatOpenAI(token=oa["token"], model=oa.get("model"),
                           completion_endpoint=oa.get("completion_endpoint"),
                           system_prompt=SYS.format(resume=resume[:3000], greet=greet),
-                          temperature=0.4, max_completion_tokens=320)
+                          temperature=0.1, max_completion_tokens=320)
         t = ((await chat.send_message(post[:2500])) or "").strip()
     except Exception as e:
         print(f"  LLM err {type(e).__name__}")

@@ -604,40 +604,32 @@ def _source_health(account: str) -> list:
     else:
         out.append(row("Habr Career", *by_run(h_hb), h_hb))
 
+    # Общая TG-userbot-сессия — фундамент и для «Авто-задач», и для «Telegram-откликов».
+    # Если она слетела/во флуде, обе фичи встают МОЛЧА (джоб выходит рано = «успех»), поэтому
+    # подмешиваем статус сессии прямо в эти строки — отдельной строкой-сессией не плодим источники.
+    h_sess = pgconn.read_health("tg_session", account) if cfg.get("tg_user_session") else None
+    sess_bad = bool(h_sess and h_sess.get("ts") and not h_sess.get("ok"))
+    sess_reason = (h_sess.get("detail") or "проблема с сессией") if sess_bad else ""
+
     h_g = pgconn.read_health("giga", account)
     if not cfg.get("tg_user_session"):
         out.append(row("Авто-задачи в Telegram", "unlinked", "не подключён", "дай доступ: /connect в боте", None))
     elif not pgconn.get_setting("feat.giga", None, account):
         out.append(row("Авто-задачи в Telegram", "off", "выключено", "", h_g))
+    elif sess_bad:
+        out.append(row("Авто-задачи в Telegram", "down", "Telegram-сессия недоступна", sess_reason, h_sess))
     else:
         out.append(row("Авто-задачи в Telegram", *by_run(h_g), h_g))
 
-    # Telegram-отклики (рассылка по вакансиям из TG-каналов) — пока DRY (реально не пишем)
     h_tc = pgconn.read_health("tg_channels", account)
     if not cfg.get("tg_user_session"):
         out.append(row("Telegram-отклики", "unlinked", "не подключён", "дай доступ: /connect в боте", None))
     elif not pgconn.get_setting("feat.tg_channels", None, account):
         out.append(row("Telegram-отклики", "off", "выключено", "", h_tc))
+    elif sess_bad:
+        out.append(row("Telegram-отклики", "down", "Telegram-сессия недоступна", sess_reason, h_sess))
     else:
-        st, lbl, det = by_run(h_tc)
-        if st == "ok" and lbl == "работает":
-            lbl, det = "работает (DRY)", "подбор без реальной отправки"
-        out.append(row("Telegram-отклики", st, lbl, det, h_tc))
-
-    # Telegram-сессия (userbot) — общий фундамент для «Авто-задач» и «Telegram-откликов»:
-    # если словит флуд/бан, обе фичи встанут молча, поэтому отдельный health + алерт.
-    if cfg.get("tg_user_session"):
-        h_sess = pgconn.read_health("tg_session", account)
-        if not h_sess or not h_sess.get("ts"):
-            out.append(row("Telegram-сессия", "ok", "включено", "ждёт первой проверки", h_sess))
-        elif not h_sess.get("ok"):
-            out.append(row("Telegram-сессия", "down", "проблема с сессией",
-                           (h_sess.get("detail") or "")[:80], h_sess))
-        elif (now - h_sess["ts"]) > 24 * 3600:
-            out.append(row("Telegram-сессия", "warn", "давно не проверялась",
-                           "probe-джоб не запускался", h_sess))
-        else:
-            out.append(row("Telegram-сессия", "ok", h_sess.get("detail") or "жива", "", h_sess))
+        out.append(row("Telegram-отклики", *by_run(h_tc), h_tc))
     return out
 
 

@@ -34,7 +34,8 @@ SYS = (
   '{"is_vacancy":true|false,"category":"<один из: ' + ",".join(CATS) + '>",'
   '"title":"<должность кратко>","contact":"<@username/t.me рекрутёра, иначе пусто>",'
   '"salary":"<если есть>","remote":true|false,'
-  '"region":"<город или страна вакансии: Москва/Россия/Грузия/Казахстан и т.п.; \'удалёнка\' если remote без города; \'релокация\' если переезд; пусто если не указан>"}\n'
+  '"region":"<город или страна вакансии: Москва/Россия/Грузия/Казахстан и т.п.; \'удалёнка\' если remote без города; \'релокация\' если переезд; пусто если не указан>",'
+  '"langs":[<до 3 языков программирования, которые требует вакансия, ГЛАВНЫЙ первым, lowercase в кавычках из: "python","go","java","javascript","typescript","c++","c#","rust","php","kotlin","swift","ruby","scala","sql"; [] если язык не указан или роль не про конкретный язык>]}\n'
   "is_vacancy=false если это болтовня/вопрос/резюме/реклама/не вакансия. Также is_vacancy=false если роль НЕ из IT/диджитал (оператор, курьер, продавец, бьюти, простые онлайн-задания, продажи не в IT)."
 )
 
@@ -77,6 +78,25 @@ def _bad_contact(contact, channels):
     """Контакт НЕ рекрутёр-человек: системный хэндл Telegram или известный канал из каталога."""
     u=(contact or "").lstrip("@").lower()
     return (not u) or u in SYS_HANDLES or u in channels or u.endswith("bot")
+
+
+_LANG_ALIAS = {"js": "javascript", "ts": "typescript", "golang": "go", "csharp": "c#",
+               "cpp": "c++", "node": "javascript", "nodejs": "javascript", "node.js": "javascript",
+               "objc": "objective-c", "postgresql": "sql", "postgres": "sql"}
+_KNOWN_LANGS = {"python", "go", "java", "javascript", "typescript", "c++", "c#", "c", "rust",
+                "php", "kotlin", "swift", "ruby", "scala", "sql", "elixir", "dart", "r",
+                "perl", "lua", "objective-c", "haskell", "clojure", "groovy", "solidity", "bash"}
+
+
+def _norm_langs(raw):
+    """LLM-список языков -> чистый canonical lowercase (главный первым), макс 5."""
+    out = []
+    for x in (raw or []):
+        s = str(x).strip().lower().strip(".,;:")
+        s = _LANG_ALIAS.get(s, s)
+        if s in _KNOWN_LANGS and s not in out:
+            out.append(s)
+    return out[:5]
 
 
 async def main():
@@ -137,10 +157,10 @@ async def main():
             if _bad_contact(contact, known): contact=""  # канал/системный хэндл — не рекрутёр
             if not contact: continue  # без контакта не храним
             catg=d.get("category") if d.get("category") in CATS else cat_of.get(g.lower(),"general")
-            cur.execute("INSERT INTO tg_vacancies (channel,post_id,posted_at,text,is_vacancy,category,title,contact,contact_type,salary,remote,region,post_url) "
-              "VALUES (%s,%s,%s,%s,true,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (channel,post_id) DO NOTHING",
+            cur.execute("INSERT INTO tg_vacancies (channel,post_id,posted_at,text,is_vacancy,category,title,contact,contact_type,salary,remote,region,post_url,langs) "
+              "VALUES (%s,%s,%s,%s,true,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (channel,post_id) DO NOTHING",
               (g,m.id,m.date,text[:4000],catg,(d.get("title") or "")[:200],contact,("author" if au else ("dm" if contact else "none")),
-               (d.get("salary") or "")[:100],bool(d.get("remote")),(d.get("region") or "")[:60],f"https://t.me/{g}/{m.id}"))
+               (d.get("salary") or "")[:100],bool(d.get("remote")),(d.get("region") or "")[:60],f"https://t.me/{g}/{m.id}",_norm_langs(d.get("langs"))))
             stored+=1
             if stored%25==0: conn.commit()
         await asyncio.sleep(0.5)

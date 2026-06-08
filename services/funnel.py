@@ -65,9 +65,11 @@ async def main():
         return c.get(k, 0)
 
     lines = [
-        f"Воронка: {total} откликов · 💬 в работе {fnum(by_state,'response')} · "
-        f"🎯 интервью {fnum(by_state,'interview')} · 📩 приглашений "
-        f"{fnum(by_state,'invitation')} · ❌ отказов {fnum(by_state,'discard')}"
+        f"Воронка — {total} откликов",
+        f"💬 ответили {fnum(by_state,'response')} · 🎯 интервью {fnum(by_state,'interview')} · "
+        f"📩 приглашений {fnum(by_state,'invitation')} · ❌ отказов {fnum(by_state,'discard')}",
+        "",
+        "По резюме (🎯 интервью · 📩 приглаш · 💬 ответы · ❌ отказы):",
     ]
     # по резюме, сверху — где больше «горячих» (интервью+приглашения)
     ranked = sorted(
@@ -75,9 +77,12 @@ async def main():
         key=lambda kv: -(fnum(kv[1], "interview") + fnum(kv[1], "invitation")),
     )
     for rid, c in ranked:
-        t = (titles.get(rid) or str(rid))[:32]
+        t = titles.get(rid) or ("без резюме" if rid is None else f"резюме {str(rid)[:8]}")
+        t = " ".join(t.split())  # схлопнуть переносы/двойные пробелы
+        if len(t) > 46:
+            t = t[:45].rstrip() + "…"
         lines.append(
-            f"  • {t}: {sum(c.values())} → 🎯{fnum(c,'interview')} "
+            f"• {t}: {sum(c.values())} → 🎯{fnum(c,'interview')} "
             f"📩{fnum(c,'invitation')} 💬{fnum(c,'response')} ❌{fnum(c,'discard')}"
         )
     text = "\n".join(lines)

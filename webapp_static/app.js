@@ -103,12 +103,16 @@ function renderDialogs() {
   $("#dlg-count").textContent = arr.length;
   if (SORT === "status") arr = [...arr].sort((a, b) => a.rank - b.rank);
   if (!arr.length) { box.innerHTML = '<div class="empty">Ничего не найдено</div>'; return; }
-  box.innerHTML = '<div class="list">' + arr.map((d) =>
-    `<div class="cell dlg tap" data-id="${esc(d.id)}"><div class="dlg-main">`
+  box.innerHTML = '<div class="list">' + arr.map((d) => {
+    const sc = (d.state_id || "").startsWith("discard") ? "st-bad"
+      : ["interview", "invitation", "hired"].includes(d.state_id) ? "st-good"
+      : d.state_id === "response" ? "st-info" : "";
+    return `<div class="cell dlg tap ${sc}" data-id="${esc(d.id)}"><div class="dlg-main">`
     + `<div class="dlg-title">${esc(d.title)}</div>`
     + `<div class="dlg-emp">${esc(d.employer)}</div>`
     + `<div class="dlg-st">${d.emoji} ${esc(d.state)}${d.has_updates ? ' <span class="dot"></span>' : ""}</div></div>`
-    + `<div class="dlg-side"><span class="dlg-date">${esc(d.updated)}</span><span class="chev">›</span></div></div>`).join("") + "</div>";
+    + `<div class="dlg-side"><span class="dlg-date">${esc(d.updated)}</span><span class="chev">›</span></div></div>`;
+  }).join("") + "</div>";
   box.querySelectorAll(".dlg").forEach((el) => { el.onclick = () => openDialog(el.dataset.id); });
 }
 $("#dlg-filter").querySelectorAll(".chip").forEach((c) => {

@@ -23,6 +23,8 @@ JOBS: list[dict] = [
          feature="browse", cron="*/7 * * * *",   jitter=120,  tags=[],          timeout=180),
     dict(name="followup-stalled", command=["python", "/app/services/followup_stalled.py"],
          feature="reply",  cron="45 9-18/3 * * *",  jitter=200,  tags=[],          timeout=600),
+    dict(name="views-snapshot", command=["python", "/app/services/views_snapshot.py"],
+         feature=None,     cron="7 * * * *",       jitter=120,  tags=[],          timeout=300),
     dict(name="apply-similar",  command=["python", "-m", "hh_applicant_tool", "apply-similar"],
          feature="apply",  cron="0 5-19 * * *",     jitter=300,  tags=["llm"],     timeout=1800),
     dict(name="notify-actions", command=["python", "/app/services/notify_actions.py"],

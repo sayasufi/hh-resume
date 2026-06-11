@@ -5,7 +5,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   gcc \
   libc6-dev \
   procps \
-  cron \
   dos2unix \
   tzdata \
   less \
@@ -26,28 +25,16 @@ COPY pyproject.toml poetry.lock* README.md /app/
 # И ставим его
 RUN pip install --no-cache-dir -e '.[playwright,pillow]'
 
-# Ставим зависимости хромиума и сам хромиум пользователю docker
+# Ставим зависимости хромиума и сам хромиум — И для root (джобы/оркестратор бегут как root),
+# И для docker. Без root-копии apply_tests/form_fill не находят браузер (Executable doesn't exist).
 RUN playwright install-deps chromium && \
+  playwright install chromium && \
   su docker -c "playwright install chromium"
 
 # Каталог config создаётся пустым; конфиг/секреты НЕ бакаются в образ —
 # всё состояние в Postgres, а логи пишутся в bind-mount /app/config.
 RUN mkdir -p /app/config
 
-COPY crontab /app/crontab
-COPY startup.sh /app/startup.sh
 
-# Настройка крона
-RUN touch /var/log/cron.log && chown docker:docker /var/log/cron.log && \
-  dos2unix /app/crontab && \
-  chmod +x /app/startup.sh && \
-  chmod 0644 /app/crontab && \
-  crontab -u docker /app/crontab
 
-# Запускаем крон и читаем лог
-# cron не видит переменные окружения, переданные главному процессу, точнее
-# он начинает новую сессию, где тот же $CONFIG_DIR пуст
-CMD printenv | grep -E 'CONFIG_DIR|HH_PROFILE_ID|HH_DB_DSN|HH_DB_SCHEMA' >> /etc/environment && \
-  chown -R docker:docker /app/config && \
-  cron && \
-  tail -f /var/log/cron.log
+# CMD задаётся в docker-compose.yml для каждого сервиса (web/listener/orchestrator)

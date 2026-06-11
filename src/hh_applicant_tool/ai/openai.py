@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import KW_ONLY, dataclass
 
@@ -9,6 +10,127 @@ logger = logging.getLogger(__package__)
 
 
 DEFAULT_COMPLETION_ENDPOINT = "https://api.openai.com/v1/chat/completions"
+
+# --- глобальный (на весь сервис) лимит одновременных LLM-запросов ---
+# Кросс-процессный: все процессы/контейнеры/flow-раны делят N слотов через
+# Postgres advisory-locks. Число слотов берётся из настройки llm.max_concurrent
+# (_global, дефолт 8). Fail-open: если БД недоступна — НЕ блокируем LLM.
+_LLM_NS = 919191  # namespace для pg_advisory_lock (int4)
+_WAIT_TIMEOUT = 90.0  # сколько ждать свободный слот, потом идём без лимита
+
+
+def _max_concurrent() -> int:
+    try:
+        from hh_applicant_tool.storage import pgconn
+        return max(1, int(pgconn.get_setting("llm.max_concurrent", "8", account="_global")))
+    except Exception:
+        return 8
+
+
+def _sync_acquire(n):
+    """Возврат: conn (с ._llm_slot) если слот взят; 'busy' если все заняты; None при ошибке БД (fail-open)."""
+    try:
+        from hh_applicant_tool.storage import pgconn
+        conn = pgconn.connect()
+    except Exception:
+        return None
+    try:
+        cur = conn.cursor()
+        for slot in range(n):
+            cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (_LLM_NS, slot))
+            if cur.fetchone()[0]:
+                conn._llm_slot = slot
+                return conn
+        conn.close()
+        return "busy"
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return None
+
+
+def _sync_release(conn):
+    try:
+        slot = getattr(conn, "_llm_slot", None)
+        if slot is not None:
+            cur = conn.cursor()
+            cur.execute("SELECT pg_advisory_unlock(%s, %s)", (_LLM_NS, slot))
+            conn.commit()
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+async def _acquire_llm_slot():
+    """Ждёт свободный слот. Возврат: conn-объект (освободить через _sync_release) либо None (без лимита)."""
+    try:
+        n = await asyncio.to_thread(_max_concurrent)
+        loop = asyncio.get_event_loop()
+        start = loop.time()
+        waited = False
+        while True:
+            res = await asyncio.to_thread(_sync_acquire, n)
+            if res is None:            # БД недоступна -> fail-open
+                return None
+            if res == "busy":
+                if loop.time() - start > _WAIT_TIMEOUT:
+                    logger.warning("LLM-лимит: ждали слот >%ss — идём без лимита", int(_WAIT_TIMEOUT))
+                    return None
+                if not waited:
+                    logger.debug("LLM-лимит: все %s слотов заняты, ждём", n)
+                    waited = True
+                await asyncio.sleep(0.3)
+                continue
+            return res                 # conn со слотом
+    except Exception:
+        return None
+
+
+# --- роутинг провайдера LLM: часть трафика в OpenRouter, при исчерпании дневного лимита
+#     или ошибке OR — фолбэк на локалку. Всё fail-open: любая ошибка -> локалка. ---
+
+def _pick_provider():
+    """Per-call: первый НЕисчерпанный ключ OpenRouter (по or.daily_limit на КАЖДЫЙ ключ),
+    с долей or.share. None -> локалка (OR не настроен / все ключи исчерпаны / выпала локалка).
+    Возвращает {token, slot, model, endpoint}; slot нужен, чтобы крутить счётчик именно этого ключа."""
+    try:
+        import random
+        from hh_applicant_tool.storage import pgconn
+        orc = pgconn.or_config()
+        tokens = orc.get("tokens") or []
+        if not (tokens and orc.get("model")):
+            return None
+        if random.random() >= orc.get("share", 0.5):
+            return None
+        lim = orc["daily_limit"]
+        for slot, tok in enumerate(tokens, start=1):
+            if pgconn.or_count_today(slot) < lim:
+                return {"token": tok, "slot": slot, "model": orc["model"], "endpoint": orc["endpoint"]}
+        return None  # все ключи исчерпаны на сегодня
+    except Exception:
+        return None
+
+
+def _orbump(slot: int = 1):
+    try:
+        from hh_applicant_tool.storage import pgconn
+        return pgconn.or_bump(slot)
+    except Exception:
+        return 0
+
+
+def _orexhaust(slot: int = 1):
+    try:
+        from hh_applicant_tool.storage import pgconn
+        pgconn.or_exhaust(slot)
+    except Exception:
+        pass
 
 
 class OpenAIError(AIError):
@@ -57,38 +179,65 @@ class ChatOpenAI:
             self._resolved_model = None
         return self._resolved_model
 
+    async def _post_chat(self, client, messages, token, model, endpoint, max_param):
+        body = {
+            "messages": messages,
+            "temperature": self.temperature,
+            max_param: self.max_completion_tokens,
+            "model": model,
+        }
+        response = await client.post(
+            endpoint, json=body, headers={"Authorization": f"Bearer {token}"}
+        )
+        response.raise_for_status()
+        data = response.json()
+        if "error" in data:
+            raise OpenAIError(data["error"]["message"])
+        return data["choices"][0]["message"]["content"]
+
     async def send_message(self, message: str) -> str:
         messages = []
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
         messages.append({"role": "user", "content": message})
 
-        payload = {
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_completion_tokens": self.max_completion_tokens,
-        }
-
+        _slot = await _acquire_llm_slot()  # глобальный лимит одновременных запросов
         try:
-            async with httpx.AsyncClient(
-                proxy=self.proxy, timeout=self.timeout
-            ) as client:
-                model = await self._resolve_model(client)
-                if not model:
-                    raise OpenAIError(
-                        "LLM недоступна: не удалось определить модель "
-                        "(vLLM пуст/недоступен)"
-                    )
-                payload["model"] = model
-                response = await client.post(
-                    self.completion_endpoint,
-                    json=payload,
-                    headers=self._default_headers(),
-                )
-                response.raise_for_status()
-                data = response.json()
-            if "error" in data:
-                raise OpenAIError(data["error"]["message"])
-            return data["choices"][0]["message"]["content"]
-        except httpx.HTTPError as ex:
-            raise OpenAIError(f"Network error: {ex}") from ex
+            try:
+                async with httpx.AsyncClient(
+                    proxy=self.proxy, timeout=self.timeout
+                ) as client:
+                    provider = await asyncio.to_thread(_pick_provider)
+                    if provider:  # часть трафика -> OpenRouter (пока дневной лимит не исчерпан)
+                        try:
+                            await asyncio.to_thread(_orbump, provider["slot"])
+                            _out = await self._post_chat(
+                                client, messages, provider["token"],
+                                provider["model"], provider["endpoint"], "max_tokens")
+                            if _out and _out.strip():
+                                return _out
+                            # пустой content (reasoning-модель/обрезка) — не отдаём мусор, фолбэк
+                            logger.warning("OpenRouter вернул пустой content — фолбэк на локалку")
+                        except httpx.HTTPStatusError as ex:
+                            if ex.response is not None and ex.response.status_code == 429:
+                                await asyncio.to_thread(_orexhaust, provider["slot"])  # этот ключ исчерпан; след. вызов возьмёт другой
+                            logger.warning("OpenRouter %s — фолбэк на локалку",
+                                           getattr(ex.response, "status_code", "?"))
+                        except Exception as ex:
+                            logger.warning("OpenRouter ошибка (%s) — фолбэк на локалку",
+                                           type(ex).__name__)
+                    # локалка: выпало на неё / OR не настроен / исчерпан / упал
+                    model = await self._resolve_model(client)
+                    if not model:
+                        raise OpenAIError(
+                            "LLM недоступна: не удалось определить модель "
+                            "(vLLM пуст/недоступен)"
+                        )
+                    return await self._post_chat(
+                        client, messages, self.token, model,
+                        self.completion_endpoint, "max_completion_tokens")
+            except httpx.HTTPError as ex:
+                raise OpenAIError(f"Network error: {ex}") from ex
+        finally:
+            if _slot is not None:
+                await asyncio.to_thread(_sync_release, _slot)

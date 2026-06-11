@@ -26,6 +26,8 @@ cryptography = "^44.0"
 # Mini App бэкенд (профиль/статистика/тумблеры)
 fastapi = "^0.115"
 uvicorn = "^0.34"
+# Оркестратор периодических задач (расписания, ретраи, UI)
+prefect = "^3.1"
 # poetry add playwright --optional
 playwright = { version = "^1.57.0", optional = true }
 # Он не работает или устаревший

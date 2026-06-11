@@ -26,11 +26,17 @@ class Operation(BaseOperation):
         pass
 
     async def run(self, tool: HHApplicantTool) -> None:
-        if tool.api_client.is_access_expired:
+        ac = tool.api_client
+        # Аккаунт без hh-токена (напр. аккаунт-краулер) — обновлять нечего. Выходим ЧИСТО
+        # (rc=0), а не падаем rc=1 и не шумим в логах оркестратора.
+        if not (getattr(ac, "access_token", None) or getattr(ac, "refresh_token", None)):
+            print("ℹ️ Нет hh-токена — обновлять нечего (не hh-аккаунт).")
+            return
+        if ac.is_access_expired:
             # refresh_access_token идёт через locked_token_refresh (advisory-lock):
             # он сам сохраняет токен в PG под локом. save_token — фолбэк для пути
             # без хука; его False здесь означает «уже сохранено», а не ошибку (#7).
-            await tool.api_client.refresh_access_token()
+            await ac.refresh_access_token()
             tool.save_token()
             print("✅ Токен успешно обновлен.")
         else:

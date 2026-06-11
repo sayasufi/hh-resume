@@ -12,6 +12,20 @@ import os
 
 import psycopg
 
+from . import _cfgmap as _M  # единый маппинг legacy-ключей -> нормализованные таблицы
+
+
+def _users_set(cur, acc, col, value, jsonb=False):
+    """Upsert одной колонки users (создаёт строку юзера при необходимости)."""
+    import json as _json
+    val = _json.dumps(value, ensure_ascii=False) if (jsonb and value is not None) else value
+    cast = "::jsonb" if jsonb else ""
+    cur.execute(
+        f"INSERT INTO users(account, {col}) VALUES (%s, %s{cast}) "
+        f"ON CONFLICT(account) DO UPDATE SET {col}=excluded.{col}, updated_at=now()",
+        (acc, val),
+    )
+
 TABLES_DDL = """
 CREATE TABLE IF NOT EXISTS employers (
     id bigint PRIMARY KEY, name text NOT NULL, type text, description text,
@@ -36,9 +50,14 @@ CREATE TABLE IF NOT EXISTS vacancies (
     professional_roles text, alternate_url text
 );
 CREATE TABLE IF NOT EXISTS negotiations (
-    id bigint PRIMARY KEY, state text NOT NULL, vacancy_id bigint NOT NULL,
-    employer_id bigint, chat_id bigint NOT NULL, resume_id text,
+    id bigint PRIMARY KEY, account text, state text NOT NULL, vacancy_id bigint NOT NULL,
+    employer_id bigint, chat_id bigint, resume_id text,
     created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS hh_apps (
+    account text NOT NULL, vacancy_id bigint NOT NULL, resume_id text,
+    used_ai boolean, letter_len int, model text,
+    created_at timestamptz DEFAULT now(), PRIMARY KEY (account, vacancy_id)
 );
 CREATE TABLE IF NOT EXISTS resumes (
     id text PRIMARY KEY, title text NOT NULL, url text, alternate_url text,
@@ -50,10 +69,6 @@ CREATE TABLE IF NOT EXISTS resumes (
 CREATE TABLE IF NOT EXISTS settings (
     account text NOT NULL DEFAULT '', key text NOT NULL, value text NOT NULL,
     PRIMARY KEY (account, key)
-);
-CREATE TABLE IF NOT EXISTS app_config (
-    account text NOT NULL DEFAULT '', key text NOT NULL, value jsonb NOT NULL,
-    updated_at timestamptz DEFAULT now(), PRIMARY KEY (account, key)
 );
 CREATE TABLE IF NOT EXISTS seen_keys (
     account text NOT NULL DEFAULT '', kind text NOT NULL, key text NOT NULL,
@@ -75,9 +90,14 @@ CREATE TABLE IF NOT EXISTS activity_daily (
     account text NOT NULL, day date NOT NULL, kind text NOT NULL,
     count int NOT NULL DEFAULT 0, PRIMARY KEY (account, day, kind)
 );
+CREATE TABLE IF NOT EXISTS or_usage (
+    day date NOT NULL, slot int NOT NULL DEFAULT 1,
+    count int NOT NULL DEFAULT 0, PRIMARY KEY (day, slot)
+);
 CREATE TABLE IF NOT EXISTS giga_queue (
     account text NOT NULL, token text NOT NULL, vacancy text, nid bigint,
     status text NOT NULL DEFAULT 'pending', turns int NOT NULL DEFAULT 0,
+    attempts int NOT NULL DEFAULT 0,
     created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
     PRIMARY KEY (account, token)
 );
@@ -90,13 +110,40 @@ CREATE TABLE IF NOT EXISTS app_users (
     id serial PRIMARY KEY, name text, account text UNIQUE NOT NULL,
     active boolean DEFAULT true, created_at timestamptz DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS users (
+    account text PRIMARY KEY,
+    name text, full_name text, email text, phone text, hh_phone text, active boolean DEFAULT true,
+    hh_token jsonb, openai jsonb, telegram jsonb, preferences jsonb,
+    resume_text text, tg_user_id bigint, tg_user_session text,
+    getmatch_session text, getmatch_username text, getmatch_max_per_day int,
+    habr_login text, habr_password text, habr_session text,
+    habr_2captcha_key text, habr_query text, habr_max_per_day int,
+    auth_username text, auth_password text, auth_last_login bigint,
+    apply_resume_id text, apply_max_per_day int, apply_tests_per_day int,
+    apply_use_ai boolean, apply_force_message boolean,
+    apply_civil_law_only boolean, apply_excluded_terms text,
+    applications_count text, applications_date text, applications_pause_until text,
+    tg_cats text, reply_ignore_names text,
+    created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS user_features (
+    account text, feature text, enabled boolean DEFAULT false,
+    PRIMARY KEY (account, feature)
+);
+CREATE TABLE IF NOT EXISTS health (
+    account text, feature text, ts bigint, ok boolean, detail text,
+    PRIMARY KEY (account, feature)
+);
+CREATE TABLE IF NOT EXISTS web_state (
+    account text PRIMARY KEY, state jsonb, updated_at timestamptz DEFAULT now()
+);
 CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $func$
 BEGIN NEW.updated_at = now(); RETURN NEW; END;
 $func$ LANGUAGE plpgsql;
 DO $do$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['employers','vacancy_contacts','vacancies','negotiations','resumes']
+  FOREACH t IN ARRAY ARRAY['employers','vacancy_contacts','vacancies','negotiations','resumes','users','web_state']
   LOOP
     EXECUTE format(
       'CREATE OR REPLACE TRIGGER trg_%1$s_updated BEFORE UPDATE ON %1$s
@@ -161,8 +208,7 @@ async def locked_token_refresh(api_client) -> bool:
                 "SELECT pg_advisory_xact_lock(hashtext(%s))", (acc + ":token",)
             )
             await cur.execute(
-                "SELECT value FROM app_config WHERE account=%s AND key='token'",
-                (acc,),
+                "SELECT hh_token FROM users WHERE account=%s", (acc,)
             )
             row = await cur.fetchone()
             pg_tok = row[0] if row else None
@@ -176,9 +222,8 @@ async def locked_token_refresh(api_client) -> bool:
             )
             api_client.handle_access_token(new)
             await cur.execute(
-                "INSERT INTO app_config(account, key, value) "
-                "VALUES (%s, 'token', %s::jsonb) ON CONFLICT(account, key) "
-                "DO UPDATE SET value=excluded.value, updated_at=now()",
+                "INSERT INTO users(account, hh_token) VALUES (%s, %s::jsonb) "
+                "ON CONFLICT(account) DO UPDATE SET hh_token=excluded.hh_token, updated_at=now()",
                 (acc, _json.dumps(new, ensure_ascii=False)),
             )
             await conn.commit()
@@ -192,13 +237,24 @@ async def locked_token_refresh(api_client) -> bool:
 
 def app_config(account: str | None = None) -> dict:
     acc = account or get_account()
+    out: dict = {}
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT key, value FROM app_config WHERE account=%s", (acc,))
-            return {k: v for k, v in cur.fetchall()}
+            cols = [c for _, c in _M.APP_ORDER]
+            cur.execute(f"SELECT {', '.join(cols)} FROM users WHERE account=%s", (acc,))
+            row = cur.fetchone()
+            if row:
+                for (k, _c), v in zip(_M.APP_ORDER, row):
+                    if v is not None:
+                        out[k] = v
+            cur.execute("SELECT state FROM web_state WHERE account=%s", (acc,))
+            ws = cur.fetchone()
+            if ws and ws[0] is not None:
+                out["web_state"] = ws[0]
     finally:
         conn.close()
+    return out
 
 
 def set_app_config(key: str, value, account: str | None = None) -> None:
@@ -207,12 +263,20 @@ def set_app_config(key: str, value, account: str | None = None) -> None:
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO app_config(account, key, value) VALUES (%s, %s, %s::jsonb) "
-                "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value, "
-                "updated_at=now()",
-                (acc, key, _json.dumps(value, ensure_ascii=False)),
-            )
+            if key == "web_state":
+                cur.execute(
+                    "INSERT INTO web_state(account, state) VALUES (%s, %s::jsonb) "
+                    "ON CONFLICT(account) DO UPDATE SET state=excluded.state, updated_at=now()",
+                    (acc, _json.dumps(value, ensure_ascii=False)),
+                )
+            elif key in _M.APP_COL:
+                col = _M.APP_COL[key]
+                _users_set(cur, acc, col, _M.coerce_user(col, value), jsonb=(col in _M.APP_JSONB))
+            else:  # незамапленный app_config-ключ — добавь его в _cfgmap.APP_COL (+ колонку users)
+                raise ValueError(
+                    f"set_app_config: незамапленный ключ {key!r} — добавьте в _cfgmap.APP_COL "
+                    "и колонку в users (таблица app_config удалена)"
+                )
         conn.commit()
     finally:
         conn.close()
@@ -248,12 +312,23 @@ def register_user(name: str, account: str) -> None:
 def get_setting(key: str, default=None, account: str | None = None):
     import json as _json
     acc = account or get_account()
+    kind = _M.resolve_setting(key)
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT value FROM settings WHERE account=%s AND key=%s", (acc, key)
-            )
+            if kind[0] == "feature":
+                cur.execute("SELECT enabled FROM user_features WHERE account=%s AND feature=%s", (acc, kind[1]))
+                r = cur.fetchone()
+                return bool(r[0]) if r else default
+            if kind[0] == "health":
+                cur.execute("SELECT ts, ok, detail FROM health WHERE account=%s AND feature=%s", (acc, kind[1]))
+                r = cur.fetchone()
+                return {"ts": r[0], "ok": r[1], "detail": r[2]} if r else default
+            if kind[0] == "users":
+                cur.execute(f"SELECT {kind[1]} FROM users WHERE account=%s", (acc,))
+                r = cur.fetchone()
+                return r[0] if (r and r[0] is not None) else default
+            cur.execute("SELECT value FROM settings WHERE account=%s AND key=%s", (acc, key))
             row = cur.fetchone()
     finally:
         conn.close()
@@ -266,20 +341,54 @@ def get_setting(key: str, default=None, account: str | None = None):
 
 
 def set_setting(key: str, value, account: str | None = None) -> None:
-    """Запись settings (значение json-кодируется, как читает get_setting)."""
+    """Запись настройки в нормализованную таблицу по маппингу (_cfgmap).
+    feat.* -> user_features, _health.* -> health, замапленные -> users,
+    глобальные/прочие -> settings (json-кодированно, как читает get_setting)."""
     import json as _json
     acc = account or get_account()
+    kind = _M.resolve_setting(key)
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO settings(account, key, value) VALUES (%s, %s, %s) "
-                "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value",
-                (acc, key, _json.dumps(value, ensure_ascii=False)),
-            )
+            if kind[0] == "feature":
+                cur.execute(
+                    "INSERT INTO user_features(account, feature, enabled) VALUES (%s, %s, %s) "
+                    "ON CONFLICT(account, feature) DO UPDATE SET enabled=excluded.enabled",
+                    (acc, kind[1], bool(value)),
+                )
+            elif kind[0] == "health":
+                v = value if isinstance(value, dict) else {}
+                cur.execute(
+                    "INSERT INTO health(account, feature, ts, ok, detail) VALUES (%s, %s, %s, %s, %s) "
+                    "ON CONFLICT(account, feature) DO UPDATE SET ts=excluded.ts, ok=excluded.ok, detail=excluded.detail",
+                    (acc, kind[1], v.get("ts"), v.get("ok"), str(v.get("detail") or "")[:300]),
+                )
+            elif kind[0] == "users":
+                col = kind[1]
+                _users_set(cur, acc, col, _M.coerce_user(col, value), jsonb=(col in _M.APP_JSONB))
+            else:
+                cur.execute(
+                    "INSERT INTO settings(account, key, value) VALUES (%s, %s, %s) "
+                    "ON CONFLICT(account, key) DO UPDATE SET value=excluded.value",
+                    (acc, key, _json.dumps(value, ensure_ascii=False)),
+                )
         conn.commit()
     finally:
         conn.close()
+
+
+def record_health(source: str, ok: bool, detail: str = "", account: str | None = None) -> None:
+    """Хартбит источника: время прогона + успех + причина (мониторинг надёжности).
+    source — feature (apply/tests/reply/browse/giga/getmatch)."""
+    import time as _t
+    set_setting(f"_health.{source}",
+                {"ts": int(_t.time()), "ok": bool(ok), "detail": (detail or "")[:200]},
+                account=account)
+
+
+def read_health(source: str, account: str | None = None) -> dict | None:
+    v = get_setting(f"_health.{source}", None, account=account)
+    return v if isinstance(v, dict) else None
 
 
 def feature_enabled(feat: str, account: str | None = None) -> bool:
@@ -301,6 +410,10 @@ def seen_keys(kind: str) -> set:
 
 
 def add_seen(kind: str, keys) -> None:
+    # keys может быть как списком, так и ОДНОЙ строкой. Без этого str итерировался бы
+    # посимвольно (add_seen(kind, "5565") -> ключи '5','6'…), и vid не помечался seen.
+    if isinstance(keys, (str, bytes, int)):
+        keys = [keys]
     acc = get_account()
     conn = connect()
     try:
@@ -321,12 +434,21 @@ def add_action_items(items: list[dict]) -> None:
     conn = connect()
     try:
         with conn.cursor() as cur:
+            cur.execute("ALTER TABLE action_items "
+                        "ADD COLUMN IF NOT EXISTS action_url text")  # ссылка на анкету/тест
             for it in items:
+                # дедуп: не плодим дело, если по этой вакансии (nid) уже есть невыполненное
+                cur.execute("SELECT 1 FROM action_items WHERE account=%s AND nid=%s "
+                            "AND NOT done LIMIT 1", (acc, it.get("nid")))
+                if cur.fetchone():
+                    continue
                 cur.execute(
                     "INSERT INTO action_items(account, nid, chat_id, vacancy, action, "
-                    "chat_url, vacancy_url) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    "chat_url, vacancy_url, action_url) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                     (acc, it.get("nid"), it.get("chat_id"), it.get("vacancy"),
-                     it.get("action"), it.get("chat_url"), it.get("vacancy_url")),
+                     it.get("action"), it.get("chat_url"), it.get("vacancy_url"),
+                     it.get("action_url")),
                 )
         conn.commit()
     finally:
@@ -351,6 +473,84 @@ def bump_activity(kind: str, n: int = 1, account: str | None = None) -> None:
                     "DO UPDATE SET count = activity_daily.count + excluded.count",
                     (acc, kind, n),
                 )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+# --- OpenRouter роутинг (часть LLM-трафика гоним в OpenRouter, при исчерпании дневного
+#     лимита — полностью на локалку). Конфиг в _global: or.token/or.model/or.endpoint/
+#     or.share/or.daily_limit. Счётчик запросов за день — таблица or_usage. ---
+
+def or_config() -> dict:
+    """Конфиг OpenRouter из _global. Пустой dict, если не настроен (тогда 100% локалка)."""
+    try:
+        tok = get_setting("or.token", "", account="_global")
+        if not tok:
+            return {}
+        tok2 = get_setting("or.token2", "", account="_global")
+        tokens = [tok] + ([tok2] if tok2 else [])
+        return {
+            "tokens": tokens,          # список ключей; каждый получает свой or.daily_limit/день
+            "token": tok,              # обратная совместимость (первый ключ)
+            "model": get_setting("or.model", "", account="_global"),
+            "endpoint": get_setting("or.endpoint",
+                                    "https://openrouter.ai/api/v1/chat/completions", account="_global"),
+            "share": float(get_setting("or.share", "0.5", account="_global") or 0.5),
+            "daily_limit": int(get_setting("or.daily_limit", "1000", account="_global") or 1000),
+        }
+    except Exception:
+        return {}
+
+
+def or_count_today(slot: int | None = None) -> int:
+    """Запросов за сегодня: по слоту ключа (1,2,…) либо суммарно (slot=None — для отображения)."""
+    try:
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                if slot is None:
+                    cur.execute("SELECT COALESCE(sum(count), 0) FROM or_usage WHERE day = current_date")
+                else:
+                    cur.execute("SELECT count FROM or_usage WHERE day = current_date AND slot = %s", (slot,))
+                r = cur.fetchone()
+                return int(r[0]) if r and r[0] is not None else 0
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def or_bump(slot: int = 1) -> int:
+    """Атомарно +1 к счётчику ключа (слот) за сегодня, возвращает новое значение (0 при сбое БД)."""
+    try:
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO or_usage(day, slot, count) VALUES (current_date, %s, 1) "
+                    "ON CONFLICT(day, slot) DO UPDATE SET count = or_usage.count + 1 RETURNING count", (slot,))
+                n = int(cur.fetchone()[0])
+            conn.commit()
+            return n
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def or_exhaust(slot: int = 1) -> None:
+    """Пометить дневной лимит конкретного ключа (слот) исчерпанным (429) — до конца суток его не трогаем."""
+    try:
+        lim = int(get_setting("or.daily_limit", "1000", account="_global") or 1000)
+        conn = connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO or_usage(day, slot, count) VALUES (current_date, %s, %s) "
+                    "ON CONFLICT(day, slot) DO UPDATE SET count = GREATEST(or_usage.count, %s)", (slot, lim, lim))
             conn.commit()
         finally:
             conn.close()

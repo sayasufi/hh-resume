@@ -824,6 +824,25 @@ class Operation(BaseOperation):
                         # ниже run(), поэтому импортируем локально, не из run-скоупа)
                         from ..storage import pgconn
                         pgconn.bump_activity("apply", 1)
+                        # Per-application лог: связь отклик -> вакансия/резюме/письмо,
+                        # чтобы измерять конверсию (AI-письмо vs шаблон, резюме -> собес).
+                        # best-effort, не валит отклик при ошибке записи.
+                        try:
+                            _conn = pgconn.connect()
+                            with _conn.cursor() as _cur:
+                                _cur.execute(
+                                    "INSERT INTO hh_apps(account, vacancy_id, resume_id, "
+                                    "used_ai, letter_len, model) "
+                                    "VALUES (%s,%s,%s,%s,%s,%s) "
+                                    "ON CONFLICT(account, vacancy_id) DO NOTHING",
+                                    (pgconn.get_account(), int(vacancy_id),
+                                     self.resume_id, bool(self.openai_chat),
+                                     len(params.get("message", "")), ""),
+                                )
+                            _conn.commit()
+                            _conn.close()
+                        except Exception as _ex:
+                            logger.debug("hh_apps лог не записан: %r", _ex)
                         logger.debug(
                             "Откликнулись на %s с резюме %s (отклик #%d за сегодня)",
                             vacancy["alternate_url"],

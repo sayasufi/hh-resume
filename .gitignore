@@ -93,3 +93,7 @@ docker/
 /audit_dialogs.py
 *.bak.*
 *.naumenko.bak
+nginx/.htpasswd
+
+# Дампы конфига (секреты)
+/_*.sql

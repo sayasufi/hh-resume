@@ -259,7 +259,9 @@ async def main():
         print("feat.tests выключен в Mini App — пропуск apply_tests")
         return
     global LIMIT
-    LIMIT = int(pgconn.get_setting("apply.tests_per_day", LIMIT) or LIMIT)
+    if "--limit" not in sys.argv:  # лимит тестов = 25% от лимита авто-откликов (200 -> 50)
+        _al = int(pgconn.get_setting("apply.max_per_day", 200) or 200)
+        LIMIT = max(1, round(_al * 0.25))
     gph_only = bool(pgconn.get_setting("apply.civil_law_only", False))  # общий фильтр ГПХ
     cfg = pgconn.app_config()
     user, pw = creds()

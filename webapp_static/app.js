@@ -8,13 +8,24 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const err = (m) => { const e = $("#err"); e.textContent = m; e.classList.remove("hidden"); setTimeout(() => e.classList.add("hidden"), 4000); };
 const hap = (k) => { try { if (!tg || !tg.HapticFeedback) return; k === "sel" ? tg.HapticFeedback.selectionChanged() : tg.HapticFeedback.impactOccurred("light"); } catch (e) {} };
+// состояние ошибки загрузки (отличаем «пусто» от «не загрузилось») + повтор по тапу
+function failBox(boxSel, countSel, retry) {
+  const box = $(boxSel); if (!box) return;
+  if (countSel && $(countSel)) $(countSel).textContent = "!";
+  box.innerHTML = '<div class="empty err-state">Не удалось загрузить · нажмите, чтобы повторить</div>';
+  const e = box.querySelector(".err-state"); if (e) e.onclick = retry;
+}
 
 let VIEW_ACCOUNT = null;  // админ: смотрим выбранный аккаунт (account-override)
 async function api(path, opts = {}) {
   if (VIEW_ACCOUNT) path += (path.includes("?") ? "&" : "?") + "account=" + encodeURIComponent(VIEW_ACCOUNT);
   const r = await fetch(path, { ...opts, headers: { "X-Init-Data": INIT, "Content-Type": "application/json", ...(opts.headers || {}) } });
   if (r.status === 404) throw new Error("not_linked");
-  if (!r.ok) throw new Error("HTTP " + r.status);
+  if (!r.ok) {
+    let detail = "HTTP " + r.status;
+    try { const j = await r.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
+    throw new Error(detail);
+  }
   return r.json();
 }
 const save = (key, value) => api("/api/settings", { method: "POST", body: JSON.stringify({ key, value }) });
@@ -31,34 +42,43 @@ document.querySelectorAll("#tabs button").forEach((b) => {
 });
 
 function renderMe(d) {
-  const p = d.profile, s = d.stats;
+  const p = (d && d.profile) || {}, s = (d && d.stats) || {};
   $("#avatar").textContent = (p.name || "·").trim().charAt(0).toUpperCase() || "·";
   $("#hname").textContent = p.name || "—";
   const stt = p.status || "";
   const st = $("#hstatus"); st.textContent = stt;
-  st.className = "pill " + (stt.includes("работает") ? "good" : stt.indexOf("всё") === 0 ? "bad" : "warn");
+  const sk = p.status_kind || (stt.includes("работает") ? "ok" : stt.indexOf("всё") === 0 ? "off" : "paused");
+  st.className = "pill " + (sk === "ok" ? "good" : sk === "off" ? "bad" : "warn");
   $("#p-name").textContent = p.name || "—";
-  $("#p-id").textContent = p.hh_id || "—";
-  $("#p-resume").textContent = p.resume || "—";
-  $("#p-salary").textContent = p.salary ? (p.salary + " ₽") : "—";
-  $("#p-status").textContent = p.status || "—";
-  const max = Math.max(1, ...s.funnel.map((f) => f.value));
-  $("#funnel").innerHTML = s.funnel.map((f) =>
-    `<div class="fbar"><div class="fill" style="width:${Math.round(f.value / max * 100)}%"></div>`
-    + `<div class="ftext"><span>${esc(f.label)}</span><span class="fval"><b>${f.value}</b>`
-    + `${f.conv != null ? `<em>${f.conv}%</em>` : ""}</span></div></div>`).join("");
   const bd = s.breakdown || [];
   $("#breakdown").innerHTML = bd.length ? bd.map((b) =>
-    `<div class="cell"><span class="k">${b.emoji} ${esc(b.label)}</span>`
-    + `<span class="v"><b>${b.value}</b><em style="color:var(--hint);font-weight:400;margin-left:6px">${b.pct}%</em></span></div>`).join("")
+    `<div class="stat"><div class="num">${b.value}</div><div class="lbl">${b.emoji} ${esc(b.label)}</div></div>`).join("")
     : '<div class="empty">Нет данных за период</div>';
+  if ($("#a-tgout")) $("#a-tgout").textContent = s.tg_outreach || 0;
   $("#next-apply").textContent = d.next_apply
     ? "⏱ Следующие обычные отклики: " + d.next_apply
     : "⏸ Обычные отклики на паузе — включи «Авто-отклики» в Функциях.";
 }
 
+// здоровье источников на вкладке «Профиль» (из /api/settings → sources)
+function renderSources(sources) {
+  const box = $("#sources");
+  if (!box) return;
+  const cls = { ok: "ok", warn: "wait", down: "bad", off: "wait", unlinked: "bad" };
+  const ico = { ok: "✅", warn: "⚠️", down: "🔴", off: "⏸", unlinked: "🔴" };
+  box.innerHTML = (sources || []).map((s) => {
+    const sub = [s.detail, s.run].filter(Boolean).join(" · ");
+    return '<div class="cell"><div class="dlg-main">'
+      + `<div class="dlg-title">${esc(s.src)} `
+      + `<span class="gm-st ${cls[s.state] || "wait"}">${ico[s.state] || ""} ${esc(s.label)}</span></div>`
+      + (sub ? `<div class="dlg-date">${esc(sub)}</div>` : "")
+      + "</div></div>";
+  }).join("");
+}
+
 function renderTrend(days) {
   const box = $("#trend");
+  if (!box) return;  // график динамики убран из Статы
   if (!days || days.length < 2) { box.innerHTML = '<div class="empty">График появится за пару дней использования</div>'; return; }
   const vals = days.map((d) => d.applications), max = Math.max(1, ...vals);
   const W = 320, H = 88, n = days.length;
@@ -83,12 +103,16 @@ function renderDialogs() {
   $("#dlg-count").textContent = arr.length;
   if (SORT === "status") arr = [...arr].sort((a, b) => a.rank - b.rank);
   if (!arr.length) { box.innerHTML = '<div class="empty">Ничего не найдено</div>'; return; }
-  box.innerHTML = '<div class="list">' + arr.map((d) =>
-    `<div class="cell dlg tap" data-id="${esc(d.id)}"><div class="dlg-main">`
+  box.innerHTML = '<div class="list">' + arr.map((d) => {
+    const sc = (d.state_id || "").startsWith("discard") ? "st-bad"
+      : ["interview", "invitation", "hired"].includes(d.state_id) ? "st-good"
+      : d.state_id === "response" ? "st-info" : "";
+    return `<div class="cell dlg tap ${sc}" data-id="${esc(d.id)}"><div class="dlg-main">`
     + `<div class="dlg-title">${esc(d.title)}</div>`
     + `<div class="dlg-emp">${esc(d.employer)}</div>`
     + `<div class="dlg-st">${d.emoji} ${esc(d.state)}${d.has_updates ? ' <span class="dot"></span>' : ""}</div></div>`
-    + `<div class="dlg-side"><span class="dlg-date">${esc(d.updated)}</span><span class="chev">›</span></div></div>`).join("") + "</div>";
+    + `<div class="dlg-side"><span class="dlg-date">${esc(d.updated)}</span><span class="chev">›</span></div></div>`;
+  }).join("") + "</div>";
   box.querySelectorAll(".dlg").forEach((el) => { el.onclick = () => openDialog(el.dataset.id); });
 }
 $("#dlg-filter").querySelectorAll(".chip").forEach((c) => {
@@ -104,9 +128,13 @@ $("#dlg-sort").querySelectorAll("button").forEach((b) => {
   };
 });
 
-function openSheet(id) { $(id).classList.remove("hidden"); }
-function closeSheet(id) { $(id).classList.add("hidden"); }
+const _anySheet = () => document.querySelector(".sheet-wrap:not(.hidden)");
+function openSheet(id) { $(id).classList.remove("hidden"); try { if (tg && tg.BackButton) tg.BackButton.show(); } catch (e) {} }
+function closeSheet(id) { $(id).classList.add("hidden"); try { if (tg && tg.BackButton && !_anySheet()) tg.BackButton.hide(); } catch (e) {} }
+const closeAllSheets = () => document.querySelectorAll(".sheet-wrap:not(.hidden)").forEach((w) => closeSheet("#" + w.id));
 document.querySelectorAll(".sheet-wrap").forEach((w) => { w.onclick = (e) => { if (e.target === w) closeSheet("#" + w.id); }; });
+document.querySelectorAll("[data-close]").forEach((el) => { el.onclick = (e) => { e.stopPropagation(); closeSheet("#" + el.closest(".sheet-wrap").id); }; });
+try { if (tg && tg.BackButton) tg.BackButton.onClick(closeAllSheets); } catch (e) {}
 
 async function openDialog(id) {
   const d = DIALOGS.find((x) => String(x.id) === String(id));
@@ -114,9 +142,13 @@ async function openDialog(id) {
   $("#m-title").textContent = d.title;
   $("#m-emp").textContent = d.employer + " · " + d.state;
   const hh = $("#m-hh");
-  if (d.url) { hh.href = d.url; hh.classList.remove("hidden"); } else hh.classList.add("hidden");
+  if (d.url) {
+    hh.classList.remove("hidden");
+    hh.onclick = (e) => { e.preventDefault(); hap("sel"); if (tg && tg.openLink) tg.openLink(d.url); else window.open(d.url, "_blank"); };
+  } else hh.classList.add("hidden");
   $("#m-body").innerHTML = '<div class="empty">Загрузка…</div>';
   openSheet("#modal");
+  if (d.has_updates) { d.has_updates = false; renderDialogs(); }  // сбрасываем синюю точку
   try {
     const r = await api("/api/dialog?id=" + encodeURIComponent(id));
     if (!r.messages || !r.messages.length) { $("#m-body").innerHTML = '<div class="empty">Сообщений нет</div>'; return; }
@@ -128,28 +160,132 @@ async function openDialog(id) {
 
 // ── функции / настройки ──
 let RESUMES = [], RESUME_ID = "";
-function bindToggles(features) {
+// подсказка по привязке GetMatch (сама привязка — в боте: /addaccount → GetMatch)
+function renderGmLink(st) {
+  const box = $("#gm-link");
+  if (!box) return;
+  if (st.getmatch_linked || st.tg_connected) { box.style.display = "none"; return; }
+  box.style.display = "";
+  box.textContent = "Чтобы подключить GetMatch — открой бота и набери /addaccount → GetMatch "
+    + "(код придёт в @g_jobbot).";
+}
+function wireGmLink() {}  // привязка перенесена в бот, инлайн-форма убрана
+function bindToggles(features, tgConnected, gmLinked, habrLinked, hhConnected) {
   document.querySelectorAll(".toggle input[data-feat]").forEach((inp) => {
     inp.checked = !!features[inp.dataset.feat];
+    // giga нужен Telegram; getmatch — Telegram ИЛИ логин+код; habr — вход на career.habr.com; hh-функции — привязка hh
+    const lockGiga = inp.dataset.feat === "giga" && !tgConnected;
+    const lockGm = inp.dataset.feat === "getmatch" && !tgConnected && !gmLinked;
+    const lockHabr = (inp.dataset.feat === "habr" || inp.dataset.feat === "habr_chat") && !habrLinked;
+    const lockTg = inp.dataset.feat === "tg_channels" && !tgConnected;
+    const lockHh = ["apply", "tests", "reply", "browse"].includes(inp.dataset.feat) && !hhConnected;
+    const lock = lockGiga || lockGm || lockHabr || lockTg || lockHh;
+    inp.disabled = lock;
+    if (lock) inp.checked = false;
+    inp.closest(".toggle").classList.toggle("disabled", lock);
     inp.onchange = async () => {
       const row = inp.closest(".toggle"); row.classList.add("busy");
       try { await save(inp.dataset.feat, inp.checked); hap("light"); }
-      catch (e) { inp.checked = !inp.checked; err("Не удалось сохранить"); }
+      catch (e) { inp.checked = !inp.checked; err((e && e.message) || "Не удалось сохранить"); }
       finally { row.classList.remove("busy"); }
     };
   });
 }
 
 function resumeTitle(id) { const r = RESUMES.find((x) => String(x.id) === String(id)); return r ? (r.title || r.id) : (id || "—"); }
-function bindConfig(cfg, resumes) {
+
+// категории TG-каналов: тумблеры ниш (вместо текстового поля)
+function _tgChanChips(arr, rm) {  // чипы каналов; цвет по типу (синий=канал, янтарный=группа); rm=true -> с ✕
+  return arr.map((c) => {
+    const u = typeof c === "string" ? c : c.u;
+    const t = typeof c === "string" ? "" : (c.t || "");
+    const cls = t === "chat" ? " chan-chat" : t === "broadcast" ? " chan-broadcast" : "";
+    return `<button class="chip${cls}" data-${rm ? "rm" : "u"}="${esc(u)}">@${esc(u)}${rm ? " ✕" : ""}</button>`;
+  }).join("");
+}
+function _wireChanOpen(box) {
+  box.querySelectorAll(".chip[data-u]").forEach((b) => {
+    b.onclick = () => { const l = "https://t.me/" + b.dataset.u; if (tg && tg.openLink) tg.openLink(l); else window.open(l, "_blank"); };
+  });
+}
+function renderTgCats(catalog, catsStr, customStr, enabled) {
+  const box = $("#tg-cats"), title = $("#tg-cats-title");
+  if (!box) return;
+  catalog = catalog || [];
+  // множество наших каналов (из всех категорий) — чтобы не дать добавить дубль в «свои»
+  const our = new Set(catalog.flatMap((c) => (c.channels || []).map((x) => (typeof x === "string" ? x : x.u || "").toLowerCase())));
+  box.classList.toggle("off", !enabled);   // нет Telegram → категории неактивны
+  if (title) title.style.display = catalog.length ? "" : "none";
+  if (!catalog.length) { box.innerHTML = ""; renderTgCustom(customStr, enabled, our); return; }
+  const sel = new Set((catsStr || "").split(",").map((s) => s.trim()).filter(Boolean));
+  box.innerHTML = '<div class="chan-legend"><span class="lg lg-broadcast">● канал</span><span class="lg lg-chat">● группа</span></div>'
+    + catalog.map((c) =>
+    `<div class="cell toggle cat-row">`
+    + `<span class="t cat-name" data-exp="${esc(c.key)}"><b>${esc(c.label)} <em class="dim">${c.channels.length}</em></b>`
+    + `<small>нажми, чтобы посмотреть каналы ⌄</small></span>`
+    + `<input type="checkbox" data-cat="${esc(c.key)}"${sel.has(c.key) ? " checked" : ""}><i data-sw="${esc(c.key)}"></i></div>`
+    + `<div class="cat-chans chips" data-chans="${esc(c.key)}" style="display:none">${_tgChanChips(c.channels)}</div>`
+  ).join("");
+  box.querySelectorAll(".cat-name[data-exp]").forEach((el) => {
+    el.onclick = () => { const d = box.querySelector(`.cat-chans[data-chans="${el.dataset.exp}"]`); if (d) d.style.display = d.style.display === "none" ? "" : "none"; hap("sel"); };
+  });
+  box.querySelectorAll("i[data-sw]").forEach((sw) => {
+    sw.onclick = async () => {
+      const inp = box.querySelector(`input[data-cat="${sw.dataset.sw}"]`);
+      inp.checked = !inp.checked;
+      if (inp.checked) sel.add(sw.dataset.sw); else sel.delete(sw.dataset.sw);
+      try { await save("tg.cats", [...sel].join(",")); hap("light"); }
+      catch (e) { inp.checked = !inp.checked; err("Не удалось сохранить"); }
+    };
+  });
+  _wireChanOpen(box);
+  renderTgCustom(customStr, enabled, our);
+}
+function renderTgCustom(customStr, enabled, our) {
+  const box = $("#tg-custom"), title = $("#tg-custom-title");
+  if (!box) return;
+  if (title) title.style.display = "";
+  box.classList.toggle("off", !enabled);   // нет Telegram → поле «добавить канал» неактивно
+  let list = (customStr || "").split(",").map((s) => s.trim().replace(/^@/, "")).filter(Boolean);
+  const draw = () => {
+    box.innerHTML = '<div class="cell"><input type="text" id="tg-custom-input" placeholder="добавить @канал" autocapitalize="off" autocomplete="off" spellcheck="false" style="flex:1;background:transparent;border:none;color:var(--accent);font:inherit;outline:none">'
+      + '<button class="chip" id="tg-custom-add">Добавить</button></div>'
+      + (list.length ? '<div class="cat-chans chips">' + _tgChanChips(list, true) + '</div>' : "");
+    $("#tg-custom-add").onclick = async () => {
+      const v = (($("#tg-custom-input").value || "").trim().replace(/^@/, "").replace(/[^a-zA-Z0-9_]/g, ""));
+      if (!v || list.includes(v)) return;
+      if (our && our.has(v.toLowerCase())) {  // уже есть среди наших каналов — не дублируем
+        err("Этот канал уже есть в наших категориях"); $("#tg-custom-input").value = ""; hap("sel"); return;
+      }
+      list.push(v);
+      try { await save("tg.channels", list.join(",")); hap("light"); draw(); }
+      catch (e) { list.pop(); err("Не удалось сохранить"); }
+    };
+    $("#tg-custom-input").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("#tg-custom-add").click(); } };
+    box.querySelectorAll(".chip[data-rm]").forEach((b) => {
+      b.onclick = async () => {
+        const prev = list.slice(); list = list.filter((x) => x !== b.dataset.rm);
+        try { await save("tg.channels", list.join(",")); hap("sel"); draw(); }
+        catch (e) { list = prev; err("Не удалось сохранить"); }
+      };
+    });
+  };
+  draw();
+}
+function bindConfig(cfg, resumes, hhConnected, tgConnected) {
   RESUMES = resumes || []; RESUME_ID = cfg.resume_id || (RESUMES[0] && RESUMES[0].id) || "";
-  const capL = cfg.max_per_day_cap || 200, capT = cfg.tests_per_day_cap || 30;
+  const capL = cfg.max_per_day_cap || 200;
   $("#cfg-salary").value = cfg.salary || "";
   $("#cfg-limit").value = cfg.max_per_day != null ? cfg.max_per_day : "";
-  $("#cfg-tlimit").value = cfg.tests_per_day != null ? cfg.tests_per_day : "";
-  $("#cfg-limit").max = capL; $("#cfg-tlimit").max = capT;
+  $("#cfg-limit").max = capL;
   if ($("#cap-limit")) $("#cap-limit").textContent = "(макс " + capL + ")";
-  if ($("#cap-tlimit")) $("#cap-tlimit").textContent = "(макс " + capT + ")";
+  const updateTNote = () => {  // тесты = 25% от лимита откликов
+    const n = Math.round((parseInt($("#cfg-limit").value || "0", 10) || 0) * 0.25);
+    const el = $("#tlimit-note");
+    if (el) el.textContent = n ? `+${n}/день (25% от лимита)` : "+25% к лимиту";
+  };
+  updateTNote();
+  $("#cfg-limit").addEventListener("input", updateTNote);
   $("#resume-val").textContent = resumeTitle(RESUME_ID);
   const wire = (el, key) => {
     el.onchange = async () => {
@@ -168,7 +304,28 @@ function bindConfig(cfg, resumes) {
   };
   wire($("#cfg-salary"), "salary");
   clampWire($("#cfg-limit"), "apply.max_per_day", capL);
-  clampWire($("#cfg-tlimit"), "apply.tests_per_day", capT);
+  if ($("#cfg-gm-limit")) {
+    const capG = cfg.getmatch_max_per_day_cap || 50;
+    $("#cfg-gm-limit").value = cfg.getmatch_max_per_day != null ? cfg.getmatch_max_per_day : "";
+    $("#cfg-gm-limit").max = capG;
+    if ($("#cap-glimit")) $("#cap-glimit").textContent = "(макс " + capG + ")";
+    clampWire($("#cfg-gm-limit"), "getmatch.max_per_day", capG);
+  }
+  if ($("#cfg-habr-limit")) {
+    const capH = cfg.habr_max_per_day_cap || 30;
+    $("#cfg-habr-limit").value = cfg.habr_max_per_day != null ? cfg.habr_max_per_day : "";
+    $("#cfg-habr-limit").max = capH;
+    if ($("#cap-hlimit")) $("#cap-hlimit").textContent = "(макс " + capH + ")";
+    clampWire($("#cfg-habr-limit"), "habr.max_per_day", capH);
+  }
+  renderTgCats(cfg.tg_catalog, cfg.tg_cats, cfg.tg_channels, !!tgConnected);
+  // hh не привязан → профиль откликов (зарплата, резюме, лимит, ГПХ) неактивен
+  const hhOff = !hhConnected;
+  ["#cfg-salary", "#cfg-limit"].forEach((id) => {
+    const el = $(id); if (el) { el.disabled = hhOff; const c = el.closest(".cell"); if (c) c.classList.toggle("off", hhOff); }
+  });
+  if ($("#resume-row")) { $("#resume-row").disabled = hhOff; $("#resume-row").classList.toggle("off", hhOff); }
+  if ($("#cfg-gph")) { $("#cfg-gph").disabled = hhOff; const c = $("#cfg-gph").closest(".cell"); if (c) c.classList.toggle("off", hhOff); }
   const gph = $("#cfg-gph");
   if (gph) {
     gph.checked = !!cfg.civil_law_only;
@@ -206,31 +363,224 @@ function renderActivity(a) {
 }
 const loadActivity = () => api("/api/activity" + qp()).then(renderActivity).catch(() => {});
 
+// прогресс авто-ГигаРекрутера (giga_queue) — раньше был полностью невидим
+function renderGiga(g) {
+  if ($("#a-giga")) $("#a-giga").textContent = (g && g.done) || 0;  // блок «Авто-задачи в Telegram» в Стате
+  const box = $("#giga-card");
+  if (!box) return;  // карточка убрана с профиля — прогресс теперь в Стате
+  if (!g || (!g.pending && !g.done && !g.active)) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  const last = g.last && g.last.vacancy
+    ? `<div class="giga-last">Последнее: ${esc(g.last.vacancy)} · ${esc(g.last.at)}</div>` : "";
+  box.innerHTML = '<div class="giga-h">🤖 Бот сам проходит анкеты и интервью в Telegram</div>'
+    + '<div class="giga-row">'
+    + `<span class="gnum"><b>${g.done | 0}</b> пройдено</span>`
+    + `<span class="gnum"><b>${g.pending | 0}</b> в очереди</span>`
+    + (g.active ? `<span class="gnum"><b>${g.active | 0}</b> сейчас</span>` : "")
+    + '</div>' + last;
+}
+const loadGiga = () => api("/api/giga" + qp()).then(renderGiga).catch(() => {});
+
+// отклики GetMatch со статусами: список во вкладке «Отклики» + разбивка в «Стате»
+let GM_APPS = [], GM_FILTER = "all";
+const gmCls = (a) => {
+  const m = (a.status || "").toLowerCase();  // стабильный машинный код — приоритетно
+  if (/(approv|accept|invit|offer|hir)/.test(m)) return "ok";
+  if (/(reject|declin|refus)/.test(m)) return "bad";
+  const s = (a.status_readable || "").toLowerCase();  // запасной матч по тексту
+  if (s.includes("одобр") || s.includes("приглаш") || s.includes("оффер")) return "ok";
+  if (s.includes("отказ")) return "bad";
+  return "wait";
+};
+function renderGmApps() {
+  const box = $("#gm-apps"), cnt = $("#gm-count");
+  if (!box) return;
+  const items = GM_FILTER === "all" ? GM_APPS : GM_APPS.filter((a) => gmCls(a) === GM_FILTER);
+  if (cnt) cnt.textContent = items.length;
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">' +
+      (GM_APPS.length ? "Нет откликов в этом фильтре" : "Пока нет откликов через GetMatch") + "</div>";
+    return;
+  }
+  box.innerHTML = '<div class="list">' + items.map((a) => {
+    const sub = [a.company, a.at].filter(Boolean).join(" · ");
+    const st = a.status_readable ? `<span class="gm-st ${gmCls(a)}">${esc(a.status_readable)}</span>` : "";
+    const rej = a.reject_reason ? ` · ${esc(a.reject_reason)}` : "";
+    return '<div class="cell act"><div class="dlg-main">'
+      + `<div class="dlg-title">${esc(a.title)} ${st}</div>`
+      + `<div class="dlg-date">${esc(sub)}${rej}</div></div>`
+      + (a.url ? `<button class="abtn open" data-url="${esc(a.url)}">↗</button>` : "") + "</div>";
+  }).join("") + "</div>";
+  box.querySelectorAll(".abtn[data-url]").forEach((el) => {
+    el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
+  });
+}
+function _statusRows(box, empty, apps) {
+  if (!box) return;
+  if (empty) empty.style.display = apps.length ? "none" : "";
+  if (!apps.length) { box.innerHTML = ""; return; }
+  const c = { wait: 0, ok: 0, bad: 0 };
+  apps.forEach((a) => { c[gmCls(a)]++; });
+  const card = (n, lbl) => `<div class="stat"><div class="num">${n}</div><div class="lbl">${lbl}</div></div>`;
+  box.innerHTML = card(apps.length, "Откликов отправлено") + card(c.wait, "Ждём ответа")
+    + card(c.ok, "Одобрены / приглашения") + card(c.bad, "Отказы");
+}
+function _inPeriod(at) {  // at = "YYYY-MM-DD"; PERIOD.dfrom/dto — даты периода (ISO, сравнение строк)
+  at = (at || "").slice(0, 10);
+  if (!PERIOD.dfrom && !PERIOD.dto) return true;
+  if (!at) return false;
+  return (!PERIOD.dfrom || at >= PERIOD.dfrom) && (!PERIOD.dto || at <= PERIOD.dto);
+}
+function renderGmStats() { _statusRows($("#gm-stats"), $("#gm-empty"), GM_APPS.filter((a) => _inPeriod(a.at))); }
+const loadGetmatchApps = () => api("/api/getmatch").then((r) => {
+  GM_APPS = r.applications || []; renderGmApps(); renderGmStats();
+}).catch(() => {});
+// под-вкладки в «Настройках» (hh / GetMatch / Habr / Telegram / Общие)
+if ($("#set-nav")) $("#set-nav").querySelectorAll("button").forEach((b) => {
+  b.onclick = () => {
+    $("#set-nav").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    document.querySelectorAll("#tab-feat .set-panel").forEach((p) => {
+      p.style.display = p.dataset.panel === b.dataset.set ? "" : "none";
+    });
+    hap("sel");
+  };
+});
+// переключатель источника в «Откликах» (hh / GetMatch)
+if ($("#dlg-src")) $("#dlg-src").querySelectorAll("button").forEach((b) => {
+  b.onclick = () => {
+    $("#dlg-src").querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    const src = b.dataset.src;
+    $("#src-hh").style.display = src === "hh" ? "" : "none";
+    $("#src-getmatch").style.display = src === "getmatch" ? "" : "none";
+    $("#src-habr").style.display = src === "habr" ? "" : "none";
+    $("#src-tg").style.display = src === "tg" ? "" : "none";
+    if (src === "getmatch") loadGetmatchApps();  // свежие отклики (надёжно, не по тайму boot)
+    if (src === "habr") loadHabrApps();
+    if (src === "tg") loadTgApps();
+    hap("sel");
+  };
+});
+// фильтр по статусу в GetMatch
+if ($("#gm-filter")) $("#gm-filter").querySelectorAll(".chip").forEach((c) => {
+  c.onclick = () => {
+    $("#gm-filter").querySelectorAll(".chip").forEach((x) => x.classList.remove("active"));
+    c.classList.add("active"); GM_FILTER = c.dataset.gf; renderGmApps(); hap("sel");
+  };
+});
+
+// ── отклики Habr (зеркало GetMatch) ──
+let HABR_APPS = [], HABR_FILTER = "all";
+function renderHabrApps() {
+  const box = $("#habr-apps"), cnt = $("#habr-count");
+  if (!box) return;
+  const items = HABR_FILTER === "all" ? HABR_APPS : HABR_APPS.filter((a) => gmCls(a) === HABR_FILTER);
+  if (cnt) cnt.textContent = items.length;
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">'
+      + (HABR_APPS.length ? "Нет откликов в этом фильтре" : "Пока нет откликов через Habr") + "</div>";
+    return;
+  }
+  box.innerHTML = '<div class="list">' + items.map((a) => {
+    const sub = [a.company, a.at].filter(Boolean).join(" · ");
+    const st = a.status_readable ? `<span class="gm-st ${gmCls(a)}">${esc(a.status_readable)}</span>` : "";
+    return '<div class="cell act"><div class="dlg-main">'
+      + `<div class="dlg-title">${esc(a.title)} ${st}</div>`
+      + `<div class="dlg-date">${esc(sub)}</div></div>`
+      + (a.url ? `<button class="abtn open" data-url="${esc(a.url)}">↗</button>` : "") + "</div>";
+  }).join("") + "</div>";
+  box.querySelectorAll(".abtn[data-url]").forEach((el) => {
+    el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
+  });
+}
+function renderHabrStats() { _statusRows($("#habr-stats"), $("#habr-empty"), HABR_APPS); }
+const loadHabrApps = () => api("/api/habr").then((r) => {
+  HABR_APPS = r.applications || []; renderHabrApps(); renderHabrStats();
+}).catch(() => {});
+
+// ── TG-отклики (рассылка по вакансиям из Telegram-каналов; пока DRY) ──
+let TG_APPS = [];
+function renderTgApps() {
+  const box = $("#tg-apps"), cnt = $("#tg-count");
+  if (!box) return;
+  if (cnt) cnt.textContent = TG_APPS.length;
+  if (!TG_APPS.length) {
+    box.innerHTML = '<div class="empty">Пока нет TG-откликов. Включи «Telegram-отклики» в Настройках — бот подберёт вакансии из каналов и покажет, кому написал бы (в DRY реально не пишем).</div>';
+    return;
+  }
+  box.innerHTML = '<div class="list">' + TG_APPS.map((a) => {
+    const sub = [a.channel ? "@" + a.channel : "", a.category, a.at].filter(Boolean).join(" · ");
+    const st = a.status !== "sent"
+      ? '<span class="gm-st wait">DRY</span>'
+      : (a.replied
+          ? '<span class="gm-st ok">✓ ответили</span>'
+          : '<span class="gm-st wait">отправлено · ждём</span>');
+    const uname = (a.contact || "").replace(/^@/, "");
+    const vacLink = a.url ? `<a class="vac-open" href="#" data-vurl="${esc(a.url)}" style="color:var(--accent);text-decoration:none">открыть пост ↗</a>` : "(ссылка недоступна)";
+    return '<div class="cell act tg-out"><div class="dlg-main act-text">'
+      + `<div class="dlg-title">${esc(a.contact || "—")} ${st}</div>`
+      + `<div class="dlg-emp">${esc(a.title)}</div>`
+      + `<div class="dlg-date">${esc(sub)} · нажми — вакансия + письмо</div>`
+      + `<div class="tg-letter"><b>Вакансия:</b> ${vacLink}`
+      + `<br><br><b>📎 Письмо (с резюме-PDF)</b><br>${esc(a.letter || "(без письма)")}</div></div>`
+      + (uname ? `<button class="abtn open" data-url="https://t.me/${esc(uname)}">↗</button>` : "")
+      + "</div>";
+  }).join("") + "</div>";
+  box.querySelectorAll(".abtn[data-url]").forEach((el) => {
+    el.onclick = (e) => { e.stopPropagation(); hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
+  });
+  box.querySelectorAll(".vac-open[data-vurl]").forEach((el) => {
+    el.onclick = (e) => { e.preventDefault(); e.stopPropagation(); hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.vurl); else window.open(el.dataset.vurl, "_blank"); };
+  });
+  box.querySelectorAll(".tg-out .act-text").forEach((el) => {
+    el.onclick = () => { el.closest(".tg-out").classList.toggle("expanded"); hap("sel"); };
+  });
+}
+const loadTgApps = () => api("/api/tg_outreach").then((r) => {
+  TG_APPS = r.applications || []; renderTgApps();
+}).catch(() => {});
+
+if ($("#habr-filter")) $("#habr-filter").querySelectorAll(".chip").forEach((c) => {
+  c.onclick = () => {
+    $("#habr-filter").querySelectorAll(".chip").forEach((x) => x.classList.remove("active"));
+    c.classList.add("active"); HABR_FILTER = c.dataset.hf; renderHabrApps(); hap("sel");
+  };
+});
+
 // дела (что нужно сделать самому)
 function renderActions(items) {
   const box = $("#actions");
   $("#act-count").textContent = items.length;
   if (!items.length) { box.innerHTML = '<div class="empty">Дел нет — всё под контролем 👌</div>'; return; }
   box.innerHTML = '<div class="list">' + items.map((a) =>
-    `<div class="cell act"><div class="dlg-main">`
+    `<div class="cell act"><div class="dlg-main act-text">`
     + `<div class="dlg-title">${esc(a.action)}</div>`
     + `<div class="dlg-emp">${esc(a.vacancy)}</div>`
-    + `<div class="dlg-date">${esc(a.created_at)}</div></div>`
+    + `<div class="dlg-date">${esc(a.created_at)} · нажми, чтобы раскрыть</div></div>`
     + `<div class="act-btns">`
-    + (a.chat_url ? `<button class="abtn open" data-url="${esc(a.chat_url)}">Открыть</button>` : "")
-    + `<button class="abtn done" data-id="${a.id}">✓</button></div></div>`).join("") + "</div>";
-  box.querySelectorAll(".abtn.open").forEach((el) => {
+    + (a.chat_url ? `<button class="abtn chat" data-url="${esc(a.chat_url)}">Чат</button>` : "")
+    + `<button class="abtn del" data-id="${a.id}" title="Удалить — вакансия не интересна">🗑</button>`
+    + `<button class="abtn done" data-id="${a.id}" title="Выполнено">✓</button></div></div>`).join("") + "</div>";
+  box.querySelectorAll(".abtn[data-url]").forEach((el) => {
     el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
   });
-  box.querySelectorAll(".abtn.done").forEach((el) => {
+  // тап по тексту дела — раскрыть/свернуть полный текст (часто обрезано)
+  box.querySelectorAll(".act-text").forEach((el) => {
+    el.onclick = () => { el.closest(".act").classList.toggle("expanded"); hap("sel"); };
+  });
+  const actBtn = (cls, path) => box.querySelectorAll(cls).forEach((el) => {
     el.onclick = async () => {
       const row = el.closest(".act"); row.style.opacity = ".4";
-      try { await api("/api/action_done", { method: "POST", body: JSON.stringify({ id: parseInt(el.dataset.id, 10) }) }); hap("light"); loadActions(); }
+      try { await api(path, { method: "POST", body: JSON.stringify({ id: parseInt(el.dataset.id, 10) }) }); hap("light"); loadActions(); }
       catch (e) { err("Не удалось"); row.style.opacity = "1"; }
     };
   });
+  actBtn(".abtn.done", "/api/action_done");
+  actBtn(".abtn.del", "/api/action_delete");
 }
-const loadActions = () => api("/api/actions").then((r) => renderActions(r.items || [])).catch(() => {});
+const loadActions = () => api("/api/actions").then((r) => renderActions(r.items || []))
+  .catch(() => failBox("#actions", "#act-count", loadActions));
 
 // период — диапазон дат {dfrom, dto}; пресеты + произвольные даты
 const _iso = (off) => { const d = new Date(); d.setDate(d.getDate() - off); return d.toISOString().slice(0, 10); };
@@ -250,10 +600,24 @@ const qp = () => {
   return s.length ? "?" + s.join("&") : "";
 };
 const loadStats = () => api("/api/me" + qp()).then(renderMe).catch(() => {});
+function showFresh(age) {
+  const el = $("#dlg-fresh"); if (!el) return;
+  if (age == null) { el.textContent = ""; return; }
+  const m = Math.round(age / 60);
+  el.textContent = m <= 0 ? "обновлено только что" : "обновлено " + m + " мин назад";
+}
 const loadDialogs = () => api("/api/dialogs" + qp())
-  .then((r) => { DIALOGS = r.items || []; renderDialogs(); }).catch(() => {});
-// период влияет на воронку, детали, активность бота и список откликов
-const _reloadPeriod = () => { loadStats(); loadActivity(); loadDialogs(); };
+  .then((r) => { DIALOGS = r.items || []; renderDialogs(); showFresh(r.synced_age); })
+  .catch(() => failBox("#dialogs", "#dlg-count", loadDialogs));
+// ручное обновление (кнопка в шапке) — перетягивает всё актуальное
+function refreshAll() {
+  hap("light");
+  loadStats(); loadActivity(); loadDialogs(); loadActions(); loadGiga(); loadGetmatchApps(); loadHabrApps();
+  api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
+}
+if ($("#refresh")) $("#refresh").onclick = refreshAll;
+// период влияет на воронку, детали, активность бота, GetMatch/giga/TG-счётчики, список откликов
+const _reloadPeriod = () => { loadStats(); loadActivity(); loadDialogs(); loadGiga(); renderGmStats(); };
 document.querySelectorAll(".period button").forEach((b) => {
   b.onclick = () => {
     const key = b.dataset.p;
@@ -299,15 +663,29 @@ async function boot() {
     if ($("#d-from")) { $("#d-from").value = PERIOD.dfrom; $("#d-to").value = PERIOD.dto; }
     const [me, st] = await Promise.all([api("/api/me" + qp()), api("/api/settings")]);
     renderMe(me); setupAdmin(me);
-    bindToggles(st.features); bindConfig(st.config, st.resumes || []);
+    bindToggles(st.features, st.tg_connected, st.getmatch_linked, st.habr_linked, st.hh_linked);
+    bindConfig(st.config, st.resumes || [], st.hh_linked, st.tg_connected);
+    if ($("#hh-hint")) {
+      $("#hh-hint").style.display = st.hh_linked ? "none" : "";
+      $("#hh-hint").textContent = st.hh_linked ? "" : "Чтобы пользоваться функциями hh — подключите аккаунт: /addaccount в боте.";
+    }
+    if ($("#habr-hint")) {
+      $("#habr-hint").style.display = st.habr_linked ? "none" : "";
+      $("#habr-hint").textContent = st.habr_linked ? "" : "Чтобы включить — подключите Habr Career: /addaccount → Habr (логин + пароль).";
+    }
+    if ($("#tgch-hint")) {
+      $("#tgch-hint").style.display = st.tg_connected ? "none" : "";
+      $("#tgch-hint").textContent = st.tg_connected ? "" : "Чтобы включить — подключите Telegram: /connect в боте.";
+    }
+    renderSources(st.sources); renderGmLink(st); wireGmLink();
     $("#giga-hint").textContent = st.tg_connected
-      ? "✅ Telegram подключён — ГигаРекрутер сможет отвечать."
-      : "⚠️ ГигаРекрутер требует подключённого Telegram — в боте /connect. (Сам авто-ответчик ещё в разработке.)";
-    loadDialogs(); loadActivity(); loadActions();
+      ? ""
+      : "⚠️ Чтобы включить «Авто-задачи в Telegram», дайте доступ к Telegram: команда /connect в боте.";
+    loadDialogs(); loadActivity(); loadActions(); loadGiga(); loadGetmatchApps(); loadHabrApps();
     api("/api/trends").then((t) => renderTrend(t.days)).catch(() => {});
   } catch (e) {
     err(String(e.message) === "not_linked"
-      ? "Сначала привяжи профиль: в боте /link и поделись номером"
+      ? "Сначала привяжи профиль: открой бота, нажми /start и поделись номером"
       : "Ошибка загрузки: " + e.message);
   }
 }

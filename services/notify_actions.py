@@ -11,6 +11,7 @@
 Запуск:  python notify_actions.py [--dry]
 """
 import asyncio
+import re
 import sys
 
 from hh_applicant_tool.ai import ChatOpenAI
@@ -25,8 +26,9 @@ SYS = (
     "требует ли оно действия кандидата ВНЕ этого чата, и к какой категории относится. "
     "Ответь СТРОГО в формате: `<категория> | <что сделать одной строкой на русском>`.\n"
     "Категории:\n"
-    "- contact — нужно написать/позвонить работодателю в Telegram/WhatsApp/по телефону "
-    "или оставить свой контакт;\n"
+    "- contact — работодатель ДАЛ свой контакт (@username/телефон/ссылку на профиль) и "
+    "просит написать/позвонить ЕМУ туда (вне hh). НЕ относи сюда просьбу «оставьте ВАШ "
+    "контакт/ник/телефон в этом чате» — на неё бот сам ответит в чате своим ником, это none;\n"
     "- form — пройти анкету/опрос/форму по ссылке, зарегистрироваться на платформе, "
     "ИЛИ пройти автоматический скрининг/первичное интервью с ботом-рекрутёром или ПО "
     "ССЫЛКЕ (ГигаРекрутер, Telegram-бот) — это НЕ живой разговор;\n"
@@ -34,7 +36,8 @@ SYS = (
     "- interview — ЖИВОЙ человек (сотрудник) зовёт на собеседование/созвон/встречу или "
     "предлагает конкретное время для звонка/встречи с человеком (без бота и без ссылки);\n"
     "- none — ничего из перечисленного (обычный вопрос, на который можно ответить в "
-    "чате, благодарность, «рассмотрим резюме», отказ).\n"
+    "чате, благодарность, «рассмотрим резюме», отказ, ИЛИ просьба оставить ТВОЙ контакт/ник "
+    "прямо в этом чате — на это бот ответит сам своим ником).\n"
     "Если категория none — ответь просто: none"
 )
 
@@ -44,6 +47,38 @@ PRIO = {
     "test": pgconn.PRIORITY_LOW,
 }
 
+# Приглашение ГигаРекрутера / бота-рекрутёра. Если ГР активен (feat.giga + tg-сессия) —
+# бот проходит интервью сам, поэтому в «дела» пользователю это НЕ кладём. Если ГР
+# выключен/не подключён — кладём как обычное дело (пользователь проходит вручную).
+GR_MARK_RE = re.compile(
+    r"giga_recruiter_bot|t\.me/\S*bot\?start=|бот[- ]?рекрут|"
+    r"первичн\w* интервью\s+с\s+ботом|автоматическ\w*\s+(?:скрининг|интервью)", re.I)
+
+URL_RE = re.compile(r"https?://\S+")  # первая ссылка из сообщения -> action_url дела
+
+
+def _norm_cat(raw: str):
+    """Нормализуем категорию из ответа LLM (бэктики/кавычки/префикс «категория:»/синонимы).
+    Возвращает contact|form|test|interview|none, либо None если не распознали — тогда
+    дело НЕ помечается seen и переразберётся в следующий ран (а не теряется молча)."""
+    s = (raw or "").strip().strip("`'\"*•- ").lower()
+    if ":" in s:                       # «категория: form» -> form
+        s = s.split(":")[-1].strip()
+    s = s.strip("`'\"*•-. ").lower()
+    if not s:
+        return None
+    if s.startswith(("contact", "контакт")):
+        return "contact"
+    if s.startswith(("form", "анкет", "форм", "опрос", "регистр")):
+        return "form"
+    if s.startswith(("test", "тест")):
+        return "test"
+    if s.startswith(("interview", "интервью", "собес", "созвон")):
+        return "interview"
+    if s.startswith(("none", "нет", "ничего", "no", "—")):
+        return "none"
+    return None
+
 
 async def main():
     if not pgconn.feature_enabled("notify"):
@@ -52,6 +87,8 @@ async def main():
     cfg = pgconn.app_config()
     tok = cfg["token"]
     oa = cfg["openai"]
+    # ГР активен -> приглашения ГигаРекрутера проходит бот сам, в «дела» не кладём
+    giga_active = pgconn.feature_enabled("giga") and bool(cfg.get("tg_user_session"))
 
     api = ApiClient(
         access_token=tok["access_token"],
@@ -89,6 +126,9 @@ async def main():
                 v = n.get("vacancy") or {}
                 try:
                     m = await api.get(f"/negotiations/{nid}/messages", page=0)
+                    _pages = m.get("pages", 1)
+                    if _pages > 1:   # последняя страница — там СВЕЖЕЕ сообщение работодателя
+                        m = await api.get(f"/negotiations/{nid}/messages", page=_pages - 1)
                 except Exception:
                     continue
                 msgs = [x for x in (m.get("items") or []) if x.get("text")]
@@ -102,6 +142,9 @@ async def main():
                 key = f"{nid}:{last.get('id')}"
                 if key in seen:
                     continue
+                if giga_active and GR_MARK_RE.search(last.get("text") or ""):
+                    fresh_seen.append(key)  # ГР-приглашение: бот пройдёт сам, юзера не дёргаем
+                    continue
                 scanned += 1
                 q = (
                     f"Вакансия: {v.get('name','')}\n"
@@ -112,17 +155,22 @@ async def main():
                 except Exception as e:
                     print("LLM error:", repr(e)[:120])
                     continue
-                fresh_seen.append(key)
-                cat, _, task = ans.partition("|")
-                cat = cat.strip().lower()
+                cat_raw, _, task = ans.partition("|")
+                cat = _norm_cat(cat_raw)
                 task = task.strip()
+                if cat is None:   # не распознали -> НЕ помечаем seen, переразберём в след. ран
+                    print("notify: неразборчивая категория LLM, не помечаю seen:", ans[:90])
+                    continue
+                fresh_seen.append(key)  # терминальная классификация -> больше не дёргаем
                 prio = PRIO.get(cat)
                 if not prio or len(task) < 3:
-                    continue  # none/interview/неразборчиво -> пропуск
+                    continue  # none/interview -> пропуск (seen уже стоит)
                 chat_id = n.get("chat_id") or nid
+                _u = URL_RE.search(last.get("text") or "")
+                action_url = _u.group(0).rstrip(").,;") if _u else ""
                 queued.append((
                     prio, task, f"https://hh.ru/chat/{chat_id}",
-                    f"action:{key}", nid, chat_id, v.get("name", ""),
+                    f"action:{key}", nid, chat_id, v.get("name", ""), action_url,
                 ))
             if page + 1 >= r.get("pages", 0):
                 break
@@ -138,7 +186,7 @@ async def main():
         print("DRY — ничего не сохранено и не поставлено в очередь.")
         return
 
-    for prio, task, link, dedup, nid, chat_id, vac in queued:
+    for prio, task, link, dedup, nid, chat_id, vac, action_url in queued:
         pgconn.notify(
             prio, f"{task} — {vac}" if vac else task,
             category="action", link=link, dedup_key=dedup,
@@ -148,8 +196,9 @@ async def main():
             {
                 "nid": nid, "chat_id": chat_id, "vacancy": vac,
                 "action": task, "chat_url": link, "vacancy_url": "",
+                "action_url": action_url,
             }
-            for prio, task, link, dedup, nid, chat_id, vac in queued
+            for prio, task, link, dedup, nid, chat_id, vac, action_url in queued
         ])
     if fresh_seen:
         pgconn.add_seen("actions", fresh_seen)

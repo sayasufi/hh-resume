@@ -52,6 +52,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
     environment:
       - CONFIG_DIR=/app/config
+      - TZ=Europe/Moscow
       - HH_DB_DSN=postgresql://hh:hh_local_pw@db:5432/hh
       - HH_DB_SCHEMA=public
       - PREFECT_API_URL=http://prefect-server:4200/api
@@ -87,6 +88,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
     environment:
       - CONFIG_DIR=/app/config
+      - TZ=Europe/Moscow
       - HH_DB_DSN=postgresql://hh:hh_local_pw@db:5432/hh
       - HH_DB_SCHEMA=public
     ports:
@@ -108,6 +110,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
     environment:
       - CONFIG_DIR=/app/config
+      - TZ=Europe/Moscow
       - HH_DB_DSN=postgresql://hh:hh_local_pw@db:5432/hh
       - HH_DB_SCHEMA=public
       - HH_ACCOUNT=egor

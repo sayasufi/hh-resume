@@ -397,6 +397,7 @@ class Operation(BaseOperation):
                 page: int = 0
                 last_message: datatypes.Message | None = None
                 message_history: list[str] = []
+                employer_texts: list[str] = []
                 while True:
                     messages_res: datatypes.PaginatedItems[
                         datatypes.Message
@@ -416,6 +417,8 @@ class Operation(BaseOperation):
                             == "employer"
                             else "Я"
                         )
+                        if message["author"]["participant_type"] == "employer":
+                            employer_texts.append(message["text"])
                         message_date = parse_api_datetime(
                             message.get("created_at")
                         ).strftime("%d.%m.%Y %H:%M:%S")
@@ -457,6 +460,31 @@ class Operation(BaseOperation):
                             pgconn.add_seen("handoff", [str(nid)])
                             self.handoff_seen.add(str(nid))
                         print(f"🔔 ИНТЕРВЬЮ -> эскалация тебе, бот молчит: {link}")
+                        continue
+
+                    # Анти-петля «бот против бота»: часть работодателей отвечает
+                    # авто-скринером, который после каждого нашего ответа повторяет
+                    # ОДИН И ТОТ ЖЕ вопрос. Если этот текст работодателя встречается в
+                    # переписке 3+ раза — мы зациклились (видели диалоги по 200+ сообщений).
+                    # Больше не отвечаем по кругу: один раз эскалируем человеку и молчим,
+                    # пока работодатель не пришлёт НОВЫЙ текст (тогда счётчик обнулится).
+                    if last_text and employer_texts.count(last_text) >= 3:
+                        chat_id = negotiation.get("chat_id") or nid
+                        if not self.dry_run:
+                            pgconn.notify(
+                                pgconn.PRIORITY_MED,
+                                f"Диалог завис — работодатель-бот повторяет вопрос: "
+                                f"{placeholders['vacancy_name']}"
+                                f" — {placeholders['employer_name']}",
+                                category="action",
+                                link=f"https://hh.ru/chat/{chat_id}",
+                                dedup_key=f"reply_loop:{nid}",
+                            )
+                        print(f"🔁 Петля в чате {nid}: работодатель повторяет вопрос — молчим")
+                        logger.warning(
+                            "reply loop skipped %s (employer repeated x%d): %.80s",
+                            nid, employer_texts.count(last_text), last_text,
+                        )
                         continue
 
                     send_message = ""

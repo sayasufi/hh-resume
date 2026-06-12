@@ -395,11 +395,12 @@ const gmCls = (a) => {
 function renderGmApps() {
   const box = $("#gm-apps"), cnt = $("#gm-count");
   if (!box) return;
-  const items = GM_FILTER === "all" ? GM_APPS : GM_APPS.filter((a) => gmCls(a) === GM_FILTER);
+  const items = (GM_FILTER === "all" ? GM_APPS : GM_APPS.filter((a) => gmCls(a) === GM_FILTER))
+    .filter((a) => _inPeriod(a.at));
   if (cnt) cnt.textContent = items.length;
   if (!items.length) {
     box.innerHTML = '<div class="empty">' +
-      (GM_APPS.length ? "Нет откликов в этом фильтре" : "Пока нет откликов через GetMatch") + "</div>";
+      (GM_APPS.length ? "Нет откликов за период / в этом фильтре" : "Пока нет откликов через GetMatch") + "</div>";
     return;
   }
   box.innerHTML = '<div class="list">' + items.map((a) => {
@@ -475,11 +476,12 @@ let HABR_APPS = [], HABR_FILTER = "all";
 function renderHabrApps() {
   const box = $("#habr-apps"), cnt = $("#habr-count");
   if (!box) return;
-  const items = HABR_FILTER === "all" ? HABR_APPS : HABR_APPS.filter((a) => gmCls(a) === HABR_FILTER);
+  const items = (HABR_FILTER === "all" ? HABR_APPS : HABR_APPS.filter((a) => gmCls(a) === HABR_FILTER))
+    .filter((a) => _inPeriod(a.at));
   if (cnt) cnt.textContent = items.length;
   if (!items.length) {
     box.innerHTML = '<div class="empty">'
-      + (HABR_APPS.length ? "Нет откликов в этом фильтре" : "Пока нет откликов через Habr") + "</div>";
+      + (HABR_APPS.length ? "Нет откликов за период / в этом фильтре" : "Пока нет откликов через Habr") + "</div>";
     return;
   }
   box.innerHTML = '<div class="list">' + items.map((a) => {
@@ -504,12 +506,15 @@ let TG_APPS = [];
 function renderTgApps() {
   const box = $("#tg-apps"), cnt = $("#tg-count");
   if (!box) return;
-  if (cnt) cnt.textContent = TG_APPS.length;
-  if (!TG_APPS.length) {
-    box.innerHTML = '<div class="empty">Пока нет TG-откликов. Включи «Telegram-отклики» в Настройках — бот подберёт вакансии из каналов и покажет, кому написал бы (в DRY реально не пишем).</div>';
+  const items = TG_APPS.filter((a) => _inPeriod(a.at));
+  if (cnt) cnt.textContent = items.length;
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">'
+      + (TG_APPS.length ? "Нет откликов за период"
+         : "Пока нет TG-откликов. Включи «Telegram-отклики» в Настройках — бот подберёт вакансии из каналов и покажет, кому написал бы (в DRY реально не пишем).") + "</div>";
     return;
   }
-  box.innerHTML = '<div class="list">' + TG_APPS.map((a) => {
+  box.innerHTML = '<div class="list">' + items.map((a) => {
     const sub = [a.channel ? "@" + a.channel : "", a.category, a.at].filter(Boolean).join(" · ");
     const st = a.status !== "sent"
       ? '<span class="gm-st wait">DRY</span>'
@@ -617,7 +622,11 @@ function refreshAll() {
 }
 if ($("#refresh")) $("#refresh").onclick = refreshAll;
 // период влияет на воронку, детали, активность бота, GetMatch/giga/TG-счётчики, список откликов
-const _reloadPeriod = () => { loadStats(); loadActivity(); loadDialogs(); loadGiga(); renderGmStats(); };
+const _reloadPeriod = () => {
+  loadStats(); loadActivity(); loadDialogs(); loadGiga();
+  // период теперь фильтрует и списки откликов GetMatch/Habr/TG (данные уже загружены)
+  renderGmStats(); renderGmApps(); renderHabrApps(); renderTgApps();
+};
 document.querySelectorAll(".period button").forEach((b) => {
   b.onclick = () => {
     const key = b.dataset.p;

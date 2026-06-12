@@ -85,8 +85,16 @@ async def main():
         print("feat.notify выключен в Mini App — пропуск notify_actions")
         return
     cfg = pgconn.app_config()
-    tok = cfg["token"]
-    oa = cfg["openai"]
+    # Аккаунт без hh-токена (напр. служебный Telegram-краулер) — пропускаем мягко,
+    # а не падаем с KeyError (иначе Prefect ретраит и шумит ERROR в логах).
+    tok = cfg.get("token") or {}
+    if not tok.get("access_token"):
+        print("notify_actions: нет hh-токена — пропуск аккаунта", pgconn.get_account())
+        return
+    oa = cfg.get("openai") or {}
+    if not oa.get("token"):
+        print("notify_actions: нет openai-токена — пропуск аккаунта", pgconn.get_account())
+        return
     # ГР активен -> приглашения ГигаРекрутера проходит бот сам, в «дела» не кладём
     giga_active = pgconn.feature_enabled("giga") and bool(cfg.get("tg_user_session"))
 

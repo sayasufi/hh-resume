@@ -264,8 +264,17 @@ async def main():
         LIMIT = max(1, round(_al * 0.25))
     gph_only = bool(pgconn.get_setting("apply.civil_law_only", False))  # общий фильтр ГПХ
     cfg = pgconn.app_config()
+    # Аккаунт без hh-токена (напр. служебный Telegram-краулер) — не цель для откликов:
+    # мягко пропускаем, а не падаем с KeyError (иначе Prefect ретраит и шумит ERROR).
+    tok = cfg.get("token") or {}
+    if not tok.get("access_token"):
+        print("apply_tests: нет hh-токена — пропуск аккаунта", pgconn.get_account())
+        return
+    oa = cfg.get("openai") or {}
+    if not oa.get("token"):
+        print("apply_tests: нет openai-токена — пропуск аккаунта", pgconn.get_account())
+        return
     user, pw = creds()
-    tok = cfg["token"]; oa = cfg["openai"]
     api = ApiClient(access_token=tok["access_token"], refresh_token=tok["refresh_token"],
                     access_expires_at=tok["access_expires_at"], user_agent=generate_android_useragent(),
                     refresh_hook=pgconn.locked_token_refresh)

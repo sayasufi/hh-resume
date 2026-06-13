@@ -359,12 +359,11 @@ class Operation(BaseOperation):
             "apply.excluded_terms"
         )
         self.excluded_terms = self._parse_excluded_terms(_excl)
-        # Общие предпочтения кандидата (зарплата/формат работы) — один источник для всех
-        # платформ: формат жёстко фильтрует вакансии, зарплата мягко уходит в поиск/письма.
+        # Общий формат работы кандидата -> мягкий client-side фильтр ниже: режем вакансию
+        # ТОЛЬКО при ЯВНОМ несовпадении формата. Вакансии без указанного формата и без ЗП
+        # НЕ отсекаем; зарплата выдачу не фильтрует вовсе (только письма/TG-матч).
         _prefs = (getattr(tool, "config", None) or {}).get("preferences") or {}
         self.wanted_wf = cprefs.wanted_formats(_prefs)
-        self.wf_search_ids = cprefs.hh_work_format_ids(self.wanted_wf)
-        self.pref_salary = cprefs.parse_salary(_prefs.get("salary"))
         self.sort_point_lat = args.sort_point_lat
         self.sort_point_lng = args.sort_point_lng
         self.top_lat = args.top_lat
@@ -906,16 +905,12 @@ class Operation(BaseOperation):
             params["text"] = self.search
         if self.schedule:
             params["schedule"] = self.schedule
-        if self.wf_search_ids:  # формат работы из общих настроек (REMOTE/HYBRID/ON_SITE)
-            params["work_format"] = self.wf_search_ids
         if self.experience:
             params["experience"] = self.experience
         if self.currency:
             params["currency"] = self.currency
-        # ЗП: из CLI или из общих настроек кандидата (мягко — без only_with_salary)
-        _sal = self.salary or self.pref_salary
-        if _sal:
-            params["salary"] = _sal
+        if self.salary:  # только явный CLI --salary; ЗП из настроек выдачу НЕ режет
+            params["salary"] = self.salary
         if self.period:
             params["period"] = self.period
         if self.date_from:

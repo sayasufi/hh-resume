@@ -41,13 +41,13 @@ def build_html(d: dict) -> str:
 
     def psection(p):
         if p.get("status") == "data":
-            right, dim = f'{p.get("n", 0)} {e(p.get("unit", "откликов"))}', ""
+            right, dim = f'сегодня +{p.get("today", 0)}', ""
+            sub = f'<div class="psub">всего {p.get("n", 0)} {e(p.get("unit", "откликов"))}</div>'
         else:
-            right = "не подключено" if p.get("status") == "off" else "нет откликов"
-            dim = " dim"
+            right, dim, sub = ("не подключено" if p.get("status") == "off" else "нет откликов"), " dim", ""
         head = (f'<div class="ptitle{dim}"><span>{p.get("emoji", "")} {e(p.get("name", ""))}</span>'
                 f'<span class="pright">{e(right)}</span></div>')
-        body = "".join(frow(b) for b in p.get("bars", []))
+        body = sub + "".join(frow(b) for b in p.get("bars", []))
         if p.get("note"):
             body += f'<div class="pnote">{e(p["note"])}</div>'
         return f'<div class="sect">{head}{body}</div>'
@@ -76,6 +76,7 @@ body {{ background:transparent; }}
           font-size:18px; font-weight:800; }}
 .ptitle .pright {{ font-size:14px; font-weight:700; color:#9fb3cc; }}
 .ptitle.dim {{ opacity:.45; }}
+.psub {{ font-size:13px; color:#8b98ad; margin:-7px 0 13px; }}
 .pnote {{ font-size:13.5px; color:#8b98ad; }}
 .today {{ display:flex; gap:12px; }}
 .tcell {{ flex:1; background:#161d2e; border-radius:16px; padding:16px 10px; text-align:center; }}
@@ -98,11 +99,11 @@ body {{ background:transparent; }}
 </style></head><body><div class="card" id="card">
   <div class="hdr"><div class="who">✨ {e(d.get("who") or "Кандидат")}</div>
     <div class="date">Сводка · {e(d.get("date") or "")}</div></div>
-  <div class="sect"><div class="stitle">Коротко</div>
+  <div class="sect"><div class="stitle">Сегодня сделано</div>
     <div class="today">
-      <div class="tcell"><div class="tn">{t.get("apps", 0)}</div><div class="tl">📨 откликов сегодня</div></div>
-      <div class="tcell"><div class="tn">+{t.get("views", 0)}</div><div class="tl">👀 новых просмотров</div></div>
-      <div class="tcell"><div class="tn">+{t.get("invites", 0)}</div><div class="tl">💬 непрочитанных</div></div>
+      <div class="tcell"><div class="tn">{t.get("apps", 0)}</div><div class="tl">📨 откликов</div></div>
+      <div class="tcell"><div class="tn">{t.get("tests", 0)}</div><div class="tl">🧪 тестов</div></div>
+      <div class="tcell"><div class="tn">{t.get("reply", 0)}</div><div class="tl">💬 ответов</div></div>
     </div>
   </div>
   {plat_html}

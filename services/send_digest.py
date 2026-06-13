@@ -125,8 +125,24 @@ def _q1(sql, params, default):
         return default
 
 
-def _platform_data(account, cfg, funnel):
-    """Все 4 канала — равнозначными блоками; показываем всегда, даже без подключения."""
+def _today_activity(account):
+    """Что бот СДЕЛАЛ сегодня (по дням из activity_daily): {kind: count}."""
+    try:
+        conn = pgconn.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT kind, count FROM activity_daily "
+                            "WHERE account=%s AND day=current_date", (account,))
+                return {k: n for k, n in cur.fetchall()}
+        finally:
+            conn.close()
+    except Exception:
+        return {}
+
+
+def _platform_data(account, cfg, funnel, today_act):
+    """Все 4 канала — равнозначными блоками; показываем всегда, даже без подключения.
+    today — сколько откликов СДЕЛАНО сегодня (за день), n — всего за всё время."""
     def pc(x, tot):
         return round(100 * x / tot) if tot else 0
 
@@ -140,6 +156,7 @@ def _platform_data(account, cfg, funnel):
 
     plats = [{
         "emoji": "🔵", "name": "hh.ru", "unit": "откликов",
+        "today": today_act.get("apply", 0),
         "status": st(funnel["total"], has_hh), "n": funnel["total"], "note": "",
         "bars": [
             {"emoji": "🤝", "label": "Собеседования", "n": funnel["sob"],
@@ -157,6 +174,7 @@ def _platform_data(account, cfg, funnel):
         (account,), (0, 0, 0))
     plats.append({
         "emoji": "🟢", "name": "GetMatch", "unit": "откликов",
+        "today": today_act.get("getmatch", 0),
         "status": st(gtot, has_gm), "n": gtot, "note": "",
         "bars": [
             {"emoji": "✅", "label": "Одобрено", "n": gok, "pct": pc(gok, gtot), "color": "#34d399"},
@@ -167,6 +185,7 @@ def _platform_data(account, cfg, funnel):
     htot = _q1("SELECT count(*) FROM habr_apps WHERE account=%s", (account,), (0,))[0]
     plats.append({
         "emoji": "🔷", "name": "Habr", "unit": "откликов",
+        "today": today_act.get("habr", 0),
         "status": st(htot, has_habr), "n": htot, "bars": [],
         "note": "статусы Habr пока не отслеживаются" if htot else "",
     })
@@ -176,6 +195,7 @@ def _platform_data(account, cfg, funnel):
         "FROM tg_outreach WHERE account=%s", (account,), (0, 0))
     plats.append({
         "emoji": "🟣", "name": "Telegram", "unit": "сообщений",
+        "today": today_act.get("tg_channels", 0),
         "status": st(tsent, has_tg), "n": tsent, "note": "",
         "bars": [{"emoji": "💬", "label": "Ответили", "n": trepl, "pct": pc(trepl, tsent),
                   "color": "#a78bfa"}] if tsent else [],
@@ -205,19 +225,18 @@ async def _today_live(cfg) -> dict:
 
 async def gather_card(cfg, account, has_problem) -> dict:
     today = dt.date.today()
-    apps = pgconn.get_setting("_applications_count") or 0
-    dat = pgconn.get_setting("_applications_date")
-    apps = int(apps) if (str(apps).isdigit() and dat == today.isoformat()) else 0
-    live = await _today_live(cfg)
+    act = _today_activity(account)
+    apps_today = sum(act.get(k, 0) for k in ("apply", "getmatch", "habr", "tg_channels"))
     funnel, resumes = _funnel_data(account)
     return {
         "who": _user_label(),
         "date": f"{today.day} {_MONTHS[today.month]}",
         "status": "✅ Бот работает штатно" if not has_problem
                   else "⚠️ Есть проблема — детали в сообщении выше",
-        "today": {"apps": apps, "views": live["views"], "invites": live["invites"]},
+        # СЕГОДНЯ — что бот реально сделал за день (надёжно, из activity_daily)
+        "today": {"apps": apps_today, "tests": act.get("tests", 0), "reply": act.get("reply", 0)},
         "resumes": resumes,
-        "platforms": _platform_data(account, cfg, funnel),
+        "platforms": _platform_data(account, cfg, funnel, act),
     }
 
 

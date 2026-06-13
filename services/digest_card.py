@@ -1,12 +1,20 @@
 """Красивая PNG-карточка дайджеста: HTML+CSS -> Chromium (Playwright, уже в образе) -> PNG.
 Без внешних сервисов и сетевых вызовов. render_png(data) -> bytes | None (None -> текстовый фолбэк).
 
+Все каналы (hh / GetMatch / Habr / Telegram) показываются РАВНОЗНАЧНЫМИ блоками с барами
+своих исходов; блок показывается всегда — даже если канал не подключён («не подключено»)
+или без активности («нет откликов»).
+
 data = {
   "who": str, "date": str, "status": str,
   "today": {"apps": int, "views": int, "invites": int},
-  "funnel": {"total": int, "sob": int, "resp": int, "disc": int,
-             "sob_pct": int, "resp_pct": int, "disc_pct": int},
   "resumes": [{"title": str, "sob": int, "total": int, "pct": int}, ...],
+  "platforms": [
+    {"emoji": str, "name": str, "unit": str, "status": "data"|"empty"|"off", "n": int,
+     "bars": [{"emoji": str, "label": str, "n": int, "pct": int, "color": str}, ...],
+     "note": str},
+    ...
+  ],
 }
 """
 import html
@@ -21,33 +29,37 @@ def _bar(pct: int, color: str) -> str:
 def build_html(d: dict) -> str:
     e = html.escape
     t = d.get("today") or {}
-    f = d.get("funnel") or {}
     res = d.get("resumes") or []
+    plats = d.get("platforms") or []
 
-    def frow(emoji, label, n, pct, color):
+    def frow(b):
         return (f'<div class="frow"><div class="fhead">'
-                f'<span class="fl">{emoji} {e(label)}</span>'
-                f'<span class="fnums"><b>{n}</b><span class="fp">{pct}%</span></span>'
-                f'</div>{_bar(pct, color)}</div>')
+                f'<span class="fl">{b.get("emoji", "")} {e(b.get("label", ""))}</span>'
+                f'<span class="fnums"><b>{b.get("n", 0)}</b>'
+                f'<span class="fp">{b.get("pct", 0)}%</span></span></div>'
+                f'{_bar(b.get("pct", 0), b.get("color", "#60a5fa"))}</div>')
 
-    funnel = (frow("🤝", "Собеседования", f.get("sob", 0), f.get("sob_pct", 0), "#34d399")
-              + frow("💬", "Ответы", f.get("resp", 0), f.get("resp_pct", 0), "#60a5fa")
-              + frow("❌", "Отказы", f.get("disc", 0), f.get("disc_pct", 0), "#f87171"))
+    def psection(p):
+        if p.get("status") == "data":
+            right, dim = f'{p.get("n", 0)} {e(p.get("unit", "откликов"))}', ""
+        else:
+            right = "не подключено" if p.get("status") == "off" else "нет откликов"
+            dim = " dim"
+        head = (f'<div class="ptitle{dim}"><span>{p.get("emoji", "")} {e(p.get("name", ""))}</span>'
+                f'<span class="pright">{e(right)}</span></div>')
+        body = "".join(frow(b) for b in p.get("bars", []))
+        if p.get("note"):
+            body += f'<div class="pnote">{e(p["note"])}</div>'
+        return f'<div class="sect">{head}{body}</div>'
+
+    plat_html = "".join(psection(p) for p in plats)
 
     res_rows = "".join(
         f'<div class="rrow"><span class="rt">{e(r.get("title") or "—")}</span>'
         f'<span class="rn">🤝 {r.get("sob", 0)}/{r.get("total", 0)} · {r.get("pct", 0)}%</span></div>'
         for r in res[:3])
-    res_block = (f'<div class="sect"><div class="stitle">По резюме</div>{res_rows}</div>'
+    res_block = (f'<div class="sect"><div class="stitle">По резюме · hh.ru</div>{res_rows}</div>'
                  if res_rows else "")
-
-    plats = d.get("platforms") or []
-    plat_rows = "".join(
-        f'<div class="prow"><span class="pname">{p.get("emoji", "")} {e(p.get("name", ""))}</span>'
-        f'<span class="pnums"><b>{p.get("n", 0)}</b> {e(p.get("unit", "откл"))} · '
-        f'{e(p.get("sub", ""))}</span></div>' for p in plats)
-    plat_block = (f'<div class="sect"><div class="stitle">Другие платформы</div>{plat_rows}</div>'
-                  if plat_rows else "")
 
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
 * {{ margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,'Segoe UI',Roboto,'Noto Sans',sans-serif; }}
@@ -60,11 +72,16 @@ body {{ background:transparent; }}
 .sect {{ padding:20px 30px; border-top:1px solid rgba(255,255,255,.06); }}
 .stitle {{ font-size:12px; font-weight:700; letter-spacing:1.4px; text-transform:uppercase;
           color:#8b98ad; margin-bottom:14px; }}
+.ptitle {{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:15px;
+          font-size:18px; font-weight:800; }}
+.ptitle .pright {{ font-size:14px; font-weight:700; color:#9fb3cc; }}
+.ptitle.dim {{ opacity:.45; }}
+.pnote {{ font-size:13.5px; color:#8b98ad; }}
 .today {{ display:flex; gap:12px; }}
 .tcell {{ flex:1; background:#161d2e; border-radius:16px; padding:16px 10px; text-align:center; }}
 .tn {{ font-size:30px; font-weight:800; line-height:1; }}
 .tl {{ font-size:12.5px; color:#97a3b6; margin-top:7px; }}
-.frow {{ margin-bottom:15px; }}
+.frow {{ margin-bottom:14px; }}
 .frow:last-child {{ margin-bottom:0; }}
 .fhead {{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:7px; }}
 .fl {{ font-size:16px; font-weight:600; }}
@@ -77,12 +94,6 @@ body {{ background:transparent; }}
 .rrow:last-child {{ border-bottom:none; }}
 .rt {{ font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:340px; }}
 .rn {{ color:#9fb3cc; font-weight:600; font-size:14px; white-space:nowrap; }}
-.prow {{ display:flex; justify-content:space-between; align-items:center; padding:11px 0;
-        border-bottom:1px solid rgba(255,255,255,.05); font-size:16px; }}
-.prow:last-child {{ border-bottom:none; }}
-.pname {{ font-weight:700; }}
-.pnums {{ color:#9fb3cc; font-weight:600; font-size:14px; white-space:nowrap; }}
-.pnums b {{ color:#e8edf6; font-size:17px; }}
 .status {{ padding:16px 30px 22px; font-size:15px; font-weight:600; color:#cdd6e4; }}
 </style></head><body><div class="card" id="card">
   <div class="hdr"><div class="who">✨ {e(d.get("who") or "Кандидат")}</div>
@@ -94,9 +105,8 @@ body {{ background:transparent; }}
       <div class="tcell"><div class="tn">+{t.get("invites", 0)}</div><div class="tl">💬 непрочитанных</div></div>
     </div>
   </div>
-  <div class="sect"><div class="stitle">hh.ru · {f.get("total", 0)} откликов</div>{funnel}</div>
+  {plat_html}
   {res_block}
-  {plat_block}
   <div class="status">{e(d.get("status") or "✅ Бот работает штатно")}</div>
 </div></body></html>"""
 

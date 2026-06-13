@@ -125,29 +125,62 @@ def _q1(sql, params, default):
         return default
 
 
-def _platform_data(account):
-    """Сводка по не-hh каналам (только те, где есть активность)."""
-    gm = _q1("SELECT count(*), count(*) FILTER (WHERE status ~* 'approv|accept|invit|offer'), "
-             "count(*) FILTER (WHERE status ~* 'reject|declin') FROM getmatch_apps WHERE account=%s",
-             (account,), (0, 0, 0))
-    habr = _q1("SELECT count(*) FROM habr_apps WHERE account=%s", (account,), (0,))[0]
-    tg = _q1("SELECT count(*) FILTER (WHERE status='sent'), count(*) FILTER (WHERE replied) "
-             "FROM tg_outreach WHERE account=%s", (account,), (0, 0))
-    out = []
-    if gm[0]:
-        sub = []
-        if gm[1]:
-            sub.append(f"✅ {gm[1]} одобрено")
-        if gm[2]:
-            sub.append(f"❌ {gm[2]}")
-        out.append({"emoji": "🟢", "name": "GetMatch", "n": gm[0], "unit": "откл",
-                    "sub": " · ".join(sub) or "ждём ответа"})
-    if habr:
-        out.append({"emoji": "🔷", "name": "Habr", "n": habr, "unit": "откл", "sub": "отправлено"})
-    if tg[0]:
-        out.append({"emoji": "🟣", "name": "Telegram", "n": tg[0], "unit": "ЛС",
-                    "sub": f"💬 {tg[1]} ответили" if tg[1] else "ждём ответа"})
-    return out
+def _platform_data(account, cfg, funnel):
+    """Все 4 канала — равнозначными блоками; показываем всегда, даже без подключения."""
+    def pc(x, tot):
+        return round(100 * x / tot) if tot else 0
+
+    has_hh = bool((cfg.get("token") or {}).get("access_token"))
+    has_tg = bool(cfg.get("tg_user_session"))
+    has_gm = has_tg or bool(pgconn.get_setting("getmatch.session", "", account))
+    has_habr = bool(pgconn.get_setting("habr.session", "", account))
+
+    def st(n, connected):
+        return "data" if n else ("empty" if connected else "off")
+
+    plats = [{
+        "emoji": "🔵", "name": "hh.ru", "unit": "откликов",
+        "status": st(funnel["total"], has_hh), "n": funnel["total"], "note": "",
+        "bars": [
+            {"emoji": "🤝", "label": "Собеседования", "n": funnel["sob"],
+             "pct": funnel["sob_pct"], "color": "#34d399"},
+            {"emoji": "💬", "label": "Ответы", "n": funnel["resp"],
+             "pct": funnel["resp_pct"], "color": "#60a5fa"},
+            {"emoji": "❌", "label": "Отказы", "n": funnel["disc"],
+             "pct": funnel["disc_pct"], "color": "#f87171"},
+        ] if funnel["total"] else [],
+    }]
+
+    gtot, gok, gbad = _q1(
+        "SELECT count(*), count(*) FILTER (WHERE status ~* 'approv|accept|invit|offer'), "
+        "count(*) FILTER (WHERE status ~* 'reject|declin') FROM getmatch_apps WHERE account=%s",
+        (account,), (0, 0, 0))
+    plats.append({
+        "emoji": "🟢", "name": "GetMatch", "unit": "откликов",
+        "status": st(gtot, has_gm), "n": gtot, "note": "",
+        "bars": [
+            {"emoji": "✅", "label": "Одобрено", "n": gok, "pct": pc(gok, gtot), "color": "#34d399"},
+            {"emoji": "❌", "label": "Отказы", "n": gbad, "pct": pc(gbad, gtot), "color": "#f87171"},
+        ] if gtot else [],
+    })
+
+    htot = _q1("SELECT count(*) FROM habr_apps WHERE account=%s", (account,), (0,))[0]
+    plats.append({
+        "emoji": "🔷", "name": "Habr", "unit": "откликов",
+        "status": st(htot, has_habr), "n": htot, "bars": [],
+        "note": "статусы Habr пока не отслеживаются" if htot else "",
+    })
+
+    tsent, trepl = _q1(
+        "SELECT count(*) FILTER (WHERE status='sent'), count(*) FILTER (WHERE replied) "
+        "FROM tg_outreach WHERE account=%s", (account,), (0, 0))
+    plats.append({
+        "emoji": "🟣", "name": "Telegram", "unit": "сообщений",
+        "status": st(tsent, has_tg), "n": tsent, "note": "",
+        "bars": [{"emoji": "💬", "label": "Ответили", "n": trepl, "pct": pc(trepl, tsent),
+                  "color": "#a78bfa"}] if tsent else [],
+    })
+    return plats
 
 
 async def _today_live(cfg) -> dict:
@@ -183,8 +216,8 @@ async def gather_card(cfg, account, has_problem) -> dict:
         "status": "✅ Бот работает штатно" if not has_problem
                   else "⚠️ Есть проблема — детали в сообщении выше",
         "today": {"apps": apps, "views": live["views"], "invites": live["invites"]},
-        "funnel": funnel, "resumes": resumes,
-        "platforms": _platform_data(account),
+        "resumes": resumes,
+        "platforms": _platform_data(account, cfg, funnel),
     }
 
 

@@ -458,7 +458,12 @@ WF_ORDER = {"REMOTE": 0, "HYBRID": 1, "ON_SITE": 2, "FIELD_WORK": 3, "FLY_IN_FLY
 
 
 async def _work_format(token, account):
-    """Форматы работы из hh-резюме в порядке приоритета (удалёнка>гибрид>офис)."""
+    """Формат работы: приоритет — общая настройка кандидата (preferences.work_format),
+    иначе из hh-резюме (удалёнка>гибрид>офис)."""
+    from hh_applicant_tool.utils import prefs as cprefs
+    _wanted = cprefs.wanted_formats((pgconn.app_config(account) or {}).get("preferences"))
+    if _wanted:
+        return cprefs.labels_ru(_wanted)
     rid = pgconn.get_setting("apply.resume_id", account=account)
     if not (rid and (token or {}).get("access_token")):
         return ""

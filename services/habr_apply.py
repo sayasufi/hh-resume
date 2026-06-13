@@ -24,13 +24,13 @@ LETTER_SYS = (
     "слова «резюме».\n\n=== ОПЫТ ===\n{resume}\n=== КОНЕЦ ===")
 
 
-async def _gen_letter(oa, resume, title, company):
+async def _gen_letter(oa, resume, title, company, extra=""):
     if not (oa and oa.get("token") and resume):
         return ""
     try:
         chat = ChatOpenAI(token=oa["token"], model=oa.get("model"),
                           completion_endpoint=oa.get("completion_endpoint"),
-                          system_prompt=LETTER_SYS.format(resume=resume[:3000]),
+                          system_prompt=LETTER_SYS.format(resume=resume[:3000]) + extra,
                           temperature=0.5, max_completion_tokens=300)
         t = ((await chat.send_message(f"Вакансия «{title}» в компании «{company}». Напиши сопроводительное.")) or "").strip()
     except Exception as e:
@@ -100,6 +100,17 @@ async def run():
         limit = DEFAULT_MAX if _lim is None else int(_lim)
         oa = cfg.get("openai")
         resume = (cfg.get("resume_text") or "").strip()
+        # Общие предпочтения: ЗП/формат -> заземление письма + жёсткий фильтр формата
+        from hh_applicant_tool.utils import prefs as cprefs
+        _p = cfg.get("preferences") or {}
+        _extra = ""
+        _sal = (_p.get("salary") or "").strip()
+        if _sal:
+            _extra += f"\nЖелаемая зарплата кандидата: {_sal}."
+        _wfl = cprefs.labels_ru(cprefs.wanted_formats(_p))
+        if _wfl:
+            _extra += f"\nПредпочтительный формат работы: {_wfl}."
+        wanted_wf = cprefs.wanted_formats(_p)
         print(f"habr: вошли, откликаемся по подходящим (профиль Habr), лимит {limit}")
 
         seen = pgconn.seen_keys("habr")
@@ -117,9 +128,21 @@ async def run():
                 kind = (v.get("response") or {}).get("kind")
                 if kind == "applied" or vid in seen:
                     continue
+                # Жёсткий фильтр формата (best-effort по полям Habr; нет формата -> не режем)
+                if wanted_wf:
+                    _vf = []
+                    if v.get("remote_work") or v.get("remote"):
+                        _vf.append("remote")
+                    _f = v.get("work_format") or v.get("format")
+                    if isinstance(_f, list):
+                        _vf += [(x.get("id") if isinstance(x, dict) else x) for x in _f]
+                    elif _f:
+                        _vf.append(_f)
+                    if not cprefs.format_ok(_vf, wanted_wf):
+                        continue
                 title = v.get("title", "")
                 company = (v.get("company") or {}).get("title", "")
-                cover = await _gen_letter(oa, resume, title, company)
+                cover = await _gen_letter(oa, resume, title, company, _extra)
                 if DRY:
                     print(f"habr[dry]: откликнулся бы на {title[:42]} (письмо={len(cover)} симв)")
                     applied += 1

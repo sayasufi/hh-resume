@@ -909,6 +909,7 @@ async def api_settings(account: str = None,
                 for f in FEATURES}
     config = {
         "salary": (cfg.get("preferences") or {}).get("salary") or "",
+        "work_format": (cfg.get("preferences") or {}).get("work_format") or [],
         "max_per_day": await asyncio.to_thread(
             pgconn.get_setting, "apply.max_per_day", 15, account),
         "tests_per_day": await asyncio.to_thread(
@@ -973,6 +974,15 @@ async def _set_config(account: str, key: str, value) -> None:
         cfg = await asyncio.to_thread(pgconn.app_config, account)
         prefs = cfg.get("preferences") or {}
         prefs["salary"] = str(value).strip()
+        await asyncio.to_thread(pgconn.set_app_config, "preferences", prefs, account)
+    elif key == "work_format":
+        # формат работы (мультивыбор: remote/hybrid/onsite) — общий для всех платформ
+        from hh_applicant_tool.utils import prefs as _p
+        vals = value if isinstance(value, list) else [value]
+        canon = {c for c in (_p.canon_wf(v) for v in vals) if c}
+        cfg = await asyncio.to_thread(pgconn.app_config, account)
+        prefs = cfg.get("preferences") or {}
+        prefs["work_format"] = [c for c in _p.WF_ORDER if c in canon]
         await asyncio.to_thread(pgconn.set_app_config, "preferences", prefs, account)
     elif key in ("apply.max_per_day", "apply.tests_per_day"):
         cap = MAX_PER_DAY_CAP if key == "apply.max_per_day" else TESTS_PER_DAY_CAP

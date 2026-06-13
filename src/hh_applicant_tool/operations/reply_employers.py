@@ -12,6 +12,7 @@ from ..api import ApiError, datatypes
 from ..main import BaseNamespace, BaseOperation
 from ..storage import pgconn
 from ..utils.date import parse_api_datetime
+from ..utils import prefs as cprefs
 from ..utils.string import rand_text
 
 # Классификатор хэндоффа: приглашение на ЖИВОЙ разговор с человеком -> человеку.
@@ -229,16 +230,21 @@ class Operation(BaseOperation):
                 "указывай именно этот город (не выдумывай другой по строке про вуз). "
                 "Кандидат физически находится в этом городе."
             )
-        # Формат работы из резюме с приоритетом удалёнка > гибрид > офис
-        _wf_order = {"REMOTE": 0, "HYBRID": 1, "ON_SITE": 2,
-                     "FIELD_WORK": 3, "FLY_IN_FLY_OUT": 4}
-        _wf = ", ".join(
-            w["name"]
-            for w in sorted(
-                (w for w in (resume_obj.get("work_format") or []) if w.get("name")),
-                key=lambda w: _wf_order.get(w.get("id"), 9),
+        # Формат работы: приоритет — общая настройка кандидата (preferences.work_format),
+        # иначе из hh-резюме (удалёнка > гибрид > офис).
+        _wanted = cprefs.wanted_formats(self.tool.config.get("preferences"))
+        if _wanted:
+            _wf = cprefs.labels_ru(_wanted)
+        else:
+            _wf_order = {"REMOTE": 0, "HYBRID": 1, "ON_SITE": 2,
+                         "FIELD_WORK": 3, "FLY_IN_FLY_OUT": 4}
+            _wf = ", ".join(
+                w["name"]
+                for w in sorted(
+                    (w for w in (resume_obj.get("work_format") or []) if w.get("name")),
+                    key=lambda w: _wf_order.get(w.get("id"), 9),
+                )
             )
-        )
         if _wf:
             system_prompt += (
                 f"\n\nФорматы работы, которые подходят кандидату (в порядке приоритета): {_wf}. "

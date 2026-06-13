@@ -87,8 +87,17 @@ def _letter_llm(cfg):
     if not oa.get("token"):
         return None
     from hh_applicant_tool.ai import ChatOpenAI
+    from hh_applicant_tool.utils import prefs as cprefs
     resume = (cfg.get("resume_text") or "").strip()
-    sysp = LETTER_SYS + (("\n\nРезюме:\n" + resume) if resume else "")
+    _p = cfg.get("preferences") or {}
+    extra = ""
+    _sal = (_p.get("salary") or "").strip()
+    if _sal:
+        extra += f"\nЖелаемая зарплата кандидата: {_sal} — назови её, если спрашивают про ожидания."
+    _wf = cprefs.labels_ru(cprefs.wanted_formats(_p))
+    if _wf:
+        extra += f"\nПредпочтительный формат работы: {_wf}."
+    sysp = LETTER_SYS + extra + (("\n\nРезюме:\n" + resume) if resume else "")
     return ChatOpenAI(token=oa["token"], model=oa.get("model"),
                       completion_endpoint=oa.get("completion_endpoint"),
                       system_prompt=sysp, temperature=0.5, max_completion_tokens=300)
@@ -157,12 +166,27 @@ async def run():
         else:
             offers = await api.offers(limit=max(limit * 2, 40), **profile_filters(me))
             print(f"getmatch: вакансий-кандидатов: {len(offers)}")
+            from hh_applicant_tool.utils import prefs as cprefs
+            wanted_wf = cprefs.wanted_formats(cfg.get("preferences"))
             for o in offers:
                 if sent_today + applied >= limit:
                     break
                 vid = str(o.get("id") or "")
                 if not vid or vid in seen:
                     continue
+                # Жёсткий фильтр формата (best-effort: GetMatch не всегда отдаёт формат —
+                # тогда не выкидываем). Пропускаем только при явном несовпадении.
+                if wanted_wf:
+                    _vf = []
+                    if o.get("remote") or o.get("is_remote") or o.get("remote_work"):
+                        _vf.append("remote")
+                    _f = o.get("work_format") or o.get("format")
+                    if isinstance(_f, list):
+                        _vf += [(x.get("id") if isinstance(x, dict) else x) for x in _f]
+                    elif _f:
+                        _vf.append(_f)
+                    if not cprefs.format_ok(_vf, wanted_wf):
+                        continue
                 pos = (o.get("position") or "")[:42]
                 letter = await _gen_letter(letter_llm, o)
                 if o.get("cover_letter_required") and not letter:

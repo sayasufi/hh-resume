@@ -12,6 +12,7 @@ from ..ai.base import AIError
 from ..api import BadResponse, Redirect, datatypes
 from ..api.datatypes import PaginatedItems, SearchVacancy
 from ..api.errors import ApiError, LimitExceeded
+from ..utils import prefs as cprefs
 from ..main import BaseNamespace, BaseOperation
 from ..storage.repositories.errors import RepositoryError
 from ..utils.string import (
@@ -358,6 +359,12 @@ class Operation(BaseOperation):
             "apply.excluded_terms"
         )
         self.excluded_terms = self._parse_excluded_terms(_excl)
+        # Общие предпочтения кандидата (зарплата/формат работы) — один источник для всех
+        # платформ: формат жёстко фильтрует вакансии, зарплата мягко уходит в поиск/письма.
+        _prefs = (getattr(tool, "config", None) or {}).get("preferences") or {}
+        self.wanted_wf = cprefs.wanted_formats(_prefs)
+        self.wf_search_ids = cprefs.hh_work_format_ids(self.wanted_wf)
+        self.pref_salary = cprefs.parse_salary(_prefs.get("salary"))
         self.sort_point_lat = args.sort_point_lat
         self.sort_point_lng = args.sort_point_lng
         self.top_lat = args.top_lat
@@ -601,6 +608,18 @@ class Operation(BaseOperation):
                         "Пропускаем не-ГПХ вакансию: %s", vacancy["alternate_url"]
                     )
                     continue
+
+                # Жёсткий фильтр формата работы (общая настройка кандидата): пропускаем,
+                # только если у вакансии формат УКАЗАН и не пересекается с выбранным.
+                if self.wanted_wf:
+                    _vf = [w.get("id") for w in (vacancy.get("work_format") or [])]
+                    if (_sch := (vacancy.get("schedule") or {}).get("id")):
+                        _vf.append(_sch)
+                    if not cprefs.format_ok(_vf, self.wanted_wf):
+                        logger.debug(
+                            "Пропускаем по формату работы: %s", vacancy["alternate_url"]
+                        )
+                        continue
 
                 vacancy_id = vacancy["id"]
 
@@ -887,12 +906,16 @@ class Operation(BaseOperation):
             params["text"] = self.search
         if self.schedule:
             params["schedule"] = self.schedule
+        if self.wf_search_ids:  # формат работы из общих настроек (REMOTE/HYBRID/ON_SITE)
+            params["work_format"] = self.wf_search_ids
         if self.experience:
             params["experience"] = self.experience
         if self.currency:
             params["currency"] = self.currency
-        if self.salary:
-            params["salary"] = self.salary
+        # ЗП: из CLI или из общих настроек кандидата (мягко — без only_with_salary)
+        _sal = self.salary or self.pref_salary
+        if _sal:
+            params["salary"] = _sal
         if self.period:
             params["period"] = self.period
         if self.date_from:

@@ -157,8 +157,6 @@
           <div class="ghint" id="hh-hint" style="display:none"></div>
           <div class="gtitle">Профиль откликов</div>
           <div class="list">
-            <label class="cell tap"><span class="k">Желаемая зарплата, ₽</span>
-              <input type="number" id="cfg-salary" inputmode="numeric" placeholder="250000"></label>
             <button class="cell tap" id="resume-row"><span class="k">Активное резюме</span>
               <span class="v chevron" id="resume-val">—</span></button>
             <label class="cell toggle"><span class="t"><b>Только по договору ГПХ</b><small>лишь вакансии с оформлением ГПХ</small></span>
@@ -225,6 +223,18 @@
 
         <!-- Общие -->
         <div class="set-panel" data-panel="common" style="display:none">
+          <div class="gtitle">Профиль кандидата <em style="color:var(--hint);font-weight:400">— учитывается везде: hh, GetMatch, Habr, Telegram</em></div>
+          <div class="list">
+            <label class="cell tap"><span class="k">Желаемая зарплата, ₽</span>
+              <input type="number" id="cfg-salary" inputmode="numeric" placeholder="250000"></label>
+          </div>
+          <div class="gtitle">Формат работы <em style="color:var(--hint);font-weight:400">— фильтр вакансий, можно несколько</em></div>
+          <div class="chips" id="cfg-wf">
+            <button class="chip" data-wf="remote">🏠 Удалёнка</button>
+            <button class="chip" data-wf="hybrid">🔀 Гибрид</button>
+            <button class="chip" data-wf="onsite">🏢 Офис</button>
+          </div>
+          <div class="ghint">Откликаемся только на подходящий формат (если у вакансии он указан). Ничего не выбрано — берём любой.</div>
           <div class="gtitle">Авто-задачи в Telegram</div>
           <div class="list">
             <label class="cell toggle"><span class="t"><b>Включить авто-задачи</b><small>бот сам проходит боты-скрининги и пишет HR — дела со всех источников (hh, Habr…)</small></span>

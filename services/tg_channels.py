@@ -56,14 +56,15 @@ def _strip(s):
     return re.sub(r"\s+", " ", s or "").strip()
 
 
-async def _decide(oa, resume, post, greet="Здравствуйте"):
-    """LLM -> (match: bool, contact: '@x'|'', letter: str). greet — приветствие по времени отправки."""
+async def _decide(oa, resume, post, greet="Здравствуйте", pref_note=""):
+    """LLM -> (match: bool, contact: '@x'|'', letter: str). greet — приветствие по времени отправки.
+    pref_note — мягкие критерии кандидата (формат/ЗП), влияют на MATCH."""
     if not (oa and oa.get("token") and resume):
         return False, "", ""
     try:
         chat = ChatOpenAI(token=oa["token"], model=oa.get("model"),
                           completion_endpoint=oa.get("completion_endpoint"),
-                          system_prompt=SYS.format(resume=resume[:3000], greet=greet),
+                          system_prompt=SYS.format(resume=resume[:3000], greet=greet) + pref_note,
                           temperature=0.1, max_completion_tokens=320)
         t = ((await chat.send_message(post[:2500])) or "").strip()
     except Exception as e:
@@ -362,6 +363,19 @@ async def run():
     if not resume:
         print("tg_channels: нет resume_text — пропуск (матчинг будет мусорным)")
         return
+    # Мягкие критерии кандидата (формат/ЗП) -> в решение MATCH у LLM
+    from hh_applicant_tool.utils import prefs as cprefs
+    _p = cfg.get("preferences") or {}
+    PREF_NOTE = ""
+    _wfl = cprefs.labels_ru(cprefs.wanted_formats(_p))
+    if _wfl:
+        PREF_NOTE += (f"\n\nПРЕДПОЧТЕНИЕ ПО ФОРМАТУ: кандидат хочет {_wfl}. Если в посте ЯВНО "
+                      "указан другой формат (напр. только офис, а кандидат хочет удалёнку) — MATCH: нет. "
+                      "Если формат не указан — НЕ штрафуй.")
+    _saln = (_p.get("salary") or "").strip()
+    if _saln:
+        PREF_NOTE += (f"\nЖЕЛАЕМАЯ ЗП: {_saln}. Если в посте ЗП ЯВНО сильно ниже желаемой — склоняйся к "
+                      "MATCH: нет; если ЗП не указана — НЕ штрафуй.")
     # категории кандидата: явные (кабинет/ранее авто) ИЛИ авто-вывод из резюме (B)
     explicit = pgconn.get_setting("tg.cats", account=account)
     if explicit:
@@ -405,7 +419,7 @@ async def run():
             if dm >= MAX_DM or evals >= MAX_EVAL:
                 break
             evals += 1
-            match, c2, letter = await _decide(oa, resume, text, greet)
+            match, c2, letter = await _decide(oa, resume, text, greet, PREF_NOTE)
             if not match:
                 pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
                 continue

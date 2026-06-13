@@ -303,6 +303,21 @@ function bindConfig(cfg, resumes, hhConnected, tgConnected) {
     };
   };
   wire($("#cfg-salary"), "salary");
+  // формат работы — мультивыбор, общий для всех платформ
+  const wfBox = $("#cfg-wf");
+  if (wfBox) {
+    const sel = new Set(cfg.work_format || []);
+    wfBox.querySelectorAll(".chip").forEach((c) => {
+      c.classList.toggle("active", sel.has(c.dataset.wf));
+      c.onclick = async () => {
+        c.classList.toggle("active");
+        const vals = [...wfBox.querySelectorAll(".chip.active")].map((x) => x.dataset.wf);
+        c.classList.add("busy");
+        try { await save("work_format", vals); hap("light"); }
+        catch (e) { err("Не удалось сохранить"); } finally { c.classList.remove("busy"); }
+      };
+    });
+  }
   clampWire($("#cfg-limit"), "apply.max_per_day", capL);
   if ($("#cfg-gm-limit")) {
     const capG = cfg.getmatch_max_per_day_cap || 50;
@@ -319,9 +334,10 @@ function bindConfig(cfg, resumes, hhConnected, tgConnected) {
     clampWire($("#cfg-habr-limit"), "habr.max_per_day", capH);
   }
   renderTgCats(cfg.tg_catalog, cfg.tg_cats, cfg.tg_channels, !!tgConnected);
-  // hh не привязан → профиль откликов (зарплата, резюме, лимит, ГПХ) неактивен
+  // hh не привязан → профиль откликов (резюме, лимит, ГПХ) неактивен.
+  // Зарплата и формат работы — общие (нужны и для GetMatch/Habr/TG), их НЕ гасим.
   const hhOff = !hhConnected;
-  ["#cfg-salary", "#cfg-limit"].forEach((id) => {
+  ["#cfg-limit"].forEach((id) => {
     const el = $(id); if (el) { el.disabled = hhOff; const c = el.closest(".cell"); if (c) c.classList.toggle("off", hhOff); }
   });
   if ($("#resume-row")) { $("#resume-row").disabled = hhOff; $("#resume-row").classList.toggle("off", hhOff); }

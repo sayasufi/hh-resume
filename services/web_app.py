@@ -176,12 +176,12 @@ def _account_for_user(tg_user_id) -> str | None:
 
 # Админ: может смотреть/настраивать ЛЮБОЙ аккаунт. По tg_user_id (стабильно) + username.
 ADMIN_TG_IDS = {"5222335152"}
-ADMIN_USERNAMES = {"throlib"}
 
 
 def _is_admin(user: dict) -> bool:
-    return (str(user.get("id")) in ADMIN_TG_IDS
-            or (user.get("username") or "").lower() in ADMIN_USERNAMES)
+    # ТОЛЬКО по неизменяемому Telegram-id. username доверять нельзя: его можно сменить
+    # и занять чужой -> подмена админа и доступ к чужим аккаунтам через account-override.
+    return str(user.get("id")) in ADMIN_TG_IDS
 
 
 def _all_accounts() -> list:

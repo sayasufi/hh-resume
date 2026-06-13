@@ -312,8 +312,11 @@ async def cb_conn_qr(cq: CallbackQuery, state: FSMContext):
 @dp.message(Connect.phone)
 async def conn_got_phone(message: Message, state: FSMContext):
     if message.contact:  # поделился номером кнопкой
-        if message.contact.user_id and message.contact.user_id != message.from_user.id:
-            await message.answer("Это чужой контакт. Поделись СВОИМ номером.")
+        # принимаем ТОЛЬКО свой контакт: кнопка «Поделиться номером» всегда содержит
+        # user_id отправителя; без него (пересланный/собранный вручную) — отклоняем.
+        if not message.contact.user_id or message.contact.user_id != message.from_user.id:
+            await message.answer("Поделись СВОИМ номером кнопкой ниже "
+                                 "(пересланный/чужой контакт не принимаю).")
             return
         raw = message.contact.phone_number or ""
     else:
@@ -530,9 +533,11 @@ async def on_contact(message: Message):
     if message.chat.type != "private":
         return
     c = message.contact
-    # только свой контакт (защита от пересланного чужого)
-    if c.user_id and c.user_id != message.from_user.id:
-        await message.answer("Это чужой контакт. Поделись СВОИМ номером.",
+    # только СВОЙ контакт: кнопка «Поделиться номером» всегда содержит user_id
+    # отправителя; контакт без user_id (пересланный/собранный вручную) отклоняем,
+    # иначе можно привязать чужой телефон к своему Telegram.
+    if not c.user_id or c.user_id != message.from_user.id:
+        await message.answer("Поделись СВОИМ номером кнопкой ниже.",
                              reply_markup=ReplyKeyboardRemove())
         return
     existing = _account_by("tg_user_id", message.from_user.id)

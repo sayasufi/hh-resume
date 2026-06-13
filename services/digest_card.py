@@ -57,11 +57,10 @@ def build_html(d: dict) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
 * {{ margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,'Segoe UI',Roboto,'Noto Sans',sans-serif; }}
 body {{ background:transparent; }}
-.card {{ width:720px; background:#0e1320; color:#e8edf6; border-radius:26px; overflow:hidden;
-        box-shadow:0 20px 60px rgba(0,0,0,.45); }}
+.card {{ width:720px; background:#0e1320; color:#e8edf6; }}
 .pgrid {{ display:grid; grid-template-columns:1fr 1fr; gap:1px;
          background:rgba(255,255,255,.07); border-top:1px solid rgba(255,255,255,.07); }}
-.pcell {{ padding:18px 26px; background:#0e1320; }}
+.pcell {{ padding:20px 26px; background:#0e1320; min-height:208px; }}
 .hdr {{ padding:26px 30px 22px; background:linear-gradient(135deg,#3b82f6 0%,#6366f1 55%,#8b5cf6 100%); }}
 .who {{ font-size:27px; font-weight:800; letter-spacing:-.3px; }}
 .date {{ font-size:15px; opacity:.9; margin-top:3px; font-weight:500; }}

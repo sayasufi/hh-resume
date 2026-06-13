@@ -190,6 +190,8 @@ def _platform_data(account, cfg, funnel, today_act):
         "bars": [
             {"emoji": "✅", "label": "Одобрено", "n": gok, "pct": pc(gok, gtot), "color": "#34d399"},
             {"emoji": "❌", "label": "Отказы", "n": gbad, "pct": pc(gbad, gtot), "color": "#f87171"},
+            {"emoji": "⏳", "label": "Ждём ответа", "n": max(0, gtot - gok - gbad),
+             "pct": pc(max(0, gtot - gok - gbad), gtot), "color": "#fbbf24"},
         ] if gtot else [],
     })
 
@@ -208,8 +210,11 @@ def _platform_data(account, cfg, funnel, today_act):
         "emoji": "🟣", "name": "Telegram", "unit": "сообщений",
         "today": today_act.get("tg_channels", 0),
         "status": st(tsent, has_tg), "n": tsent, "note": "",
-        "bars": [{"emoji": "💬", "label": "Ответили", "n": trepl, "pct": pc(trepl, tsent),
-                  "color": "#a78bfa"}] if tsent else [],
+        "bars": [
+            {"emoji": "💬", "label": "Ответили", "n": trepl, "pct": pc(trepl, tsent), "color": "#a78bfa"},
+            {"emoji": "⏳", "label": "Ждём ответа", "n": max(0, tsent - trepl),
+             "pct": pc(max(0, tsent - trepl), tsent), "color": "#94a3b8"},
+        ] if tsent else [],
     })
     return plats
 

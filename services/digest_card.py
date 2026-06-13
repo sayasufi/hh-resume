@@ -41,6 +41,14 @@ def build_html(d: dict) -> str:
     res_block = (f'<div class="sect"><div class="stitle">По резюме</div>{res_rows}</div>'
                  if res_rows else "")
 
+    plats = d.get("platforms") or []
+    plat_rows = "".join(
+        f'<div class="prow"><span class="pname">{p.get("emoji", "")} {e(p.get("name", ""))}</span>'
+        f'<span class="pnums"><b>{p.get("n", 0)}</b> {e(p.get("unit", "откл"))} · '
+        f'{e(p.get("sub", ""))}</span></div>' for p in plats)
+    plat_block = (f'<div class="sect"><div class="stitle">Другие платформы</div>{plat_rows}</div>'
+                  if plat_rows else "")
+
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
 * {{ margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,'Segoe UI',Roboto,'Noto Sans',sans-serif; }}
 body {{ background:transparent; }}
@@ -69,6 +77,12 @@ body {{ background:transparent; }}
 .rrow:last-child {{ border-bottom:none; }}
 .rt {{ font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:340px; }}
 .rn {{ color:#9fb3cc; font-weight:600; font-size:14px; white-space:nowrap; }}
+.prow {{ display:flex; justify-content:space-between; align-items:center; padding:11px 0;
+        border-bottom:1px solid rgba(255,255,255,.05); font-size:16px; }}
+.prow:last-child {{ border-bottom:none; }}
+.pname {{ font-weight:700; }}
+.pnums {{ color:#9fb3cc; font-weight:600; font-size:14px; white-space:nowrap; }}
+.pnums b {{ color:#e8edf6; font-size:17px; }}
 .status {{ padding:16px 30px 22px; font-size:15px; font-weight:600; color:#cdd6e4; }}
 </style></head><body><div class="card" id="card">
   <div class="hdr"><div class="who">✨ {e(d.get("who") or "Кандидат")}</div>
@@ -80,8 +94,9 @@ body {{ background:transparent; }}
       <div class="tcell"><div class="tn">+{t.get("invites", 0)}</div><div class="tl">💬 непрочитанных</div></div>
     </div>
   </div>
-  <div class="sect"><div class="stitle">Воронка · {f.get("total", 0)} откликов</div>{funnel}</div>
+  <div class="sect"><div class="stitle">hh.ru · {f.get("total", 0)} откликов</div>{funnel}</div>
   {res_block}
+  {plat_block}
   <div class="status">{e(d.get("status") or "✅ Бот работает штатно")}</div>
 </div></body></html>"""
 

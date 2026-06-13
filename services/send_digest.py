@@ -101,12 +101,53 @@ def _funnel_data(account):
               "disc_pct": pct(by_state.get("discard", 0))}
     resumes = []
     for rid, d in per.items():
+        if not rid or rid not in titles:  # старые отклики без привязки к резюме — не показываем
+            continue
         tot = sum(d.values())
         s = sum(d.get(x, 0) for x in _SOB)
-        resumes.append({"title": (titles.get(rid) or "Без резюме")[:46], "sob": s,
+        resumes.append({"title": titles[rid][:46], "sob": s,
                         "total": tot, "pct": round(100 * s / tot) if tot else 0})
     resumes.sort(key=lambda r: -r["sob"])
     return funnel, resumes
+
+
+def _q1(sql, params, default):
+    """Один SELECT в своём коннекте; default при ошибке (таблицы может не быть)."""
+    try:
+        conn = pgconn.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchone() or default
+        finally:
+            conn.close()
+    except Exception:
+        return default
+
+
+def _platform_data(account):
+    """Сводка по не-hh каналам (только те, где есть активность)."""
+    gm = _q1("SELECT count(*), count(*) FILTER (WHERE status ~* 'approv|accept|invit|offer'), "
+             "count(*) FILTER (WHERE status ~* 'reject|declin') FROM getmatch_apps WHERE account=%s",
+             (account,), (0, 0, 0))
+    habr = _q1("SELECT count(*) FROM habr_apps WHERE account=%s", (account,), (0,))[0]
+    tg = _q1("SELECT count(*) FILTER (WHERE status='sent'), count(*) FILTER (WHERE replied) "
+             "FROM tg_outreach WHERE account=%s", (account,), (0, 0))
+    out = []
+    if gm[0]:
+        sub = []
+        if gm[1]:
+            sub.append(f"✅ {gm[1]} одобрено")
+        if gm[2]:
+            sub.append(f"❌ {gm[2]}")
+        out.append({"emoji": "🟢", "name": "GetMatch", "n": gm[0], "unit": "откл",
+                    "sub": " · ".join(sub) or "ждём ответа"})
+    if habr:
+        out.append({"emoji": "🔷", "name": "Habr", "n": habr, "unit": "откл", "sub": "отправлено"})
+    if tg[0]:
+        out.append({"emoji": "🟣", "name": "Telegram", "n": tg[0], "unit": "ЛС",
+                    "sub": f"💬 {tg[1]} ответили" if tg[1] else "ждём ответа"})
+    return out
 
 
 async def _today_live(cfg) -> dict:
@@ -143,6 +184,7 @@ async def gather_card(cfg, account, has_problem) -> dict:
                   else "⚠️ Есть проблема — детали в сообщении выше",
         "today": {"apps": apps, "views": live["views"], "invites": live["invites"]},
         "funnel": funnel, "resumes": resumes,
+        "platforms": _platform_data(account),
     }
 
 

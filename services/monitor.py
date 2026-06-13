@@ -36,8 +36,7 @@ async def main():
         problems.append((pgconn.PRIORITY_HIGH, "токен ИСТЁК — нужна переавторизация"))
     elif days_left < 2:
         problems.append((pgconn.PRIORITY_MED, f"токен истекает через {days_left:.1f} дн"))
-    else:
-        info.append(f"токен ок ({days_left:.0f} дн)")
+    # токен ок -> в дайджест кандидата не пишем (операционная телеметрия)
 
     # 2) vLLM
     oa = cfg.get("openai") or {}
@@ -47,8 +46,7 @@ async def main():
         try:
             async with httpx.AsyncClient(timeout=8) as c:
                 r = await c.get(base + "/models")
-                ids = [m["id"] for m in r.json().get("data", [])]
-                info.append(f"LLM ок ({ids[0] if ids else '—'})")
+                r.json()  # проверка доступности vLLM; модель кандидату не показываем
         except Exception:
             problems.append((pgconn.PRIORITY_MED, "vLLM недоступен (письма/ответы в шаблон)"))
 
@@ -71,16 +69,14 @@ async def main():
         except Exception:
             pass
         cnt = me.get("counters", {})
-        info.append(
-            f"приглашений +{cnt.get('unread_negotiations', 0)}, "
-            f"просмотров +{cnt.get('new_resume_views', 0)}"
-        )
+        info.append(f"👀 новых просмотров резюме: +{cnt.get('new_resume_views', 0)}")
+        info.append(f"🤝 новых приглашений: +{cnt.get('unread_negotiations', 0)}")
     except Exception as e:
         problems.append((pgconn.PRIORITY_MED, f"hh API: {repr(e)[:50]}"))
 
     cnt_today = pgconn.get_setting("_applications_count") or "?"
     dat = pgconn.get_setting("_applications_date")
-    info.append(f"откликов сегодня: {cnt_today if dat == today else 0}")
+    info.append(f"📨 откликов сегодня: {cnt_today if dat == today else 0}")
 
     # Проблемы -> отдельные 🔴/🟡 уведомления (dedup по дню).
     for prio, text in problems:
@@ -89,9 +85,9 @@ async def main():
             dedup_key=f"monitor:{prio}:{text[:20]}:{today}",
         )
     # Ежедневный heartbeat -> 🟢 (dead-man-switch).
-    head = "бот жив" if not problems else "бот работает (есть проблемы выше)"
+    head = "✅ Бот работает" if not problems else "⚠️ Бот работает (есть проблема — детали выше)"
     pgconn.notify(
-        pgconn.PRIORITY_LOW, head + " · " + "; ".join(info),
+        pgconn.PRIORITY_LOW, head + "\n" + "\n".join(info),
         category="heartbeat", dedup_key=f"heartbeat:{today}",
     )
     print(f"монитор: проблем {len(problems)}, heartbeat поставлен.")

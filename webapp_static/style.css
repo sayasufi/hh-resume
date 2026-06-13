@@ -193,6 +193,8 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 .seg button.active { background: var(--sec); color: var(--accent); font-weight: 700; box-shadow: var(--shadow-sm); }
 .seg.period { margin: 14px 14px 4px; }
 .seg.period button { flex: 1; padding: 8px 2px; font-size: 13px; }
+#act-period { margin: 14px 14px 4px; }
+#act-period button { flex: 1; padding: 8px 2px; font-size: 13px; }
 .seg.src { margin: 0 14px 10px; }
 .seg.src button { flex: 1; padding: 9px 2px; font-weight: 600; }
 .seg.subtabs { margin: 12px 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }

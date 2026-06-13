@@ -569,12 +569,31 @@ if ($("#habr-filter")) $("#habr-filter").querySelectorAll(".chip").forEach((c) =
   };
 });
 
-// дела (что нужно сделать самому)
+// дела (что нужно сделать самому) — группировка по датам + свой фильтр периода
+let ACTIONS = [], ACT_PERIOD = { dfrom: "", dto: "" };  // по умолчанию все (todo не прячем)
+function _inRange(at, r) {
+  at = (at || "").slice(0, 10);
+  if (!r.dfrom && !r.dto) return true;
+  if (!at) return false;
+  return (!r.dfrom || at >= r.dfrom) && (!r.dto || at <= r.dto);
+}
+function _dayLabel(d) {
+  if (d === _iso(0)) return "Сегодня";
+  if (d === _iso(1)) return "Вчера";
+  try { return new Date(d + "T00:00:00").toLocaleDateString("ru-RU", { day: "numeric", month: "long" }); }
+  catch (e) { return d; }
+}
 function renderActions(items) {
+  if (Array.isArray(items)) ACTIONS = items;
   const box = $("#actions");
-  $("#act-count").textContent = items.length;
-  if (!items.length) { box.innerHTML = '<div class="empty">Дел нет — всё под контролем 👌</div>'; return; }
-  box.innerHTML = '<div class="list">' + items.map((a) =>
+  const list = ACTIONS.filter((a) => _inRange(a.created_at, ACT_PERIOD));
+  $("#act-count").textContent = list.length;
+  if (!list.length) {
+    box.innerHTML = '<div class="empty">'
+      + (ACTIONS.length ? "Нет дел за выбранный период" : "Дел нет — всё под контролем 👌") + "</div>";
+    return;
+  }
+  const cell = (a) =>
     `<div class="cell act"><div class="dlg-main act-text">`
     + `<div class="dlg-title">${esc(a.action)}</div>`
     + `<div class="dlg-emp">${esc(a.vacancy)}</div>`
@@ -582,7 +601,12 @@ function renderActions(items) {
     + `<div class="act-btns">`
     + (a.chat_url ? `<button class="abtn chat" data-url="${esc(a.chat_url)}">Чат</button>` : "")
     + `<button class="abtn del" data-id="${a.id}" title="Удалить — вакансия не интересна">🗑</button>`
-    + `<button class="abtn done" data-id="${a.id}" title="Выполнено">✓</button></div></div>`).join("") + "</div>";
+    + `<button class="abtn done" data-id="${a.id}" title="Выполнено">✓</button></div></div>`;
+  const groups = {};
+  list.forEach((a) => { const d = (a.created_at || "").slice(0, 10) || "—"; (groups[d] = groups[d] || []).push(a); });
+  box.innerHTML = Object.keys(groups).sort().reverse().map((d) =>
+    `<div class="gtitle">${esc(_dayLabel(d))} · ${groups[d].length}</div>`
+    + '<div class="list">' + groups[d].map(cell).join("") + "</div>").join("");
   box.querySelectorAll(".abtn[data-url]").forEach((el) => {
     el.onclick = () => { hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
   });
@@ -602,6 +626,14 @@ function renderActions(items) {
 }
 const loadActions = () => api("/api/actions").then((r) => renderActions(r.items || []))
   .catch(() => failBox("#actions", "#act-count", loadActions));
+// период «Дел» — отдельный от глобального (todo не зависят от периода Статы/Откликов)
+document.querySelectorAll("#act-period button").forEach((b) => {
+  b.onclick = () => {
+    ACT_PERIOD = _preset(b.dataset.ap);
+    document.querySelectorAll("#act-period button").forEach((x) => x.classList.toggle("active", x === b));
+    renderActions(); hap("sel");
+  };
+});
 
 // период — диапазон дат {dfrom, dto}; пресеты + произвольные даты
 const _iso = (off) => { const d = new Date(); d.setDate(d.getDate() - off); return d.toISOString().slice(0, 10); };

@@ -140,6 +140,17 @@ def _today_activity(account):
         return {}
 
 
+def _views_today(account):
+    """Прирост просмотров резюме ЗА СЕГОДНЯ (из resume_views — часовые снапшоты total_views)."""
+    today, prev = _q1(
+        "SELECT (SELECT max(views) FROM resume_views WHERE account=%s AND ts::date=current_date), "
+        "(SELECT max(views) FROM resume_views WHERE account=%s AND ts < date_trunc('day', now()))",
+        (account, account), (None, None))
+    if today is None or prev is None:
+        return 0
+    return max(0, today - prev)
+
+
 def _platform_data(account, cfg, funnel, today_act):
     """Все 4 канала — равнозначными блоками; показываем всегда, даже без подключения.
     today — сколько откликов СДЕЛАНО сегодня (за день), n — всего за всё время."""
@@ -233,8 +244,9 @@ async def gather_card(cfg, account, has_problem) -> dict:
         "date": f"{today.day} {_MONTHS[today.month]}",
         "status": "✅ Бот работает штатно" if not has_problem
                   else "⚠️ Есть проблема — детали в сообщении выше",
-        # СЕГОДНЯ — что бот реально сделал за день (надёжно, из activity_daily)
-        "today": {"apps": apps_today, "tests": act.get("tests", 0), "reply": act.get("reply", 0)},
+        # СЕГОДНЯ — что произошло за день: отклики/ответы (activity_daily) + прирост
+        # просмотров резюме (resume_views, дельта за сегодня)
+        "today": {"apps": apps_today, "views": _views_today(account), "reply": act.get("reply", 0)},
         "resumes": resumes,
         "platforms": _platform_data(account, cfg, funnel, act),
     }

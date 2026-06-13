@@ -50,7 +50,7 @@ def build_html(d: dict) -> str:
         body = sub + "".join(frow(b) for b in p.get("bars", []))
         if p.get("note"):
             body += f'<div class="pnote">{e(p["note"])}</div>'
-        return f'<div class="sect">{head}{body}</div>'
+        return f'<div class="pcell">{head}{body}</div>'
 
     plat_html = "".join(psection(p) for p in plats)
 
@@ -64,8 +64,11 @@ def build_html(d: dict) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
 * {{ margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,'Segoe UI',Roboto,'Noto Sans',sans-serif; }}
 body {{ background:transparent; }}
-.card {{ width:600px; background:#0e1320; color:#e8edf6; border-radius:26px; overflow:hidden;
+.card {{ width:720px; background:#0e1320; color:#e8edf6; border-radius:26px; overflow:hidden;
         box-shadow:0 20px 60px rgba(0,0,0,.45); }}
+.pgrid {{ display:grid; grid-template-columns:1fr 1fr; gap:1px;
+         background:rgba(255,255,255,.07); border-top:1px solid rgba(255,255,255,.07); }}
+.pcell {{ padding:18px 26px; background:#0e1320; }}
 .hdr {{ padding:26px 30px 22px; background:linear-gradient(135deg,#3b82f6 0%,#6366f1 55%,#8b5cf6 100%); }}
 .who {{ font-size:27px; font-weight:800; letter-spacing:-.3px; }}
 .date {{ font-size:15px; opacity:.9; margin-top:3px; font-weight:500; }}
@@ -102,11 +105,11 @@ body {{ background:transparent; }}
   <div class="sect"><div class="stitle">Сегодня сделано</div>
     <div class="today">
       <div class="tcell"><div class="tn">{t.get("apps", 0)}</div><div class="tl">📨 откликов</div></div>
-      <div class="tcell"><div class="tn">{t.get("tests", 0)}</div><div class="tl">🧪 тестов</div></div>
+      <div class="tcell"><div class="tn">+{t.get("views", 0)}</div><div class="tl">👀 просмотров</div></div>
       <div class="tcell"><div class="tn">{t.get("reply", 0)}</div><div class="tl">💬 ответов</div></div>
     </div>
   </div>
-  {plat_html}
+  <div class="pgrid">{plat_html}</div>
   {res_block}
   <div class="status">{e(d.get("status") or "✅ Бот работает штатно")}</div>
 </div></body></html>"""

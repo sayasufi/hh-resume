@@ -54,13 +54,6 @@ def build_html(d: dict) -> str:
 
     plat_html = "".join(psection(p) for p in plats)
 
-    res_rows = "".join(
-        f'<div class="rrow"><span class="rt">{e(r.get("title") or "—")}</span>'
-        f'<span class="rn">🤝 {r.get("sob", 0)}/{r.get("total", 0)} · {r.get("pct", 0)}%</span></div>'
-        for r in res[:3])
-    res_block = (f'<div class="sect"><div class="stitle">По резюме · hh.ru</div>{res_rows}</div>'
-                 if res_rows else "")
-
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
 * {{ margin:0; padding:0; box-sizing:border-box; font-family:-apple-system,'Segoe UI',Roboto,'Noto Sans',sans-serif; }}
 body {{ background:transparent; }}
@@ -110,7 +103,6 @@ body {{ background:transparent; }}
     </div>
   </div>
   <div class="pgrid">{plat_html}</div>
-  {res_block}
   <div class="status">{e(d.get("status") or "✅ Бот работает штатно")}</div>
 </div></body></html>"""
 

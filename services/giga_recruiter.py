@@ -134,6 +134,20 @@ def _next_pending(account):
         conn.close()
 
 
+def _any_token(account):
+    """Любой токен giga_queue — это deep-link-ключ, открывающий МЕНЮ вакансий бота
+    (бот сам ведёт список, не по конкретному токену). Приоритет pending. -> token|None."""
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT token FROM giga_queue WHERE account=%s "
+                        "ORDER BY (status='pending') DESC, created_at DESC LIMIT 1", (account,))
+            row = cur.fetchone()
+            return row[0] if row else None
+    finally:
+        conn.close()
+
+
 def _set_status(account, token, status, turns=None):
     conn = pgconn.connect()
     try:
@@ -422,6 +436,13 @@ async def _run_session(client, entity, oa, sys_prompt, account, menu_token):
         # 2) экран ВЫБОРА вакансии -> кликаем первую непройденную / листаем «Далее»
         menu_msg, sels, page = _menu(replies)
         if sels:
+            # Вернулись в меню при активной вакансии -> интервью завершено (бот не всегда
+            # показывает экран 5★) -> помечаем пройденной, затем берём следующую.
+            if cur_uuid:
+                pgconn.add_seen("giga_vac", [cur_uuid]); done.add(cur_uuid)
+                pgconn.bump_activity("giga"); completed += 1
+                print(f"giga[{_label()}]: интервью «{cur_vac[:40]}» завершено -> меню")
+                cur_uuid, cur_vac, convo, tok_turns = None, "", [], 0
             pick = next(((u, t, d) for (u, t, d) in sels if u not in done), None)
             if pick:
                 cur_uuid, cur_vac, convo, tok_turns, pages = pick[0], pick[1], [], 0, 0
@@ -558,14 +579,22 @@ async def main() -> None:
         if new:
             print(f"giga: новых приглашений в очередь: {new}")
 
-        _row = _next_pending(account)
-        if not _row:
-            print("giga: очередь интервью пуста — нечего проходить")
+        menu_token = _any_token(account)
+        if not menu_token:
+            print("giga: токенов нет (бот ни разу не приглашал) — пропуск")
             return
-        menu_token = _row[0]   # любой токен открывает меню вакансий (deep-link-ключ)
+        # Бэкофф: если в прошлый прогон всё было пройдено — не дёргаем бота чаще, чем раз
+        # в 2 часа (сбрасывается появлением нового приглашения = pending-токена).
+        cu = pgconn.get_setting("giga.caughtup_until", account=account)
+        if cu and not _next_pending(account):
+            try:
+                if float(cu) > time.time():
+                    print("giga: всё пройдено (бэкофф) — пропуск")
+                    return
+            except (TypeError, ValueError):
+                pass
         if DRY:
-            print(f"DRY — есть pending интервью (token={menu_token[:12]}…, {_row[1]}), "
-                  "не запускаю прохождение")
+            print(f"DRY — токен меню есть (token={menu_token[:12]}…), не запускаю прохождение")
             return
 
         # 2) ПРОХОЖДЕНИЕ: одна непрерывная сессия — бот ведёт интервью за интервью сам
@@ -580,6 +609,12 @@ async def main() -> None:
         # триггер-токены (giga-ссылки из hh-чатов) отработали свою роль — помечаем done,
         # чтобы не перезапускать; реальные интервью трекаются по uuid (seen_keys 'giga_vac').
         _mark_all_done(account)
+        # Бэкофф: ничего нового не прошли и меню исчерпано -> 2 часа не дёргаем бота;
+        # прошли хоть одно (есть ещё) -> сбрасываем, чтобы продолжить на след. прогоне.
+        if completed == 0 and status == "done":
+            pgconn.set_setting("giga.caughtup_until", str(time.time() + 7200), account=account)
+        else:
+            pgconn.set_setting("giga.caughtup_until", "", account=account)
         cleared = _clear_done_action_items(account)
         if cleared:
             print(f"giga: закрыто дел по пройденным интервью: {cleared}")

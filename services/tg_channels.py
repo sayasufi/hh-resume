@@ -224,7 +224,7 @@ def _db_vacancies(cats, limit=150):
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, channel, category, title, text, contact FROM tg_vacancies "
+            "SELECT id, channel, category, title, text, contact, post_url FROM tg_vacancies "
             "WHERE is_vacancy AND contact LIKE '@%%' AND category = ANY(%s) "
             "AND posted_at > now() - make_interval(days => 4) "
             "ORDER BY posted_at DESC LIMIT %s",
@@ -415,7 +415,7 @@ async def run():
     print(f"tg_channels[{account}] режим={'LIVE' if LIVE else 'DRY'}: вакансий-кандидатов {len(vacs)} "
           f"(категории {cats}), резюме-PDF={'есть' if pdf_path else 'нет'}, приветствие={greet}")
     try:
-        for vid, channel, category, title, text, contact in vacs:
+        for vid, channel, category, title, text, contact, post_url in vacs:
             if dm >= MAX_DM or evals >= MAX_EVAL:
                 break
             evals += 1
@@ -442,11 +442,16 @@ async def run():
                 continue
             try:
                 ent = await client.get_entity(to)
-                if pdf_path:  # прикрепляем PDF-резюме (имя файла = ФИО), письмо — подписью
-                    await client.send_file(ent, pdf_path, caption=letter, force_document=True,
+                # Всегда прикладываем ссылку на вакансию (пост, откуда взяли) — помимо резюме
+                vac_line = f"\n\n📋 Вакансия: {post_url}" if post_url else ""
+                if pdf_path:  # PDF-резюме (имя файла = ФИО) + ссылка на вакансию в подписи
+                    await client.send_file(ent, pdf_path, caption=(letter + vac_line),
+                                           force_document=True,
                                            attributes=[DocumentAttributeFilename(pdf_name)])
                 else:
-                    await client.send_message(ent, letter + (f"\nМоё резюме: {hh_url}" if hh_url else ""), link_preview=False)
+                    await client.send_message(
+                        ent, letter + vac_line + (f"\nМоё резюме: {hh_url}" if hh_url else ""),
+                        link_preview=False)
                 pgconn.bump_activity("tg_channels", 1, account=account)
                 pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
                 _record_outreach(account, vid, channel, to, title, category, letter, "sent")

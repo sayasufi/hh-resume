@@ -37,6 +37,9 @@ POLL_EVERY = 5
 MAX_ANSWER_CHARS = 1500
 BETWEEN_INTERVIEWS = 8        # пауза между интервью, чтобы не выглядело как флуд
 MAX_ATTEMPTS = 5              # сколько раз пробуем токен, прежде чем пометить failed
+MENU_MAX_PAGES = 25          # сколько страниц «Далее» листать в поиске непройденной вакансии
+_SEL_PREFIX = b"SCR:SEL:"    # callback кнопки выбора вакансии (новый гига-бот)
+_PAGE_PREFIX = b"SCR:PAGE:"  # callback «Далее» (пагинация меню вакансий)
 
 GIGA_LINK_RE = re.compile(r"Giga_recruiter_bot\?start=([A-Za-z0-9_\-]+)", re.I)
 # интервью реально завершено
@@ -315,6 +318,29 @@ def _btns(m):
     return out
 
 
+def _menu(messages):
+    """Экран ВЫБОРА вакансии нового гига-бота (кнопки SCR:SEL / SCR:PAGE).
+    Возвращаем САМОЕ СВЕЖЕЕ меню в пачке (кнопки старых меню протухают — клик по ним
+    даёт «Ссылка не корректна»). -> (message, [(uuid, text, data_bytes), ...], page|None)."""
+    found = (None, [], None)
+    for m in messages:  # messages в хронологическом порядке -> остаётся последнее (новейшее)
+        sels, page = [], None
+        for row in (getattr(m, "buttons", None) or []):
+            for b in row:
+                data = getattr(b, "data", None)
+                if not data:
+                    continue
+                if data.startswith(_SEL_PREFIX):
+                    parts = data.split(b":")
+                    uuid = parts[2].decode("ascii", "ignore") if len(parts) >= 3 else data.hex()
+                    sels.append((uuid, getattr(b, "text", "") or "", data))
+                elif data.startswith(_PAGE_PREFIX):
+                    page = data
+        if sels:
+            found = (m, sels, page)
+    return found
+
+
 def _bot_waiting(last_msg):
     """Бот ждёт нашего ответа: последнее сообщение — его незакрытый вопрос. -> (bool, text)."""
     if last_msg is None or last_msg.out:
@@ -349,100 +375,106 @@ async def _rate5(star_message):
             print(f"giga: не смог поставить оценку: {repr(e)[:100]}")
 
 
-async def _run_session(client, entity, oa, sys_prompt, last_id, account, seed=None):
-    """Непрерывная сессия: интервью за интервью.
-
-    Бот НЕ запускает новое интервью сам — его триггерит /start-диплинк. Поэтому:
-    отвечаем на вопросы; в конце (звёзды-оценка) кликаем 5★; когда бот замолкает
-    (свободен) — StartBotRequest следующего pending-токена (это же сливает «зависший»
-    backlog старых /start). Стоп, когда токенов нет и бот молчит.
-    -> (status, completed, turns)."""
-    convo, turns, completed = [], 0, 0
-    cur_tok = None
-    tok_turns = 0   # ходов в ТЕКУЩЕМ интервью (для giga_queue.turns)
+async def _run_session(client, entity, oa, sys_prompt, account, menu_token):
+    """Меню-флоу нового гига-бота: открываем меню вакансий deep-link'ом
+    StartBotRequest(start_param=menu_token) (plain /start теперь даёт «Ссылка не
+    корректна») -> клик по непройденной вакансии (SCR:SEL) -> интервью текстом -> 5★ ->
+    снова меню; «Далее» (SCR:PAGE) для пагинации. Пройденные вакансии трекаем по uuid в
+    seen_keys('giga_vac'). -> (status, completed, turns)."""
+    done = pgconn.seen_keys("giga_vac")
+    completed, turns, pages = 0, 0, 0
+    cur_uuid, cur_vac, convo, tok_turns = None, "", [], 0
     deadline = time.time() + RUN_BUDGET_SEC
 
-    async def start_next():
-        nonlocal last_id, cur_tok, tok_turns
-        while True:
-            row = _next_pending(account)
-            if not row:
-                cur_tok = None
-                return False
-            tok, vac = row[0], row[1]
-            # защита от вечного ретрая: токен, падавший >MAX_ATTEMPTS раз -> failed
-            if _bump_attempt(account, tok) > MAX_ATTEMPTS:
-                _set_status(account, tok, "failed")
-                _notify_failed(account, tok)
-                print(f"giga: токен {tok[:12]}… помечен failed (превышены попытки)")
-                continue
-            cur_tok, tok_turns = tok, 0
-            base = await client.get_messages(entity, limit=1)
-            last_id = base[0].id if base else last_id
-            print(f"giga: старт диплинком «{vac}» (token={cur_tok[:12]}…)")
-            await client(StartBotRequest(bot=entity, peer=entity, start_param=cur_tok))
-            return True
+    async def open_menu():
+        base = await client.get_messages(entity, limit=1)
+        lid = base[0].id if base else 0
+        await client(StartBotRequest(bot=entity, peer=entity, start_param=menu_token))
+        return lid
 
-    pending = seed
-    if pending is None and not await start_next():
-        return "no_more", 0, 0
+    last_id = await open_menu()
 
     while turns < MAX_TURNS and time.time() < deadline:
-        if pending is None:
-            replies = await _wait_reply(client, entity, last_id, REPLY_TIMEOUT)
+        replies = await _wait_reply(client, entity, last_id, REPLY_TIMEOUT)
+        if not replies:
+            # клик мог отредактировать меню без нового сообщения — перечитаем последнее
+            base = await client.get_messages(entity, limit=3)
+            replies = [m for m in reversed(base) if not m.out and m.id >= last_id]
             if not replies:
-                # бот свободен -> следующий токен; нет токенов -> закончили
-                if await start_next():
-                    continue
                 return "done", completed, turns
-            for m in replies:
-                last_id = max(last_id, m.id)
-            sm = _star_msg(replies)
-            if sm is not None:                      # конец интервью -> оценка 5★
-                await _rate5(sm)
-                completed += 1
-                if cur_tok:
-                    _set_status(account, cur_tok, "done", tok_turns)
-                else:
-                    _mark_one_done(account)
-                cur_tok, convo, tok_turns = None, [], 0
-                print(f"giga[{_label()}]: интервью #{completed} -> оценка 5★")
-                await asyncio.sleep(BETWEEN_INTERVIEWS)
-                continue
-            buttons = [b for m in replies for b in _btns(m)]
-            if any("контакт" in b.lower() for b in buttons):
-                # «оставить контакт» — действие за человека: НЕ ретраим вечно,
-                # помечаем токен manual и зовём кандидата довести вручную.
-                if cur_tok:
-                    _set_status(account, cur_tok, "manual")
-                    _notify_manual(account, cur_tok)
-                return "need_contact", completed, turns
-            bot_text = "\n".join((m.text or "").strip() for m in replies
-                                 if (m.text or "").strip()).strip()
-            if not bot_text:
-                continue
-        else:
-            bot_text = pending
-            pending = None
+        for m in replies:
+            last_id = max(last_id, m.id)
 
-        if NOACTIVE_RE.search(bot_text):            # токен уже сдан -> к следующему
-            if cur_tok:
-                _set_status(account, cur_tok, "done")
-                cur_tok = None
-            convo = []
-            await asyncio.sleep(5)  # пауза, не хаммерим бота /start по сданным токенам
-            if await start_next():
+        # 1) экран оценки 5★ -> ставим, вакансия пройдена, назад в меню
+        sm = _star_msg(replies)
+        if sm is not None:
+            await _rate5(sm)
+            completed += 1
+            if cur_uuid:
+                pgconn.add_seen("giga_vac", [cur_uuid]); done.add(cur_uuid)
+                pgconn.bump_activity("giga")
+            print(f"giga[{_label()}]: интервью #{completed} «{cur_vac[:40]}» -> 5★")
+            cur_uuid, cur_vac, convo, tok_turns = None, "", [], 0
+            await asyncio.sleep(BETWEEN_INTERVIEWS)
+            last_id, pages = await open_menu(), 0
+            continue
+
+        # 2) экран ВЫБОРА вакансии -> кликаем первую непройденную / листаем «Далее»
+        menu_msg, sels, page = _menu(replies)
+        if sels:
+            pick = next(((u, t, d) for (u, t, d) in sels if u not in done), None)
+            if pick:
+                cur_uuid, cur_vac, convo, tok_turns, pages = pick[0], pick[1], [], 0, 0
+                print(f"giga[{_label()}]: выбираю «{cur_vac[:50]}»")
+                try:
+                    await menu_msg.click(data=pick[2])
+                except Exception as e:
+                    print(f"giga: клик по вакансии не удался: {repr(e)[:90]}")
+                    pgconn.add_seen("giga_vac", [cur_uuid]); done.add(cur_uuid)
+                    cur_uuid = None
+                await asyncio.sleep(4)
                 continue
-            return "done", completed, turns
+            if page and pages < MENU_MAX_PAGES:
+                pages += 1
+                try:
+                    await menu_msg.click(data=page)
+                except Exception:
+                    return "done", completed, turns
+                await asyncio.sleep(3)
+                continue
+            return "done", completed, turns           # все доступные вакансии пройдены
+
+        # 3) кнопка «контакт» -> человеку, вакансию пропускаем, назад в меню
+        if any("контакт" in b.lower() for m in replies for b in _btns(m)):
+            if cur_uuid:
+                _notify_manual(account, cur_uuid)
+                pgconn.add_seen("giga_vac", [cur_uuid]); done.add(cur_uuid)
+            cur_uuid, cur_vac = None, ""
+            await asyncio.sleep(3)
+            last_id, pages = await open_menu(), 0
+            continue
+
+        # 4) вопрос интервью -> отвечаем текстом
+        bot_text = "\n".join((m.text or "").strip() for m in replies
+                             if (m.text or "").strip()).strip()
+        if not bot_text:
+            continue
+        if NOACTIVE_RE.search(bot_text):              # эта вакансия уже сдана -> в меню
+            if cur_uuid:
+                pgconn.add_seen("giga_vac", [cur_uuid]); done.add(cur_uuid)
+            cur_uuid, cur_vac = None, ""
+            await asyncio.sleep(4)
+            last_id, pages = await open_menu(), 0
+            continue
         if DONE_RE.search(bot_text) and "?" not in bot_text:
-            continue                                # «спасибо за интервью» -> ждём звёзды
+            continue                                  # «спасибо за интервью» -> ждём звёзды
         if WAIT_RE.search(bot_text) and "?" not in bot_text:
             continue
 
         convo.append("Рекрутёр: " + bot_text)
         answer = (await _answer(oa, sys_prompt, convo, bot_text) or "").strip()
         if not answer:
-            return "empty", completed, turns
+            continue
         answer = answer[:MAX_ANSWER_CHARS]
         convo.append("Я: " + answer)
         s = await client.send_message(entity, answer, link_preview=False)
@@ -526,12 +558,13 @@ async def main() -> None:
         if new:
             print(f"giga: новых приглашений в очередь: {new}")
 
-        if not _next_pending(account):
+        _row = _next_pending(account)
+        if not _row:
             print("giga: очередь интервью пуста — нечего проходить")
             return
+        menu_token = _row[0]   # любой токен открывает меню вакансий (deep-link-ключ)
         if DRY:
-            row = _next_pending(account)
-            print(f"DRY — есть pending интервью (token={row[0][:12]}…, {row[1]}), "
+            print(f"DRY — есть pending интервью (token={menu_token[:12]}…, {_row[1]}), "
                   "не запускаю прохождение")
             return
 
@@ -542,24 +575,15 @@ async def main() -> None:
             return
         entity = await client.get_entity(bot_username)
 
-        last = await client.get_messages(entity, limit=1)
-        last_msg = last[0] if last else None
-        last_id = last_msg.id if last_msg else 0
-        waiting, seed = _bot_waiting(last_msg)
-        if waiting:
-            print("giga: бот ждёт ответ на незакрытое интервью — продолжаю с него")
-        else:
-            seed = None  # бот свободен -> _run_session сам стартует следующий токен
-
         status, completed, turns = await _run_session(
-            client, entity, oa, sys_prompt, last_id, account, seed=seed)
-        if status in ("done", "no_more"):
-            _mark_all_done(account)
+            client, entity, oa, sys_prompt, account, menu_token)
+        # триггер-токены (giga-ссылки из hh-чатов) отработали свою роль — помечаем done,
+        # чтобы не перезапускать; реальные интервью трекаются по uuid (seen_keys 'giga_vac').
+        _mark_all_done(account)
         cleared = _clear_done_action_items(account)
         if cleared:
             print(f"giga: закрыто дел по пройденным интервью: {cleared}")
-        print(f"giga: прогон завершён: status={status}, интервью пройдено={completed}, "
-              f"ходов={turns}")
+        print(f"giga: прогон завершён: status={status}, интервью={completed}, ходов={turns}")
     except Exception as e:
         print(f"giga: непредвиденная ошибка: {repr(e)[:200]}")
     finally:

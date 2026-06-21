@@ -56,23 +56,6 @@ def _strip(s):
     return re.sub(r"\s+", " ", s or "").strip()
 
 
-_URL_RE = re.compile(r"https?://\S+", re.I)
-_VAC_HOST_RE = re.compile(
-    r"(hh\.ru/vacancy|rabota\.ru/vacancy|rabota\.sber\.ru|career\.habr\.com/vacancies"
-    r"|getmatch\.ru|/vacancy/|/vacancies/)", re.I)
-
-
-def _vacancy_url(text, post_url):
-    """Ссылка на саму вакансию для письма рекрутёру: сначала ищем ссылку на вакансию
-    (hh/rabota/career/getmatch) прямо в тексте поста — это и есть «хх-вакансия»; если её
-    нет, отдаём ссылку на сам tg-пост."""
-    for u in _URL_RE.findall(text or ""):
-        u = u.rstrip(").,;]}»\"'")
-        if _VAC_HOST_RE.search(u):
-            return u
-    return post_url
-
-
 async def _decide(oa, resume, post, greet="Здравствуйте", pref_note=""):
     """LLM -> (match: bool, contact: '@x'|'', letter: str). greet — приветствие по времени отправки.
     pref_note — мягкие критерии кандидата (формат/ЗП), влияют на MATCH."""
@@ -459,10 +442,8 @@ async def run():
                 continue
             try:
                 ent = await client.get_entity(to)
-                # Всегда прикладываем ссылку на вакансию (помимо резюме): hh/rabota-ссылку
-                # из текста поста, если есть, иначе ссылку на сам tg-пост.
-                _vurl = _vacancy_url(text, post_url)
-                vac_line = f"\n\n📋 Вакансия: {_vurl}" if _vurl else ""
+                # TG-вакансия -> ссылка на сам пост (помимо резюме)
+                vac_line = f"\n\n📋 Вакансия: {post_url}" if post_url else ""
                 if pdf_path:  # PDF-резюме (имя файла = ФИО) + ссылка на вакансию в подписи
                     await client.send_file(ent, pdf_path, caption=(letter + vac_line),
                                            force_document=True,

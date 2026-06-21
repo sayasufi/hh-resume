@@ -319,6 +319,10 @@ function bindConfig(cfg, resumes, hhConnected, tgConnected) {
     });
   }
   clampWire($("#cfg-limit"), "apply.max_per_day", capL);
+  if ($("#cfg-excl-title")) {
+    $("#cfg-excl-title").value = cfg.excluded_title_terms || "";
+    wire($("#cfg-excl-title"), "apply.excluded_title_terms");
+  }
   if ($("#cfg-gm-limit")) {
     const capG = cfg.getmatch_max_per_day_cap || 50;
     $("#cfg-gm-limit").value = cfg.getmatch_max_per_day != null ? cfg.getmatch_max_per_day : "";

@@ -918,6 +918,8 @@ async def api_settings(account: str = None,
             pgconn.get_setting, "apply.resume_id", "", account),
         "civil_law_only": bool(await asyncio.to_thread(
             pgconn.get_setting, "apply.civil_law_only", False, account)),
+        "excluded_title_terms": await asyncio.to_thread(
+            pgconn.get_setting, "apply.excluded_title_terms", "", account) or "",
         "getmatch_max_per_day": await asyncio.to_thread(
             pgconn.get_setting, "getmatch.max_per_day", GETMATCH_CAP, account),
         "getmatch_max_per_day_cap": GETMATCH_CAP,
@@ -1010,6 +1012,8 @@ async def _set_config(account: str, key: str, value) -> None:
         await asyncio.to_thread(pgconn.set_setting, "apply.resume_id", str(value), account)
     elif key == "apply.civil_law_only":
         await asyncio.to_thread(pgconn.set_setting, key, bool(value), account)
+    elif key in ("apply.excluded_title_terms", "apply.excluded_terms"):
+        await asyncio.to_thread(pgconn.set_setting, key, str(value).strip(), account)
     else:
         raise HTTPException(400, "unknown key")
 

@@ -13,6 +13,13 @@ from ..api import BadResponse, Redirect, datatypes
 from ..api.datatypes import PaginatedItems, SearchVacancy
 from ..api.errors import ApiError, LimitExceeded
 from ..utils import prefs as cprefs
+
+# Дефолтные стоп-слова в НАЗВАНИИ вакансии (если apply.excluded_title_terms не задан):
+# отсекаем явно не-айтишные профессии по заголовку. Стемы (подстрока) ловят склонения.
+# Без «тренер/наставник» — есть AI-тренер / тех-наставник. Переопределяется настройкой.
+DEFAULT_TITLE_STOP = (
+    "преподавател", "учител", "репетитор", "воспитател", "педагог", "вожат", "методист",
+)
 from ..main import BaseNamespace, BaseOperation
 from ..storage.repositories.errors import RepositoryError
 from ..utils.string import (
@@ -359,6 +366,12 @@ class Operation(BaseOperation):
             "apply.excluded_terms"
         )
         self.excluded_terms = self._parse_excluded_terms(_excl)
+        # Стоп-слова в НАЗВАНИИ (отдельно от excluded_terms, который матчит и описание):
+        # отсекаем по заголовку — напр. «преподаватель». Per-account из
+        # apply.excluded_title_terms; пусто/не задано -> дефолтный список.
+        _title = await tool.storage.settings.get_value("apply.excluded_title_terms")
+        self.excluded_title_terms = (self._parse_excluded_terms(_title)
+                                     if _title else list(DEFAULT_TITLE_STOP))
         # Общий формат работы кандидата -> мягкий client-side фильтр ниже: режем вакансию
         # ТОЛЬКО при ЯВНОМ несовпадении формата. Вакансии без указанного формата и без ЗП
         # НЕ отсекаем; зарплата выдачу не фильтрует вовсе (только письма/TG-матч).
@@ -635,6 +648,11 @@ class Operation(BaseOperation):
                             vacancy["alternate_url"],
                         )
                         print("⛔ Пришел отказ от", vacancy["alternate_url"])
+                    continue
+
+                if self._is_title_excluded(vacancy):
+                    logger.warning("Пропуск по стоп-слову в названии: %s",
+                                   vacancy.get("name") or vacancy["alternate_url"])
                     continue
 
                 if self._is_excluded(vacancy):
@@ -991,6 +1009,11 @@ class Operation(BaseOperation):
         return [
             x.strip() for x in excluded_terms.lower().split(",") if x.strip()
         ]
+
+    def _is_title_excluded(self, vacancy: SearchVacancy) -> bool:
+        """Стоп-слова ТОЛЬКО по названию вакансии (не по описанию)."""
+        name = (vacancy.get("name") or "").lower()
+        return any(t in name for t in self.excluded_title_terms)
 
     def _is_excluded(self, vacancy: SearchVacancy) -> bool:
         snippet = vacancy.get("snippet") or {}

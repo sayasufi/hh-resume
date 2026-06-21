@@ -319,9 +319,22 @@ function bindConfig(cfg, resumes, hhConnected, tgConnected) {
     });
   }
   clampWire($("#cfg-limit"), "apply.max_per_day", capL);
-  if ($("#cfg-excl-title")) {
-    $("#cfg-excl-title").value = cfg.excluded_title_terms || "";
-    wire($("#cfg-excl-title"), "apply.excluded_title_terms");
+  const exT = $("#cfg-excl-title");
+  if (exT) {
+    // в поле — по одному слову на строку (удобно править), в бэкенд уходит CSV
+    const toLines = (s) => (s || "").split(/[\n,]+/).map((x) => x.trim()).filter(Boolean).join("\n");
+    const toCSV = (s) => (s || "").split(/[\n,]+/).map((x) => x.trim()).filter(Boolean).join(", ");
+    const fit = () => { exT.rows = Math.min(16, Math.max(3, (exT.value.match(/\n/g) || []).length + 1)); };
+    exT.value = toLines(cfg.excluded_title_terms);
+    fit();
+    exT.addEventListener("input", fit);
+    exT.onchange = async () => {
+      const csv = toCSV(exT.value);
+      exT.value = toLines(csv); fit();
+      exT.classList.add("busy");
+      try { await save("apply.excluded_title_terms", csv); hap("light"); }
+      catch (e) { err("Не удалось сохранить"); } finally { exT.classList.remove("busy"); }
+    };
   }
   if ($("#cfg-gm-limit")) {
     const capG = cfg.getmatch_max_per_day_cap || 50;

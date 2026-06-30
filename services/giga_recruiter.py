@@ -38,6 +38,7 @@ MAX_ANSWER_CHARS = 1500
 BETWEEN_INTERVIEWS = 8        # пауза между интервью, чтобы не выглядело как флуд
 MAX_ATTEMPTS = 5              # сколько раз пробуем токен, прежде чем пометить failed
 MENU_MAX_PAGES = 25          # сколько страниц «Далее» листать в поиске непройденной вакансии
+MENU_REOPEN_CAP = 5          # макс. переоткрытий меню без прогресса -> выходим (защита от /start-спама)
 _SEL_PREFIX = b"SCR:SEL:"    # callback кнопки выбора вакансии (новый гига-бот)
 _PAGE_PREFIX = b"SCR:PAGE:"  # callback «Далее» (пагинация меню вакансий)
 
@@ -398,9 +399,12 @@ async def _run_session(client, entity, oa, sys_prompt, account, menu_token):
     done = pgconn.seen_keys("giga_vac")
     completed, turns, pages = 0, 0, 0
     cur_uuid, cur_vac, convo, tok_turns = None, "", [], 0
+    opens = 0  # переоткрытий меню (StartBotRequest) подряд без прогресса
     deadline = time.time() + RUN_BUDGET_SEC
 
     async def open_menu():
+        nonlocal opens
+        opens += 1
         base = await client.get_messages(entity, limit=1)
         lid = base[0].id if base else 0
         await client(StartBotRequest(bot=entity, peer=entity, start_param=menu_token))
@@ -409,11 +413,14 @@ async def _run_session(client, entity, oa, sys_prompt, account, menu_token):
     last_id = await open_menu()
 
     while turns < MAX_TURNS and time.time() < deadline:
+        if opens > MENU_REOPEN_CAP:  # бот не даёт меню/интервью -> не спамим /start, выходим
+            print(f"giga[{_label()}]: {opens} переоткрытий меню без прогресса — выходим")
+            return "done", completed, turns
         replies = await _wait_reply(client, entity, last_id, REPLY_TIMEOUT)
         if not replies:
-            # клик мог отредактировать меню без нового сообщения — перечитаем последнее
+            # клик мог отредактировать меню без нового сообщения — перечитаем СТРОГО новее last_id
             base = await client.get_messages(entity, limit=3)
-            replies = [m for m in reversed(base) if not m.out and m.id >= last_id]
+            replies = [m for m in reversed(base) if not m.out and m.id > last_id]
             if not replies:
                 return "done", completed, turns
         for m in replies:
@@ -423,12 +430,11 @@ async def _run_session(client, entity, oa, sys_prompt, account, menu_token):
         sm = _star_msg(replies)
         if sm is not None:
             await _rate5(sm)
-            completed += 1
-            if cur_uuid:
+            if cur_uuid:  # ещё не зачтена (DONE_RE мог зачесть раньше) -> зачитываем
                 pgconn.add_seen("giga_vac", [cur_uuid]); done.add(cur_uuid)
-                pgconn.bump_activity("giga")
-            print(f"giga[{_label()}]: интервью #{completed} «{cur_vac[:40]}» -> 5★")
-            cur_uuid, cur_vac, convo, tok_turns = None, "", [], 0
+                pgconn.bump_activity("giga"); completed += 1
+                print(f"giga[{_label()}]: интервью #{completed} «{cur_vac[:40]}» -> 5★")
+                cur_uuid, cur_vac, convo, tok_turns = None, "", [], 0
             await asyncio.sleep(BETWEEN_INTERVIEWS)
             last_id, pages = await open_menu(), 0
             continue
@@ -445,6 +451,7 @@ async def _run_session(client, entity, oa, sys_prompt, account, menu_token):
                 cur_uuid, cur_vac, convo, tok_turns = None, "", [], 0
             pick = next(((u, t, d) for (u, t, d) in sels if u not in done), None)
             if pick:
+                opens = 0  # прогресс: выбрали вакансию -> сбрасываем счётчик переоткрытий
                 cur_uuid, cur_vac, convo, tok_turns, pages = pick[0], pick[1], [], 0, 0
                 print(f"giga[{_label()}]: выбираю «{cur_vac[:50]}»")
                 try:
@@ -480,15 +487,20 @@ async def _run_session(client, entity, oa, sys_prompt, account, menu_token):
                              if (m.text or "").strip()).strip()
         if not bot_text:
             continue
-        if NOACTIVE_RE.search(bot_text):              # эта вакансия уже сдана -> в меню
+        if NOACTIVE_RE.search(bot_text):   # «нет новых вакансий»/«диалог завершён» -> СТОП
+            if cur_uuid:                   # (не переоткрываем меню по кругу = не спамим /start)
+                pgconn.add_seen("giga_vac", [cur_uuid]); done.add(cur_uuid)
+            print(f"giga[{_label()}]: бот сообщил, что активных вакансий нет — выходим")
+            return "done", completed, turns
+        if DONE_RE.search(bot_text) and "?" not in bot_text:
+            # «спасибо за интервью / передам резюме» — интервью завершено (бот не всегда
+            # показывает 5★). Помечаем пройденной; следующую возьмёт следующий прогон.
             if cur_uuid:
                 pgconn.add_seen("giga_vac", [cur_uuid]); done.add(cur_uuid)
-            cur_uuid, cur_vac = None, ""
-            await asyncio.sleep(4)
-            last_id, pages = await open_menu(), 0
-            continue
-        if DONE_RE.search(bot_text) and "?" not in bot_text:
-            continue                                  # «спасибо за интервью» -> ждём звёзды
+                pgconn.bump_activity("giga"); completed += 1
+                print(f"giga[{_label()}]: интервью #{completed} «{cur_vac[:40]}» завершено (без 5★)")
+                cur_uuid, cur_vac, convo, tok_turns = None, "", [], 0
+            continue                                  # ждём возможные 5★/меню; таймаут -> выход
         if WAIT_RE.search(bot_text) and "?" not in bot_text:
             continue
 
@@ -502,6 +514,7 @@ async def _run_session(client, entity, oa, sys_prompt, account, menu_token):
         last_id = max(last_id, s.id)
         turns += 1
         tok_turns += 1
+        opens = 0  # прогресс: идёт реальный диалог -> сбрасываем счётчик переоткрытий
         print(f"  giga[{_label()}] ход {turns}: Q={bot_text[:45]!r} A={answer[:45]!r}")
         await asyncio.sleep(3)
     return "budget", completed, turns

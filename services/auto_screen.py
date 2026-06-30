@@ -12,6 +12,7 @@ import sys
 import time
 
 import giga_recruiter as gr
+from tg_channels import _hh_resume_pdf  # переиспользуем скачивание PDF-резюме (файл + ФИО)
 from hh_applicant_tool.ai import ChatOpenAI
 from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
@@ -20,7 +21,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.contacts import DeleteContactsRequest, ImportContactsRequest
 from telethon.tl.functions.messages import StartBotRequest
-from telethon.tl.types import InputPhoneContact
+from telethon.tl.types import DocumentAttributeFilename, InputPhoneContact
 
 LIVE = "--live" in sys.argv
 DRY = not LIVE
@@ -95,6 +96,19 @@ def _mark_done(aid):
         conn.commit()
     finally:
         conn.close()
+
+
+async def _vac_url_from_nid(api, nid):
+    """Ссылка на hh-вакансию из переписки (nid): vacancy.alternate_url. '' если не вышло.
+    Нужна, т.к. в action_items.vacancy_url у hh-дел почти всегда пусто, а рекрутёру важно
+    видеть, по какой именно вакансии пишут."""
+    if not (api and nid):
+        return ""
+    try:
+        n = await api.get(f"/negotiations/{nid}")
+        return ((n.get("vacancy") or {}).get("alternate_url")) or ""
+    except Exception:
+        return ""
 
 
 async def _do_bot(client, oa, sys_prompt, bot, start, vac, dry):
@@ -227,35 +241,47 @@ def _task_src(t):
     return "Хабр Карьере" if "habr" in blob else ""
 
 
-def _hr_msg(name, hh_url, vac_url, src=""):
-    # дело «написать HR в Telegram» появляется, когда HR САМ попросил написать — поэтому сообщение
-    # простое: поздоровались, имя, что откликнулся, + ссылки. Без LLM (никакого робото-дрейфа).
+def _hr_msg(name, vac_url, hh_url, has_pdf, src=""):
+    # дело «написать HR в Telegram» появляется, когда HR САМ попросил написать. Сообщение простое:
+    # поздоровались, имя, что откликнулся, + ССЫЛКА НА ВАКАНСИЮ (всегда — рекрутёру важно знать,
+    # по какой именно). Резюме идёт ФАЙЛОМ (PDF); ссылку на резюме даём, только если файла нет.
     where = f" на {src}" if src else ""
-    intro = f"Здравствуйте! Меня зовут {_first_name(name)}, откликался на вашу вакансию{where}."
-    return intro + (f"\nВакансия: {vac_url}" if vac_url else "") \
-                 + (f"\nМоё резюме: {hh_url}" if hh_url else "")
+    parts = [f"Здравствуйте! Меня зовут {_first_name(name)}, откликался на вашу вакансию{where}."]
+    if vac_url:
+        parts.append(f"Вакансия: {vac_url}")
+    if has_pdf:
+        parts.append("Резюме прикрепил файлом.")
+    elif hh_url:
+        parts.append(f"Моё резюме: {hh_url}")
+    return "\n".join(parts)
 
 
-async def _do_hr(client, oa, name, resume, hh_url, vac_url, user, vac, dry, src=""):
-    msg = _hr_msg(name, hh_url, vac_url, src)
-    print(f"    @{user} (вакансия «{vac[:40]}»)\n      СООБЩЕНИЕ: «{msg[:300]}»")
+async def _do_hr(client, name, hh_url, vac_url, user, vac, dry, pdf, src=""):
+    pdf_path, pdf_name = pdf
+    msg = _hr_msg(name, vac_url, hh_url, bool(pdf_path), src)
+    print(f"    @{user} (вакансия «{vac[:40]}»){' +PDF' if pdf_path else ''}\n      СООБЩЕНИЕ: «{msg[:300]}»")
     if dry:
         print(f"    @{user}: DRY — сообщение НЕ отправлено")
         return None
     try:
         ent = await client.get_entity(user)
-        await client.send_message(ent, msg, link_preview=False)
+        if pdf_path:  # резюме — файлом (имя = ФИО), сообщение — подписью
+            await client.send_file(ent, pdf_path, caption=msg, force_document=True,
+                                   attributes=[DocumentAttributeFilename(pdf_name)])
+        else:
+            await client.send_message(ent, msg, link_preview=False)
         return True
     except Exception as e:
         print(f"    @{user}: не отправилось ({type(e).__name__})")
         return False
 
 
-async def _do_phone(client, name, hh_url, vac_url, phone, vac, dry, src=""):
+async def _do_phone(client, name, hh_url, vac_url, phone, vac, dry, pdf, src=""):
     """Написать HR по НОМЕРУ в Telegram: импорт контакта -> если есть TG -> сообщение ->
     удалить контакт (чат остаётся). Нет TG -> None (это реальный звонок, дело оставляем)."""
-    msg = _hr_msg(name, hh_url, vac_url, src)
-    print(f"    тел {phone} (вакансия «{vac[:40]}»)\n      СООБЩЕНИЕ: «{msg[:300]}»")
+    pdf_path, pdf_name = pdf
+    msg = _hr_msg(name, vac_url, hh_url, bool(pdf_path), src)
+    print(f"    тел {phone} (вакансия «{vac[:40]}»){' +PDF' if pdf_path else ''}\n      СООБЩЕНИЕ: «{msg[:300]}»")
     if dry:
         print(f"    тел {phone}: DRY — не импортирую/не пишу")
         return None
@@ -270,7 +296,11 @@ async def _do_phone(client, name, hh_url, vac_url, phone, vac, dry, src=""):
         return None
     u = res.users[0]
     try:
-        await client.send_message(u, msg, link_preview=False)
+        if pdf_path:
+            await client.send_file(u, pdf_path, caption=msg, force_document=True,
+                                   attributes=[DocumentAttributeFilename(pdf_name)])
+        else:
+            await client.send_message(u, msg, link_preview=False)
         ok = True
     except Exception as e:
         print(f"    тел {phone}: не отправилось ({type(e).__name__})")
@@ -323,6 +353,9 @@ async def main():
         sys_prompt += (
             f"\n\nКогда просят ссылку на твоё резюме на hh.ru — дай ИМЕННО эту ссылку: {hh_url}. "
             "Не пиши «не могу прислать» и не уклоняйся. (Другие ссылки/GitHub/портфолио не выдумывай.)")
+    pdf = await _hh_resume_pdf(cfg, account)  # (path, fname) | (None, None) — резюме ФАЙЛОМ
+    if pdf[0]:
+        print(f"auto_screen[{account}]: PDF-резюме готово ({pdf[1]}) — прикрепляю файлом")
     api_id, api_hash = pgconn.tg_api()
     client = TelegramClient(StringSession(pgconn.dec_session(enc)), api_id, api_hash)
     await client.connect()
@@ -385,7 +418,8 @@ async def main():
                             continue
                         seen.add(user)
                         print(f"\n  [HR] дело #{t['id']} «{t['vac'][:42]}» -> @{user}")
-                        r = await _do_hr(client, oa, name, resume, hh_url, t["vac_url"], user, t["vac"], DRY, src)
+                        vac_url = t["vac_url"] or await _vac_url_from_nid(api, t.get("nid"))
+                        r = await _do_hr(client, name, hh_url, vac_url, user, t["vac"], DRY, pdf, src)
                         if r is True:  # написали один раз -> дело закрыто, дальше юзер сам
                             if LIVE:
                                 _mark_done(t["id"])
@@ -397,7 +431,8 @@ async def main():
                         # «написать в мессенджер», но дан НОМЕР (нет @) -> пишем в TG по номеру
                         phone = _norm_phone(PHONE.search(blob).group(0))
                         print(f"\n  [ТЕЛ] дело #{t['id']} «{t['vac'][:42]}» -> {phone}")
-                        r = await _do_phone(client, name, hh_url, t["vac_url"], phone, t["vac"], DRY, src)
+                        vac_url = t["vac_url"] or await _vac_url_from_nid(api, t.get("nid"))
+                        r = await _do_phone(client, name, hh_url, vac_url, phone, t["vac"], DRY, pdf, src)
                         if r is True:  # написали в TG -> закрыто, слот потрачен
                             if LIVE:
                                 _mark_done(t["id"])

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import random
 import re
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, AsyncIterator, Iterator
@@ -20,6 +22,9 @@ from ..utils import prefs as cprefs
 DEFAULT_TITLE_STOP = (
     "преподавател", "учител", "репетитор", "воспитател", "педагог", "вожат", "методист",
 )
+# Мягкий тайм-бюджет прогона: с AI-письмами 200 откликов не влезают в жёсткий kill
+# оркестратора (1800с) -> выходим ЧИСТО заранее, остаток добьётся часовыми прогонами.
+APPLY_MAX_RUNTIME_SEC = int(os.getenv("APPLY_MAX_RUNTIME_SEC", "1500"))
 from ..main import BaseNamespace, BaseOperation
 from ..storage.repositories.errors import RepositoryError
 from ..utils.string import (
@@ -390,6 +395,8 @@ class Operation(BaseOperation):
             self.max_applications_per_day = int(mpd) if mpd is not None else 100
         except (TypeError, ValueError):
             self.max_applications_per_day = 100
+        # Мягкий дедлайн прогона — чтобы не ловить жёсткий kill оркестратора (см. константу)
+        self._run_deadline = time.monotonic() + APPLY_MAX_RUNTIME_SEC
         # Только вакансии по договору ГПХ (поле civil_law_contracts непустое)
         self.civil_law_only = bool(
             await tool.storage.settings.get_value("apply.civil_law_only", False)
@@ -497,6 +504,9 @@ class Operation(BaseOperation):
         user: datatypes.User,
         seen_employers: set[str],
     ) -> None:
+        if time.monotonic() > self._run_deadline:
+            logger.info("apply: тайм-бюджет прогона исчерпан — резюме «%s» пропускаю", resume.get("title"))
+            return
         logger.info("Начинаю рассылку откликов для резюме: %s (%s)", resume["alternate_url"], resume["title"])
         print("🚀 Начинаю рассылку откликов для резюме:", resume["title"])
 
@@ -531,6 +541,12 @@ class Operation(BaseOperation):
         do_apply = True
 
         async for vacancy in self._get_similar_vacancies(resume_id=resume["id"]):
+            if time.monotonic() > self._run_deadline:
+                logger.info("apply: тайм-бюджет прогона (%dс) исчерпан на %d откликах — "
+                            "останавливаюсь чисто, остаток добьётся следующим часовым прогоном",
+                            APPLY_MAX_RUNTIME_SEC, self.applications_count)
+                print(f"⏳ Тайм-бюджет прогона исчерпан (сделано {self.applications_count}) — останавливаюсь чисто")
+                break
 
             try:
                 employer = vacancy.get("employer", {})

@@ -97,6 +97,9 @@ async def main():
         return
     # ГР активен -> приглашения ГигаРекрутера проходит бот сам, в «дела» не кладём
     giga_active = pgconn.feature_enabled("giga") and bool(cfg.get("tg_user_session"))
+    # Авто-ответы в чатах hh. Если ВЫКЛЮЧЕНЫ — на none/interview отвечать некому, а
+    # непрочитанное hh уже «съел» при чтении чата, поэтому уведомляем пользователя сами.
+    reply_on = pgconn.feature_enabled("reply")
 
     api = ApiClient(
         access_token=tok["access_token"],
@@ -130,6 +133,12 @@ async def main():
                     continue
                 nid = n["id"]
                 if str(nid) in handoff:
+                    continue
+                # ВАЖНО: GET /negotiations/{nid}/messages помечает переписку ПРОЧИТАННОЙ
+                # (обратной операции у hh нет). Поэтому открываем чат ТОЛЬКО если hh сам
+                # говорит, что там есть новое — иначе снимали бы «непрочитано» у сотен
+                # чужих чатов, и пользователь переставал замечать ответы работодателей.
+                if not (n.get("has_new_messages") or n.get("has_updates")):
                     continue
                 v = n.get("vacancy") or {}
                 try:
@@ -170,12 +179,23 @@ async def main():
                     print("notify: неразборчивая категория LLM, не помечаю seen:", ans[:90])
                     continue
                 fresh_seen.append(key)  # терминальная классификация -> больше не дёргаем
-                prio = PRIO.get(cat)
-                if not prio or len(task) < 3:
-                    continue  # none/interview -> пропуск (seen уже стоит)
                 chat_id = n.get("chat_id") or nid
                 _u = URL_RE.search(last.get("text") or "")
                 action_url = _u.group(0).rstrip(").,;") if _u else ""
+                prio = PRIO.get(cat)
+                if not prio or len(task) < 3:
+                    # none/interview обычно закрывает reply_employers. Если авто-ответы
+                    # выключены — отвечать некому, а «непрочитано» мы уже сняли чтением
+                    # чата. Молча пропустить = потерять ответ работодателя, поэтому шлём.
+                    if reply_on:
+                        continue
+                    snippet = " ".join((last.get("text") or "").split())[:180]
+                    if cat == "interview":
+                        prio = pgconn.PRIORITY_HIGH
+                        task = f"Приглашение на собеседование: {snippet}"
+                    else:
+                        prio = pgconn.PRIORITY_LOW
+                        task = f"Новое сообщение работодателя: {snippet}"
                 queued.append((
                     prio, task, f"https://hh.ru/chat/{chat_id}",
                     f"action:{key}", nid, chat_id, v.get("name", ""), action_url,

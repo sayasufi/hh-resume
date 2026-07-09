@@ -59,7 +59,6 @@ services:
       - ORCH_ENABLED=all
     networks:
       - default
-      - test-llm
 
   prefect-proxy:
     container_name: prefect_proxy
@@ -95,7 +94,6 @@ services:
       - "127.0.0.1:60080:60080"
     networks:
       - default
-      - test-llm
 
   hh-listener:
     container_name: hh_listener
@@ -117,12 +115,31 @@ services:
       - PYTHONPATH=/app/services
     networks:
       - default
-      - test-llm
+
+  # Зашифрованный канал к vLLM, который остался на l40s: ssh -L в socat-мост
+  # (hh_llm_bridge на l40s слушает только 127.0.0.1:18000 -> tpro-vllm:8000).
+  # Наружу не торчит ничего; ключ ограничен permitopen+from в authorized_keys.
+  llm-tunnel:
+    container_name: hh_llm_tunnel
+    image: hh_applicant_tool:latest
+    restart: unless-stopped
+    command: >
+      ssh -N
+      -i /app/config/.llm_tunnel_key
+      -o UserKnownHostsFile=/app/config/.llm_known_hosts
+      -o StrictHostKeyChecking=yes
+      -o BatchMode=yes
+      -o ExitOnForwardFailure=yes
+      -o ServerAliveInterval=30
+      -o ServerAliveCountMax=3
+      -o TCPKeepAlive=yes
+      -L 0.0.0.0:18000:127.0.0.1:18000
+      ubuntu@109.120.182.219
+    volumes:
+      - .:/app
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - default
 
 volumes:
   pgdata:
-
-networks:
-  test-llm:
-    external: true
-    name: test-llm_default

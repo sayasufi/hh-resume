@@ -507,6 +507,11 @@ class Operation(BaseOperation):
         if time.monotonic() > self._run_deadline:
             logger.info("apply: тайм-бюджет прогона исчерпан — резюме «%s» пропускаю", resume.get("title"))
             return
+        if self.applications_count >= self.max_applications_per_day:
+            logger.info("apply: дневной лимит уже достигнут (%d/%d) — резюме «%s» пропускаю",
+                        self.applications_count, self.max_applications_per_day, resume.get("title"))
+            self.daily_limit_reached = True
+            return
         logger.info("Начинаю рассылку откликов для резюме: %s (%s)", resume["alternate_url"], resume["title"])
         print("🚀 Начинаю рассылку откликов для резюме:", resume["title"])
 
@@ -541,6 +546,16 @@ class Operation(BaseOperation):
         do_apply = True
 
         async for vacancy in self._get_similar_vacancies(resume_id=resume["id"]):
+            # Дневной лимит проверяем НА КАЖДОМ отклике, а не только на входе в прогон:
+            # иначе один прогон выгребал вакансии до упора (у пользователя было 115 при лимите 15).
+            if self.applications_count >= self.max_applications_per_day:
+                logger.info("apply: дневной лимит откликов достигнут (%d/%d) — останавливаюсь",
+                            self.applications_count, self.max_applications_per_day)
+                print(f"⏸️ Дневной лимит откликов достигнут "
+                      f"({self.applications_count}/{self.max_applications_per_day}) — останавливаюсь")
+                self.daily_limit_reached = True
+                break
+
             if time.monotonic() > self._run_deadline:
                 logger.info("apply: тайм-бюджет прогона (%dс) исчерпан на %d откликах — "
                             "останавливаюсь чисто, остаток добьётся следующим часовым прогоном",

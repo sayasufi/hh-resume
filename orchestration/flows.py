@@ -28,7 +28,7 @@ JOBS: list[dict] = [
     dict(name="apply-similar",  command=["python", "-m", "hh_applicant_tool", "apply-similar", "--order-by", "relevance"],
          feature="apply",  cron="0 5-19 * * *",     jitter=300,  tags=["llm"],     timeout=1800),
     dict(name="notify-actions", command=["python", "/app/services/notify_actions.py"],
-         feature="notify", cron="20 5-19 * * *",    jitter=120,  tags=["llm"],     timeout=900),
+         feature="actions", cron="20 5-19 * * *",   jitter=120,  tags=["llm"],     timeout=900),
     dict(name="reply-employers", command=["python", "-m", "hh_applicant_tool", "reply-employers", "--use-ai"],
          feature="reply",  cron="*/20 5-22 * * *",    jitter=120,  tags=["llm"],     timeout=1800),
     dict(name="apply-tests",    command=["python", "/app/services/apply_tests.py", "--apply", "--limit", "10"],

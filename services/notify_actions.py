@@ -81,8 +81,10 @@ def _norm_cat(raw: str):
 
 
 async def main():
-    if not pgconn.feature_enabled("notify"):
-        print("feat.notify выключен в Mini App — пропуск notify_actions")
+    # Отдельный тумблер от «notify» (дайджест): чтение чатов hh НЕОБРАТИМО снимает
+    # «непрочитано», поэтому пользователь должен уметь запретить это, не теряя дайджест.
+    if not pgconn.feature_enabled("actions"):
+        print("feat.actions выключен в Mini App — чаты hh не читаем, пропуск notify_actions")
         return
     cfg = pgconn.app_config()
     # Аккаунт без hh-токена (напр. служебный Telegram-краулер) — пропускаем мягко,

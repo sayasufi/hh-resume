@@ -177,11 +177,16 @@
           </div>
           <div class="gtitle">Чаты и активность</div>
           <div class="list">
-            <label class="cell toggle"><span class="t"><b>Ответы работодателям</b><small>авто-ответы в чатах hh</small></span>
+            <label class="cell toggle"><span class="t"><b>Читать чаты и вести «Дела»</b><small>бот открывает НОВЫЕ сообщения работодателей: тесты, формы, запросы контактов</small></span>
+              <input type="checkbox" data-feat="actions"><i></i></label>
+            <label class="cell toggle"><span class="t"><b>Ответы работодателям</b><small>бот сам пишет ответы в чатах hh</small></span>
               <input type="checkbox" data-feat="reply"><i></i></label>
             <label class="cell toggle"><span class="t"><b>Активность + поднятие резюме</b><small>просмотр вакансий, авто-bump</small></span>
               <input type="checkbox" data-feat="browse"><i></i></label>
           </div>
+          <div class="ghint" style="padding:6px 18px 0">hh помечает сообщение прочитанным в тот момент, когда бот его открывает — вернуть «непрочитано» нельзя.<br>
+            <b>Включено:</b> бот заходит только в чаты с новыми сообщениями и кладёт их в «Дела» (а если «Ответы работодателям» выключены — присылает текст сообщения, чтобы ответ не потерялся).<br>
+            <b>Выключено:</b> бот в чаты не заходит, «непрочитано» в hh остаётся — но тесты, формы и контакты придётся ловить руками.</div>
         </div>
 
         <!-- GetMatch -->
@@ -247,7 +252,7 @@
           <div class="ghint" id="giga-hint"></div>
           <div class="gtitle">Уведомления</div>
           <div class="list">
-            <label class="cell toggle"><span class="t"><b>Уведомления и дайджест</b><small>важное в личку: интервью, контакты работодателей</small></span>
+            <label class="cell toggle"><span class="t"><b>Уведомления и дайджест</b><small>сводка дня и важное в личку. Чаты hh НЕ читает — это тумблер «Читать чаты» выше</small></span>
               <input type="checkbox" data-feat="notify"><i></i></label>
           </div>
         </div>

@@ -24,6 +24,50 @@ from hh_applicant_tool.storage import pgconn
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webapp_static")
 FEATURES = ("apply", "tests", "reply", "actions", "browse", "notify", "giga", "getmatch", "habr", "habr_chat", "tg_channels")  # тумблеры
+_AREAS_IDX: dict[str, tuple[str, str]] = {}  # 'волгоград' -> ('24', 'Волгоград'); ленивый кэш /areas
+
+
+async def _areas_index() -> dict[str, tuple[str, str]]:
+    """Справочник регионов hh (публичный, без токена). Первое вхождение имени выигрывает."""
+    if _AREAS_IDX:
+        return _AREAS_IDX
+    import httpx
+    async with httpx.AsyncClient(timeout=20) as h:
+        r = await h.get("https://api.hh.ru/areas")
+        r.raise_for_status()
+        tree = r.json()
+
+    def walk(nodes):
+        for n in nodes:
+            _AREAS_IDX.setdefault(n["name"].lower(), (n["id"], n["name"]))
+            walk(n.get("areas") or [])
+    walk(tree)
+    return _AREAS_IDX
+
+
+async def _resolve_areas(raw) -> tuple[str, str]:
+    """«Волгоград, Волжский» -> ('24,26', 'Волгоград, Волжский'). Принимает и готовые id."""
+    toks = [t.strip() for t in str(raw or "").split(",") if t.strip()]
+    if not toks:
+        return "", ""
+    idx = await _areas_index()
+    by_id = {v[0]: v[1] for v in idx.values()}
+    ids, names, bad, seen = [], [], [], set()
+    for t in toks:
+        hit = (t, by_id[t]) if (t.isdigit() and t in by_id) else idx.get(t.lower())
+        if not hit:
+            bad.append(t)
+            continue
+        if hit[0] in seen:
+            continue
+        seen.add(hit[0])
+        ids.append(hit[0])
+        names.append(hit[1])
+    if bad:
+        raise HTTPException(400, "Не нашёл такой город на hh: " + ", ".join(bad))
+    return ",".join(ids), ", ".join(names)
+
+
 MAX_PER_DAY_CAP = 200   # серверный суточный потолок откликов hh (защита от бана)
 TESTS_PER_DAY_CAP = 30  # практический потолок браузерного тест-флоу
 GETMATCH_CAP = 50       # практический потолок откликов GetMatch в сутки
@@ -920,6 +964,8 @@ async def api_settings(account: str = None,
             pgconn.get_setting, "apply.civil_law_only", False, account)),
         "excluded_title_terms": await asyncio.to_thread(
             pgconn.get_setting, "apply.excluded_title_terms", "", account) or "",
+        "area": await asyncio.to_thread(pgconn.get_setting, "apply.area", "", account) or "",
+        "area_names": await asyncio.to_thread(pgconn.get_setting, "apply.area_names", "", account) or "",
         "getmatch_max_per_day": await asyncio.to_thread(
             pgconn.get_setting, "getmatch.max_per_day", GETMATCH_CAP, account),
         "getmatch_max_per_day_cap": GETMATCH_CAP,
@@ -1014,6 +1060,10 @@ async def _set_config(account: str, key: str, value) -> None:
         await asyncio.to_thread(pgconn.set_setting, key, bool(value), account)
     elif key in ("apply.excluded_title_terms", "apply.excluded_terms"):
         await asyncio.to_thread(pgconn.set_setting, key, str(value).strip(), account)
+    elif key == "apply.area":
+        ids, names = await _resolve_areas(value)
+        await asyncio.to_thread(pgconn.set_setting, "apply.area", ids, account)
+        await asyncio.to_thread(pgconn.set_setting, "apply.area_names", names, account)
     else:
         raise HTTPException(400, "unknown key")
 

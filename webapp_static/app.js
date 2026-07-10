@@ -319,6 +319,17 @@ function bindConfig(cfg, resumes, hhConnected, tgConnected) {
     });
   }
   clampWire($("#cfg-limit"), "apply.max_per_day", capL);
+  const areaEl = $("#cfg-area");
+  if (areaEl) {
+    // показываем человеческие названия, а на сервер шлём как есть — он резолвит в id hh
+    areaEl.value = cfg.area_names || "";
+    areaEl.onchange = async () => {
+      areaEl.classList.add("busy");
+      try { await save("apply.area", areaEl.value); hap("light"); }
+      catch (e) { err((e && e.message) || "Не удалось сохранить"); }
+      finally { areaEl.classList.remove("busy"); }
+    };
+  }
   const exT = $("#cfg-excl-title");
   if (exT) {
     // в поле — по одному слову на строку (удобно править), в бэкенд уходит CSV

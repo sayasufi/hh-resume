@@ -338,6 +338,12 @@ class Operation(BaseOperation):
             args.message_list_path
         )
         self.area = args.area
+        # Города для откликов — per-user настройка apply.area (CSV с id регионов hh).
+        # ВАЖНО: параметр area у /similar_vacancies работает мягко (режет found, но items
+        # всё равно приносит из других городов), поэтому в поиск его НЕ передаём, а режем
+        # у себя — детерминированно, как стоп-слова. Пусто -> географию не ограничиваем.
+        _area = await tool.storage.settings.get_value("apply.area")
+        self.allowed_areas = {a.strip() for a in str(_area or "").split(",") if a.strip()}
         self.bottom_lat = args.bottom_lat
         self.currency = args.currency
         self.date_from = args.date_from
@@ -680,6 +686,13 @@ class Operation(BaseOperation):
                         )
                         print("⛔ Пришел отказ от", vacancy["alternate_url"])
                     continue
+
+                if self.allowed_areas:
+                    _a = vacancy.get("area") or {}
+                    if str(_a.get("id")) not in self.allowed_areas:
+                        logger.warning("Пропуск по городу (%s): %s", _a.get("name"),
+                                       vacancy.get("name") or vacancy["alternate_url"])
+                        continue
 
                 if self._is_title_excluded(vacancy):
                     logger.warning("Пропуск по стоп-слову в названии: %s",

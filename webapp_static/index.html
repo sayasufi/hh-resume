@@ -166,6 +166,12 @@
               <textarea id="cfg-excl-title" rows="3" placeholder="по одному слову на строку&#10;преподаватель&#10;учитель&#10;репетитор" style="width:100%;box-sizing:border-box;resize:vertical;font:inherit;line-height:1.6"></textarea></label>
           </div>
           <div class="ghint" style="padding:6px 18px 0">По одному слову на строку (или через запятую). Поле растёт под список, угол можно потянуть. Не откликаемся на вакансии с этими словами в названии. Пусто — список по умолчанию (преподаватель, учитель, репетитор, воспитатель, педагог…).</div>
+          <div class="list">
+            <label class="cell tap" style="flex-direction:column;align-items:stretch;gap:8px">
+              <span class="k">📍 Города для откликов</span>
+              <input type="text" id="cfg-area" placeholder="Волгоград, Волжский" style="width:100%;box-sizing:border-box;font:inherit"></label>
+          </div>
+          <div class="ghint" style="padding:6px 18px 0">Через запятую, как на hh. Пусто — hh решает сам и при узкой профессии добирает вакансии из области.<br><b>Учти:</b> у удалённых вакансий город — это город работодателя, поэтому с фильтром они тоже отсекутся.</div>
           <div class="gtitle">Авто-отклики</div>
           <div class="list">
             <label class="cell toggle"><span class="t"><b>Включить авто-отклики</b><small>на подходящие вакансии</small></span>

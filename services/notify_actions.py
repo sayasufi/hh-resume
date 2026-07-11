@@ -81,10 +81,11 @@ def _norm_cat(raw: str):
 
 
 async def main():
-    # Отдельный тумблер от «notify» (дайджест): чтение чатов hh НЕОБРАТИМО снимает
-    # «непрочитано», поэтому пользователь должен уметь запретить это, не теряя дайджест.
-    if not pgconn.feature_enabled("actions"):
-        print("feat.actions выключен в Mini App — чаты hh не читаем, пропуск notify_actions")
+    # Чтение чата hh НЕОБРАТИМО снимает «непрочитано» (обратной операции у hh нет),
+    # поэтому лезем в переписку только если пользователь разрешил боту работать с чатами
+    # («Ответы работодателям»). Выключено -> вообще не заходим, «непрочитано» цело.
+    if not pgconn.feature_enabled("reply"):
+        print("feat.reply выключен — бот в чаты hh не заходит, пропуск notify_actions")
         return
     cfg = pgconn.app_config()
     # Аккаунт без hh-токена (напр. служебный Telegram-краулер) — пропускаем мягко,
@@ -99,9 +100,6 @@ async def main():
         return
     # ГР активен -> приглашения ГигаРекрутера проходит бот сам, в «дела» не кладём
     giga_active = pgconn.feature_enabled("giga") and bool(cfg.get("tg_user_session"))
-    # Авто-ответы в чатах hh. Если ВЫКЛЮЧЕНЫ — на none/interview отвечать некому, а
-    # непрочитанное hh уже «съел» при чтении чата, поэтому уведомляем пользователя сами.
-    reply_on = pgconn.feature_enabled("reply")
 
     api = ApiClient(
         access_token=tok["access_token"],
@@ -186,18 +184,7 @@ async def main():
                 action_url = _u.group(0).rstrip(").,;") if _u else ""
                 prio = PRIO.get(cat)
                 if not prio or len(task) < 3:
-                    # none/interview обычно закрывает reply_employers. Если авто-ответы
-                    # выключены — отвечать некому, а «непрочитано» мы уже сняли чтением
-                    # чата. Молча пропустить = потерять ответ работодателя, поэтому шлём.
-                    if reply_on:
-                        continue
-                    snippet = " ".join((last.get("text") or "").split())[:180]
-                    if cat == "interview":
-                        prio = pgconn.PRIORITY_HIGH
-                        task = f"Приглашение на собеседование: {snippet}"
-                    else:
-                        prio = pgconn.PRIORITY_LOW
-                        task = f"Новое сообщение работодателя: {snippet}"
+                    continue  # none/interview -> отвечает reply_employers (обе под feat.reply)
                 queued.append((
                     prio, task, f"https://hh.ru/chat/{chat_id}",
                     f"action:{key}", nid, chat_id, v.get("name", ""), action_url,

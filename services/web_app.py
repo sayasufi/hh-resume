@@ -23,7 +23,7 @@ from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "webapp_static")
-FEATURES = ("apply", "tests", "reply", "actions", "browse", "notify", "giga", "getmatch", "habr", "habr_chat", "tg_channels")  # тумблеры
+FEATURES = ("apply", "tests", "reply", "browse", "notify", "giga", "getmatch", "habr", "habr_chat", "tg_channels")  # тумблеры
 _AREAS_IDX: dict[str, tuple[str, str]] = {}  # 'волгоград' -> ('24', 'Волгоград'); ленивый кэш /areas
 
 

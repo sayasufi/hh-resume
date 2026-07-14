@@ -52,8 +52,11 @@ _NEXT_RE = re.compile(r"дал(ее|ьше)|продолж|next|вперёд|п�
 _SUBMIT_RE = re.compile(r"отправ|заверш|готов|submit|send|finish|подтверд|complete", re.I)
 
 _RATING_Q = re.compile(r"оцен|по\s*\d*[- ]*балл|шкал|уровень\s+владени|насколько\s+хорошо|"
-                       r"звёзд|звезд|рейтинг", re.I)
-_YEARS_Q = re.compile(r"сколько\s+лет|стаж|возраст|лет\s+опыт", re.I)
+                       r"звёзд|звезд|рейтинг|"
+                       r"rate\s+your|how\s+would\s+you\s+rate|knowledge\s+of|proficiency|"
+                       r"skill\s+level|on\s+a\s+scale|from\s+1\s+to\s+\d|1\s+to\s+10|1\s*=", re.I)
+_YEARS_Q = re.compile(r"сколько\s+лет|стаж|возраст|лет\s+опыт|"
+                      r"years?\s+of\s+(relevant\s+)?experience|how\s+many\s+years", re.I)
 
 SYS = (
     "Ты помогаешь кандидату заполнить анкету/форму при отклике на вакансию. "
@@ -235,11 +238,11 @@ async def build_profile(api, acc, cfg):
 async def _answer_text(llm, prof, q, long=False):
     """Всегда непустой ПРАВДИВЫЙ ответ. Нет данных -> честно «Нет» (без выдумки ссылок).
     Возвращает (текст, why) или (None, why) только при сбое сети LLM."""
-    # текст-самооценка навыка «от 1 до N / по N-балльной» -> максимум (навыки на максимум)
+    # текст-самооценка навыка «от 1 до N / по N-балльной / rate 1..10» -> максимум шкалы
     if _RATING_Q.search(q or "") and not _YEARS_Q.search(q or ""):
-        m = re.search(r"(?:до|to|из|/|балл\w*)\D{0,4}(\d{1,2})", q or "") or re.search(r"1\D{1,4}(\d{1,2})", q or "")
-        if m:
-            return m.group(1), "навык-шкала -> макс"
+        cand = [n for n in (int(x) for x in re.findall(r"\d{1,2}", q or "")) if 2 <= n <= 10]
+        if cand:
+            return str(max(cand)), "навык-шкала -> макс"
     hint = "Развёрнуто (2-4 предложения)" if long else "Кратко, одной строкой"
     guide = ("Отвечай ТОЛЬКО правдиво по профилю. Открытые вопросы (почему вы / расскажите / "
              "мотивация) — раскрывай по резюме. Если конкретных данных нет (нет GitHub/LinkedIn/"

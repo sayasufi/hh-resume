@@ -347,7 +347,10 @@ async def fill_page(page, llm, prof):
                 continue
             ans, why = await _answer_choice(llm, prof, q or "Выберите", opts, multi=(typ == "checkbox"))
             if ans in (None, SKIP_TOKEN):
-                (need if reqd else filled).append((q, f"пропуск ({why})")); continue
+                # чекбокс «не выбрал вариант» — норма (выбираешь что применимо), не блокер;
+                # radio без ответа на обязательный вопрос — блокер.
+                dest = filled if typ == "checkbox" else (need if reqd else filled)
+                dest.append((q, f"пропуск ({why})")); continue
             picked = []
             for idx in (ans if typ == "checkbox" else ans[:1]):
                 if await _click(page, opts_o[idx]["ff"]):
@@ -385,6 +388,26 @@ async def _find_button(page, rx):
     return None
 
 
+_FIELD_Q = ("()=>document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]),"
+            "textarea,select,[role=radio],[role=checkbox],[role=textbox]').length")
+
+
+async def _form_frame(page):
+    """Документ ИЛИ iframe, где реально есть поля формы (webask и пр. рендерят в iframe)."""
+    try:
+        if await page.evaluate(_FIELD_Q):
+            return page
+    except Exception:
+        pass
+    for fr in page.frames[1:]:
+        try:
+            if await fr.evaluate(_FIELD_Q):
+                return fr
+        except Exception:
+            continue
+    return page
+
+
 async def process(page, llm, prof, url, live):
     if HUMAN_HOSTS.search(url or ""):
         return "needs_human", "не авто-форма (интервью/видео/ATS/мессенджер/файл)", [], []
@@ -399,32 +422,53 @@ async def process(page, llm, prof, url, live):
     if hard:
         return "needs_human", hard, [], []
 
-    # SPA/опрос за кнопкой «Начать»: если полей ещё нет — кликнем старт и подождём
-    try:
-        cnt = await page.evaluate("() => document.querySelectorAll("
-                                  "'input,textarea,select,[role=radio],[role=checkbox],[role=textbox]').length")
-        if not cnt:
-            start = await _find_button(page, re.compile(
-                r"начать|пройти\s*опрос|start|приступить|заполнить\s*анкет|откликнуться", re.I))
-            if start:
-                await start.click(timeout=6000)
-                await page.wait_for_timeout(3500)
-    except Exception:
-        pass
+    # SPA / интро-секция / опрос за кнопкой: пока полей нет — жмём старт/«Далее» и ждём
+    _START = re.compile(r"начать|пройти|start|приступить|заполнить|откликнуться|"
+                        r"дал(ее|ьше)|продолж|next|поехали|begin", re.I)
+    for _ in range(3):
+        if await _form_frame(page) is not page:
+            break  # поля нашлись в iframe
+        try:
+            if await page.evaluate(_FIELD_Q):
+                break
+            btn = await _find_button(page, _START)
+            if not btn:
+                break
+            await btn.click(timeout=6000)
+            await page.wait_for_timeout(3500)
+        except Exception:
+            break
+
+    # стена логина (напр. Google Forms только для авторизованных)
+    frame0 = await _form_frame(page)
+    if frame0 is page:
+        try:
+            has = await page.evaluate(_FIELD_Q)
+        except Exception:
+            has = 0
+        if not has:
+            try:
+                body = (await page.inner_text("body"))[:3000].lower()
+            except Exception:
+                body = ""
+            if any(w in body for w in ("войдите в аккаунт", "sign in", "чтобы заполнить эту форму",
+                                       "необходимо войти", "требуется вход")):
+                return "needs_human", "форма только для авторизованных (нужен вход в аккаунт)", [], []
 
     all_filled, all_need = [], []
     for step in range(MAX_STEPS):
-        filled, need, nf, err = await fill_page(page, llm, prof)
+        frame = await _form_frame(page)
+        filled, need, nf, err = await fill_page(frame, llm, prof)
         all_filled += filled
         all_need += need
         if err:
             return "error", err, all_filled, all_need
         if step == 0 and nf == 0:
-            return "needs_human", "полей формы не найдено (не поддержанный тип)", all_filled, all_need
+            return "needs_human", "полей формы не найдено (SPA/нестандартная)", all_filled, all_need
         if need:  # есть обязательные без ответа -> не листаем и не отправляем
             return "partial", "обязательные без ответа", all_filled, all_need
-        nxt = await _find_button(page, _NEXT_RE)
-        sub = await _find_button(page, _SUBMIT_RE)
+        nxt = await _find_button(frame, _NEXT_RE)
+        sub = await _find_button(frame, _SUBMIT_RE)
         if sub and not nxt:  # последняя страница
             if not live:
                 return "ready", "готово к отправке (dry)", all_filled, all_need
@@ -459,8 +503,11 @@ async def inspect(page, url):
         print("   goto:", type(e).__name__, str(e)[:60]); return
     print("   итоговый URL:", page.url[:85])
     print("   human-host:", bool(HUMAN_HOSTS.search(page.url)))
+    frame = await _form_frame(page)
+    if frame is not page:
+        print("   поля в IFRAME:", frame.url[:60])
     try:
-        fields = await page.evaluate(EXTRACT_JS)
+        fields = await frame.evaluate(EXTRACT_JS)
     except Exception as e:
         print("   extract err:", repr(e)[:60]); return
     print(f"   полей найдено: {len(fields)}")

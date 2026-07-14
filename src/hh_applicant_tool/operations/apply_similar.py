@@ -882,13 +882,9 @@ class Operation(BaseOperation):
 
                     logger.debug(msg)
                     params["message"] = msg
-                    # В сопроводительном письме указываем ссылку на hh-вакансию, на
-                    # которую откликаемся, — чтобы получатель сразу видел, о чём речь.
-                    _vurl = vacancy.get("alternate_url")
-                    if _vurl and _vurl not in params["message"]:
-                        params["message"] = (
-                            params["message"].rstrip() + f"\n\nВакансия: {_vurl}"
-                        )
+                    # Ссылку на вакансию в hh-письмо НЕ добавляем: в hh-чате вакансия и так
+                    # видна в шапке, а лишняя строка выглядит роботом. Ссылку прикладываем
+                    # только в холодных ЛС в Telegram (tg_channels/auto_screen).
 
                 try:
                     if not self.dry_run:

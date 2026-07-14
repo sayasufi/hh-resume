@@ -233,30 +233,38 @@ async def build_profile(api, acc, cfg):
 
 
 async def _answer_text(llm, prof, q, long=False):
+    """Всегда непустой ПРАВДИВЫЙ ответ. Нет данных -> честно «Нет» (без выдумки ссылок).
+    Возвращает (текст, why) или (None, why) только при сбое сети LLM."""
+    # текст-самооценка навыка «от 1 до N / по N-балльной» -> максимум (навыки на максимум)
+    if _RATING_Q.search(q or "") and not _YEARS_Q.search(q or ""):
+        m = re.search(r"(?:до|to|из|/|балл\w*)\D{0,4}(\d{1,2})", q or "") or re.search(r"1\D{1,4}(\d{1,2})", q or "")
+        if m:
+            return m.group(1), "навык-шкала -> макс"
     hint = "Развёрнуто (2-4 предложения)" if long else "Кратко, одной строкой"
-    guide = ("Если вопрос ОТКРЫТЫЙ (почему вы / расскажите / мотивация / что можете дать) — "
-             "ОБЯЗАТЕЛЬНО ответь по резюме и здравому смыслу, НЕ пропускай. "
-             f"{SKIP_TOKEN} — ТОЛЬКО если просят конкретные данные, которых нет в профиле "
-             "(телефон, ссылка на github/портфолио, номер, сертификат).")
+    guide = ("Отвечай ТОЛЬКО правдиво по профилю. Открытые вопросы (почему вы / расскажите / "
+             "мотивация) — раскрывай по резюме. Если конкретных данных нет (нет GitHub/LinkedIn/"
+             "портфолио/сертификата/сайта) — НЕ выдумывай ссылки/данные, а честно напиши, что "
+             "этого нет («Нет», «Не веду», «Отсутствует»). ВСЕГДА дай непустой ответ.")
     a = ""
     for attempt in (1, 2):
         try:
-            a = (await llm.send_message(f"{prof}\n\nВопрос анкеты: {q}\n{hint}. {guide}")).strip()
+            a = (await llm.send_message(f"{prof}\n\nВопрос анкеты: {q}\n{hint}. {guide}")).strip().strip('"').strip()
         except OpenAIError as e:
             return None, f"LLM error: {repr(e)[:50]}"
         if a.upper().strip(".! ") == SKIP_TOKEN:
-            return SKIP_TOKEN, "нет данных в профиле"
-        if not _bad(a):
+            return "Нет", "нет данных -> честно «нет»"
+        if a and not _bad(a):
             return a, "ok"
-    return None, f"ненадёжный ответ: {a[:50]}"
+    return "Нет", "заглушка (LLM не дал ответ)"
 
 
 async def _answer_choice(llm, prof, q, options, multi=False):
+    """radio -> всегда какой-то вариант (нейтральный при отсутствии данных, чтобы не
+    блокировать форму). checkbox -> может вернуть [] (ничего не применимо — это норма)."""
     listing = "\n".join(f"{i+1}) {o}" for i, o in enumerate(options))
     rule = ("Можно несколько — номера через запятую." if multi else f"Ответь СТРОГО цифрой 1..{len(options)}.")
     base = (f"{prof}\n\nВопрос: {q}\nВарианты:\n{listing}\nВыбери по профилю. Нет прямого — "
-            f"самый разумный (например, согласие на формат/переезд, если адекватно). {rule} "
-            f"Если ни один не подходит и это исказит правду — {SKIP_TOKEN}.")
+            f"самый разумный/нейтральный (например «Нет», «Другое», согласие на формат/переезд). {rule}")
     r = ""
     for attempt in (1, 2):
         try:
@@ -264,12 +272,18 @@ async def _answer_choice(llm, prof, q, options, multi=False):
                  else base + f"\n\nОтветь ТОЛЬКО {'номерами' if multi else 'числом'}.")).strip()
         except OpenAIError as e:
             return None, f"LLM error: {repr(e)[:50]}"
-        if SKIP_TOKEN in r.upper():
-            return SKIP_TOKEN, "нет подходящего варианта"
         nums = [n - 1 for x in re.findall(r"\d+", r) if 0 <= (n := int(x)) - 1 < len(options)]
         if nums:
             return (nums if multi else nums[:1]), "ok"
-    return None, f"LLM не дал номер: {r[:40]}"
+        if SKIP_TOKEN in r.upper():
+            break
+    if multi:
+        return [], "чекбокс: ничего не выбрано"
+    low = [(o or "").lower() for o in options]  # обязательный radio -> нейтральный вариант
+    for i, o in enumerate(low):
+        if o.strip() in ("нет", "no") or o.startswith(("не ", "нет,")) or "друг" in o or "other" in o:
+            return [i], "нейтральный вариант"
+    return [0], "первый вариант (обязателен)"
 
 
 async def _fill_text(page, ff, value):
@@ -319,17 +333,17 @@ async def fill_page(page, llm, prof):
         opts = [o.get("label") or f"вариант {i+1}" for i, o in enumerate(opts_o)]
         if typ in ("short", "long"):
             ans, why = await _answer_text(llm, prof, q or "Ответьте", long=(typ == "long"))
-            if ans in (None, SKIP_TOKEN):
-                (need if reqd else filled).append((q, f"пропуск ({why})")); continue
+            if ans is None:  # только сетевой сбой LLM
+                need.append((q, f"LLM: {why}")); continue
             filled.append((q, f"✎ {ans[:60]}")) if await _fill_text(page, f["ff"], ans) \
                 else need.append((q, "fill не удался"))
         elif typ == "select":
             ridx = _rating_max_idx(q, opts)
             if ridx is None:
                 ans, why = await _answer_choice(llm, prof, q or "Выберите", opts)
-                if ans in (None, SKIP_TOKEN):
-                    (need if reqd else filled).append((q, f"пропуск ({why})")); continue
-                ridx = ans[0]
+                if ans is None:
+                    need.append((q, f"LLM: {why}")); continue
+                ridx = ans[0] if ans else 0
             try:
                 await page.select_option(f'[data-ff="{f["ff"]}"]', index=ridx, timeout=5000)
                 filled.append((q, f"▼ {opts[ridx]}"))
@@ -346,11 +360,10 @@ async def fill_page(page, llm, prof):
                     else need.append((q, "клик rating не удался"))
                 continue
             ans, why = await _answer_choice(llm, prof, q or "Выберите", opts, multi=(typ == "checkbox"))
-            if ans in (None, SKIP_TOKEN):
-                # чекбокс «не выбрал вариант» — норма (выбираешь что применимо), не блокер;
-                # radio без ответа на обязательный вопрос — блокер.
-                dest = filled if typ == "checkbox" else (need if reqd else filled)
-                dest.append((q, f"пропуск ({why})")); continue
+            if ans is None:  # сбой LLM
+                need.append((q, f"LLM: {why}")); continue
+            if not ans:  # чекбокс без выбора — норма
+                filled.append((q, f"☐ ({why})")); continue
             picked = []
             for idx in (ans if typ == "checkbox" else ans[:1]):
                 if await _click(page, opts_o[idx]["ff"]):

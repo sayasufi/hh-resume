@@ -562,8 +562,12 @@ async def main():
         tasks = [(None, ONE_URL, "тест")]
     else:
         conn = pgconn.connect(); cur = conn.cursor()
+        # счётчик попыток: мёртвые формы (капча/логин/видео-интервью) не дёргаем вечно
+        cur.execute("ALTER TABLE action_items ADD COLUMN IF NOT EXISTS form_attempts int NOT NULL DEFAULT 0")
+        conn.commit()
         cur.execute("SELECT id, action_url, vacancy FROM action_items WHERE account=%s AND "
-                    "coalesce(done,false)=false AND action_url ~* %s ORDER BY created_at DESC LIMIT %s",
+                    "coalesce(done,false)=false AND coalesce(form_attempts,0) < 3 AND "
+                    "action_url ~* %s ORDER BY created_at DESC LIMIT %s",
                     (acc, DB_FORM_RE, LIMIT))
         tasks = cur.fetchall(); conn.close()
     if not tasks:
@@ -589,9 +593,13 @@ async def main():
             except Exception:
                 pass
             print(f"   [{status}] {msg}")
-            if status == "submitted" and aid:
+            if aid:
                 conn = pgconn.connect(); cur = conn.cursor()
-                cur.execute("UPDATE action_items SET done=true WHERE id=%s", (aid,))
+                if status == "submitted":
+                    cur.execute("UPDATE action_items SET done=true WHERE id=%s", (aid,))
+                else:  # не отправили — засчитываем попытку; после 3-й перестаём авто-пробовать (остаётся человеку)
+                    cur.execute("UPDATE action_items SET form_attempts=coalesce(form_attempts,0)+1 "
+                                "WHERE id=%s", (aid,))
                 conn.commit(); conn.close()
         await browser.close()
 

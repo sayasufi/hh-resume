@@ -29,6 +29,10 @@ JOBS: list[dict] = [
          feature="apply",  cron="0 5-19 * * *",     jitter=300,  tags=["llm"],     timeout=1800),
     dict(name="notify-actions", command=["python", "/app/services/notify_actions.py"],
          feature="reply", cron="20 5-19 * * *",     jitter=120,  tags=["llm"],     timeout=900),
+    # авто-заполнение внешних анкет/форм из «Дел» (Playwright + LLM). LIVE: реально отправляет.
+    # Аккаунт берётся из HH_ACCOUNT (run_op), профиль — hh /me + резюме. Гейт: feat.forms.
+    dict(name="form-fill",      command=["python", "/app/services/form_fill.py", "--live", "--limit", "8"],
+         feature="forms", cron="25 9-19/4 * * *",   jitter=400,  tags=["llm", "browser"], timeout=1800),
     dict(name="reply-employers", command=["python", "-m", "hh_applicant_tool", "reply-employers", "--use-ai"],
          feature="reply",  cron="*/20 5-22 * * *",    jitter=120,  tags=["llm"],     timeout=1800),
     dict(name="apply-tests",    command=["python", "/app/services/apply_tests.py", "--apply", "--limit", "10"],

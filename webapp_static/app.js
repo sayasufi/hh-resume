@@ -178,7 +178,7 @@ function bindToggles(features, tgConnected, gmLinked, habrLinked, hhConnected) {
     const lockGm = inp.dataset.feat === "getmatch" && !tgConnected && !gmLinked;
     const lockHabr = (inp.dataset.feat === "habr" || inp.dataset.feat === "habr_chat") && !habrLinked;
     const lockTg = inp.dataset.feat === "tg_channels" && !tgConnected;
-    const lockHh = ["apply", "tests", "reply", "browse"].includes(inp.dataset.feat) && !hhConnected;
+    const lockHh = ["apply", "tests", "reply", "browse", "forms"].includes(inp.dataset.feat) && !hhConnected;
     const lock = lockGiga || lockGm || lockHabr || lockTg || lockHh;
     inp.disabled = lock;
     if (lock) inp.checked = false;

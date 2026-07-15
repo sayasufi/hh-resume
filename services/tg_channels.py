@@ -27,7 +27,8 @@ from telethon.tl.types import DocumentAttributeFilename
 LIVE = "--live" in sys.argv
 DRY = not LIVE
 MAX_DM = 6              # холодных ЛС за прогон — spam-safety (Telegram флагает рассылку незнакомцам)
-MAX_EVAL = 60          # потолок LLM-оценок постов за прогон (стоимость)
+MAX_SUGGEST = 25       # вакансий-кандидатов в «Отклики TG» за прогон (режим-подсказка, не пишем)
+MAX_EVAL = 80          # потолок LLM-оценок постов за прогон (стоимость)
 POSTS_PER_CH = 12      # сколько свежих постов смотреть на канал
 FRESH_DAYS = 3         # посты старше — не трогаем
 TME = re.compile(r"t\.me/([A-Za-z0-9_]{4,32})")
@@ -356,8 +357,13 @@ async def run():
     cfg = pgconn.app_config()
     enc = cfg.get("tg_user_session")
     oa = cfg.get("openai") or {}
-    if not enc or not oa.get("token"):
-        print("tg_channels: нет tg-сессии / openai — пропуск")
+    # РЕЖИМ-ПОДСКАЗКА (DRY, по умолчанию): матчим вакансии и кладём в «Отклики TG» для ручного
+    # отклика — TG-сессия НЕ нужна, рекрутёрам НЕ пишем. Сессия требуется только для LIVE-рассылки.
+    if not oa.get("token"):
+        print("tg_channels: нет openai — пропуск")
+        return
+    if LIVE and not enc:
+        print("tg_channels: LIVE-рассылка без tg-сессии — пропуск")
         return
     resume = (cfg.get("resume_text") or "").strip()
     if not resume:
@@ -394,7 +400,9 @@ async def run():
         return
 
     hh_url = await _hh_resume_url(cfg, account)
-    pdf_path, pdf_name = await _hh_resume_pdf(cfg, account)   # PDF резюме + имя файла (ФИО) для LIVE
+    pdf_path = pdf_name = None
+    if LIVE:  # PDF нужен только для реальной рассылки; в режиме-подсказке не качаем
+        pdf_path, pdf_name = await _hh_resume_pdf(cfg, account)
     done_contacts = _outreach_contacts(account)     # кому уже писали -> дедуп по рекрутёру (антиспам)
     # ЛС рекрутёру шлём ТОЛЬКО в LIVE. В DRY сессию кандидата вообще не подключаем —
     # гарантия, что эйчарам ничего не пишется, пока не разрешат.
@@ -419,7 +427,7 @@ async def run():
             if not pgconn.feature_enabled("tg_channels", account):  # выключили на ходу -> стоп
                 print("tg_channels: фича выключена во время прогона — останавливаюсь")
                 break
-            if dm >= MAX_DM or evals >= MAX_EVAL:
+            if dm >= (MAX_DM if LIVE else MAX_SUGGEST) or evals >= MAX_EVAL:
                 break
             evals += 1
             match, c2, letter = await _decide(oa, resume, text, greet, PREF_NOTE)
@@ -438,9 +446,12 @@ async def run():
                 continue
             done_contacts.add(to.lower())
             if not LIVE:
-                # DRY — НИЧЕГО не отправляем, только показываем что отправили бы (вакансию НЕ помечаем seen — уйдёт при LIVE)
-                print(f"  [DRY ЛС→{to}{' +PDF' if pdf_path else ''}] {category}/{title[:42]} (из @{channel}): {letter[:90]}")
-                _record_outreach(account, vid, channel, to, title, category, letter, "dry")
+                # РЕЖИМ-ПОДСКАЗКА: рекрутёру НЕ пишем — кладём вакансию-кандидат в «Отклики TG»
+                # (вакансия + контакт + готовое письмо), откликается человек сам. Помечаем seen,
+                # чтобы не пере-оценивать: запись остаётся в списке, повтора нет.
+                print(f"  [кандидат] {category}/{title[:42]} -> {to or 'без контакта'} (из @{channel})")
+                _record_outreach(account, vid, channel, to, title, category, letter, "suggested")
+                pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
                 dm += 1
                 continue
             try:

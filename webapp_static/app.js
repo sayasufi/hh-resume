@@ -177,7 +177,7 @@ function bindToggles(features, tgConnected, gmLinked, habrLinked, hhConnected) {
     const lockGiga = inp.dataset.feat === "giga" && !tgConnected;
     const lockGm = inp.dataset.feat === "getmatch" && !tgConnected && !gmLinked;
     const lockHabr = (inp.dataset.feat === "habr" || inp.dataset.feat === "habr_chat") && !habrLinked;
-    const lockTg = inp.dataset.feat === "tg_channels" && !tgConnected;
+    const lockTg = false;  // «Из Telegram-каналов» — режим-подсказка, работает без подключения TG
     const lockHh = ["apply", "tests", "reply", "browse"].includes(inp.dataset.feat) && !hhConnected;
     const lock = lockGiga || lockGm || lockHabr || lockTg || lockHh;
     inp.disabled = lock;
@@ -545,7 +545,7 @@ const loadHabrApps = () => api("/api/habr").then((r) => {
   HABR_APPS = r.applications || []; renderHabrApps(); renderHabrStats();
 }).catch(() => {});
 
-// ── TG-отклики (рассылка по вакансиям из Telegram-каналов; пока DRY) ──
+// ── Отклики TG: подобранные вакансии-кандидаты (контакт + письмо; откликаешься сам) ──
 let TG_APPS = [];
 function renderTgApps() {
   const box = $("#tg-apps"), cnt = $("#tg-count");
@@ -554,17 +554,17 @@ function renderTgApps() {
   if (cnt) cnt.textContent = items.length;
   if (!items.length) {
     box.innerHTML = '<div class="empty">'
-      + (TG_APPS.length ? "Нет откликов за период"
-         : "Пока нет TG-откликов. Включи «Telegram-отклики» в Настройках — бот подберёт вакансии из каналов и покажет, кому написал бы (в DRY реально не пишем).") + "</div>";
+      + (TG_APPS.length ? "Нет подобранных вакансий за период"
+         : "Пока пусто. Включи «Telegram-отклики» в Настройках — бот подберёт из каналов вакансии под твоё резюме и сложит сюда: вакансия + контакт рекрутёра + готовое письмо. Откликаешься сам — бот рекрутёрам не пишет.") + "</div>";
     return;
   }
   box.innerHTML = '<div class="list">' + items.map((a) => {
     const sub = [a.channel ? "@" + a.channel : "", a.category, a.at].filter(Boolean).join(" · ");
-    const st = a.status !== "sent"
-      ? '<span class="gm-st wait">DRY</span>'
-      : (a.replied
+    const st = a.status === "sent"
+      ? (a.replied
           ? '<span class="gm-st ok">✓ ответили</span>'
-          : '<span class="gm-st wait">отправлено · ждём</span>');
+          : '<span class="gm-st wait">отправлено · ждём</span>')
+      : '<span class="gm-st ok">💡 можно откликнуться</span>';
     const uname = (a.contact || "").replace(/^@/, "");
     const vacLink = a.url ? `<a class="vac-open" href="#" data-vurl="${esc(a.url)}" style="color:var(--accent);text-decoration:none">открыть пост ↗</a>` : "(ссылка недоступна)";
     return '<div class="cell act tg-out"><div class="dlg-main act-text">'

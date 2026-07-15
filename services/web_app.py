@@ -1002,12 +1002,15 @@ async def _set_config(account: str, key: str, value) -> None:
     if key in FEATURES:
         # ГигаРекрутер нельзя включить без подключённого Telegram (user-сессии):
         # бот действует от лица пользователя в чате @Giga_recruiter_bot.
-        if key in ("giga", "tg_channels") and bool(value):
+        # ГигаРекрутер действует ОТ ЛИЦА пользователя в чатах -> нужна TG-сессия.
+        # «Из Telegram-каналов» теперь режим-подсказка (подбор вакансий в «Отклики TG»,
+        # рекрутёрам не пишет) -> сессия НЕ требуется.
+        if key == "giga" and bool(value):
             cfg = await asyncio.to_thread(pgconn.app_config, account)
             if not cfg.get("tg_user_session"):
                 raise HTTPException(
                     400, "Подключите Telegram (кнопка «Подключить» / команда /connect "
-                         "в боте) — нужно для авто-задач и вакансий из Telegram-каналов.")
+                         "в боте) — нужно для авто-задач ГигаРекрутера.")
         if key == "getmatch" and bool(value):
             cfg = await asyncio.to_thread(pgconn.app_config, account)
             linked = await asyncio.to_thread(pgconn.get_setting, "getmatch.session", "", account)

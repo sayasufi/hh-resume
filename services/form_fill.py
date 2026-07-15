@@ -41,10 +41,12 @@ MAX_STEPS = 10  # потолок страниц многостраничной �
 # «Дела» со ссылкой на форму, которые пробуем (в режиме из БД)
 DB_FORM_RE = r"forms\.gle|docs\.google\.com/forms|forms\.yandex|/forms/|typeform|tally\.so|" \
              r"notion\.so|notion\.site|webask\.io|clck\.ru|ya\.cc"
-# хосты/пути, которые точно НЕ авто-заполняемая форма -> сразу человеку
+# хосты/пути, которые точно НЕ авто-заполняемая форма -> сразу человеку.
+# webask.io — typeform-подобный SPA (на каждом вопросе «Подтвердить ответ» + одновременно
+# «Далее»/«Отправить»); безопасной авто-механики нет, отдаём человеку, а не рискуем полу-отправкой.
 HUMAN_HOSTS = re.compile(
     r"brainhire|getprofi|xeniaai|/interview|vk\.com|youtu|myworkdayjobs|huntflow|"
-    r"\.offer-job\.|t\.me/|disk\.|drive\.google|\.pdf($|\?)", re.I)
+    r"webask\.io|\.offer-job\.|t\.me/|disk\.|drive\.google|\.pdf($|\?)", re.I)
 _CAPTCHA_SEL = ("iframe[src*=recaptcha]", "iframe[src*=hcaptcha]", "iframe[title*=recaptcha]",
                 "div.g-recaptcha", "[class*=captcha]", "[id*=captcha]")
 
@@ -57,6 +59,25 @@ _RATING_Q = re.compile(r"оцен|по\s*\d*[- ]*балл|шкал|уровен�
                        r"skill\s+level|on\s+a\s+scale|from\s+1\s+to\s+\d|1\s+to\s+10|1\s*=", re.I)
 _YEARS_Q = re.compile(r"сколько\s+лет|стаж|возраст|лет\s+опыт|"
                       r"years?\s+of\s+(relevant\s+)?experience|how\s+many\s+years", re.I)
+
+# контактные поля — берём напрямую из профиля (у email/телефона есть валидация формата,
+# им нельзя отвечать «Нет»/произвольным текстом от LLM). (ключ_в_fields, паттерн_вопроса)
+CONTACT_RX = [
+    ("Email",   re.compile(r"e-?mail|почт|электрон\w*\s*(адрес|ящик|почт)|адрес\s*эл", re.I)),
+    ("Телефон", re.compile(r"телефон|\bphone\b|whats\s*app|моб\w*\s*(номер|тел)|номер\s*тел|"
+                           r"контактн\w*\s*(номер|телефон)|for\s+contact", re.I)),
+    ("Имя",     re.compile(r"фамили|\bф\.?\s*и\.?\s*о|полное\s+имя|ваше\s+имя|как\s+вас\s+зовут|"
+                           r"представ|full\s*name|your\s*name|surname|first\s+and\s+last", re.I)),
+    ("Телеграм", re.compile(r"telegram|телеграм|ник\w*\s*(в\s*)?тг|логин\s*telegram|@\s*в\s*telegram", re.I)),
+    ("Город",   re.compile(r"\bгород|\bcity\b|населённ|где\s+вы\s+(живёте|наход|прожив)|локац|"
+                           r"местополож|город\s+прожив", re.I)),
+    ("Желаемая зарплата", re.compile(r"зарплат|\bsalary\b|ожидан\w*\s*(по\s*)?(доход|зп|зарплат)|"
+                                     r"желаем\w*\s*доход|уровень\s+дохода|expected\s+salary|compensation", re.I)),
+    ("GitHub",   re.compile(r"github|гитхаб", re.I)),
+    ("LinkedIn", re.compile(r"linkedin|линкед", re.I)),
+    ("Habr",     re.compile(r"\bhabr|хабр\b", re.I)),
+    ("Сайт/портфолио", re.compile(r"портфолио|portfolio|личн\w*\s*сайт|персональн\w*\s*сайт|ваш\s+сайт", re.I)),
+]
 
 SYS = (
     "Ты помогаешь кандидату заполнить анкету/форму при отклике на вакансию. "
@@ -202,6 +223,25 @@ async def build_profile(api, acc, cfg):
             _sch = _sch.get("name") or ""
         fields["Формат работы"] = _sch or "удалённый/гибрид"
         fields["Резюме на hh"] = r.get("alternate_url") or ""
+        # контакты из резюме (то, что видит работодатель) — авторитетнее /me:
+        # email/телефон часто есть тут, даже если /me их не отдаёт; плюс телеграм/GitHub/LinkedIn
+        for c in (r.get("contact") or []):
+            cid = ((c.get("type") or {}).get("id") or "").lower()
+            v = c.get("value")
+            v = v if isinstance(v, str) else (v or {}).get("formatted")
+            if not v:
+                continue
+            if cid == "email":
+                fields.setdefault("Email", v)
+            elif cid in ("cell", "phone", "work", "home", "mobile"):
+                fields.setdefault("Телефон", v)
+            elif cid == "telegram":
+                fields.setdefault("Телеграм", v if ("t.me" in v or v.startswith("@")) else "@" + v.lstrip("@"))
+            elif cid == "other" and v.startswith("http"):
+                low = v.lower()
+                key = ("GitHub" if "github" in low else "LinkedIn" if "linkedin" in low
+                       else "Habr" if "habr" in low else "Сайт/портфолио")
+                fields.setdefault(key, v)
         bd = r.get("birth_date")
         if bd:
             try:
@@ -225,7 +265,7 @@ async def build_profile(api, acc, cfg):
             if await c.is_user_authorized():
                 me2 = await c.get_me()
                 if me2 and me2.username:
-                    fields["Телеграм"] = f"https://t.me/{me2.username}"
+                    fields.setdefault("Телеграм", f"https://t.me/{me2.username}")
             await c.disconnect()
         except Exception:
             pass
@@ -235,11 +275,21 @@ async def build_profile(api, acc, cfg):
     return fields, prof
 
 
-async def _answer_text(llm, prof, q, long=False):
+async def _answer_text(llm, prof, q, fields=None, long=False):
     """Всегда непустой ПРАВДИВЫЙ ответ. Нет данных -> честно «Нет» (без выдумки ссылок).
-    Возвращает (текст, why) или (None, why) только при сбое сети LLM."""
+    Возвращает (текст, why) или (None, why) при сбое LLM / нет обязательного контакта."""
+    ql = q or ""
+    # контактные поля — детерминированно из профиля (email/телефон имеют валидацию формата)
+    for key, rx in CONTACT_RX:
+        if rx.search(ql):
+            val = (fields or {}).get(key)
+            if val:
+                return str(val), f"профиль: {key}"
+            if key in ("Email", "Телефон"):  # обязательный контакт без данных -> не шлём мусор
+                return None, f"нет данных для «{key}» (контакт)"
+            break  # имя/город/тг/зп без данных -> отдаём дальше LLM/«нет»
     # текст-самооценка навыка «от 1 до N / по N-балльной / rate 1..10» -> максимум шкалы
-    if _RATING_Q.search(q or "") and not _YEARS_Q.search(q or ""):
+    if _RATING_Q.search(ql) and not _YEARS_Q.search(ql):
         cand = [n for n in (int(x) for x in re.findall(r"\d{1,2}", q or "")) if 2 <= n <= 10]
         if cand:
             return str(max(cand)), "навык-шкала -> макс"
@@ -291,6 +341,18 @@ async def _answer_choice(llm, prof, q, options, multi=False):
 
 async def _fill_text(page, ff, value):
     sel = f'[data-ff="{ff}"]'
+    # реальный набор с клавиатуры для коротких значений (email/имя/тел): Google Forms
+    # на Closure принимает поле для перехода «Далее» только после «настоящего» ввода
+    if len(value) <= 120:
+        try:
+            loc = page.locator(sel).first
+            await loc.click(timeout=4000)
+            await loc.fill("")
+            await loc.press_sequentially(value, delay=6, timeout=6000)
+            await loc.evaluate("el => el.blur()")
+            return True
+        except Exception:
+            pass
     try:
         await page.fill(sel, value, timeout=5000)
         return True
@@ -323,8 +385,8 @@ async def _click(page, ff):
             return False
 
 
-async def fill_page(page, llm, prof):
-    """Заполнить текущую страницу/шаг. -> (filled:list, need:list, n_fields)."""
+async def fill_page(page, llm, prof, prof_fields=None):
+    """Заполнить текущую страницу/шаг. -> (filled:list, need:list, n_fields, err)."""
     try:
         fields = await page.evaluate(EXTRACT_JS)
     except Exception as e:
@@ -335,7 +397,7 @@ async def fill_page(page, llm, prof):
         opts_o = f.get("options") or []
         opts = [o.get("label") or f"вариант {i+1}" for i, o in enumerate(opts_o)]
         if typ in ("short", "long"):
-            ans, why = await _answer_text(llm, prof, q or "Ответьте", long=(typ == "long"))
+            ans, why = await _answer_text(llm, prof, q or "Ответьте", prof_fields, long=(typ == "long"))
             if ans is None:  # только сетевой сбой LLM
                 need.append((q, f"LLM: {why}")); continue
             filled.append((q, f"✎ {ans[:60]}")) if await _fill_text(page, f["ff"], ans) \
@@ -424,7 +486,7 @@ async def _form_frame(page):
     return page
 
 
-async def process(page, llm, prof, url, live):
+async def process(page, llm, prof, fields, url, live):
     if HUMAN_HOSTS.search(url or ""):
         return "needs_human", "не авто-форма (интервью/видео/ATS/мессенджер/файл)", [], []
     try:
@@ -472,15 +534,31 @@ async def process(page, llm, prof, url, live):
                 return "needs_human", "форма только для авторизованных (нужен вход в аккаунт)", [], []
 
     all_filled, all_need = [], []
+    prev_sig = None
     for step in range(MAX_STEPS):
         frame = await _form_frame(page)
-        filled, need, nf, err = await fill_page(frame, llm, prof)
+        filled, need, nf, err = await fill_page(frame, llm, prof, fields)
         all_filled += filled
         all_need += need
         if err:
             return "error", err, all_filled, all_need
         if step == 0 and nf == 0:
             return "needs_human", "полей формы не найдено (SPA/нестандартная)", all_filled, all_need
+        # сигнатура страницы (набор вопросов). Если после «Далее» она та же — страница не
+        # сменилась (не принят ответ поля / скрытая валидация) -> не крутим цикл впустую.
+        sig = "|".join(sorted(q for q, _ in filled + need if q))[:500]
+        if step > 0 and sig and sig == prev_sig:
+            # застряли: если это Google-форма с подтверждённым email (нужен вход) — человеку,
+            # иначе просто не листается (валидация поля не принята). Текст-детект ТОЛЬКО здесь,
+            # чтобы не блокировать рабочие формы, которые нормально листаются/отправляются.
+            try:
+                gb = (await frame.inner_text("body"))[:4000].lower()
+            except Exception:
+                gb = ""
+            if "чтобы сохранить изменения, войдите" in gb or "войдите в аккаунт google" in gb \
+                    or ("sign in to" in gb and "google account" in gb):
+                return "needs_human", "Google-форма требует вход в аккаунт Google", all_filled, all_need
+            return "partial", "страница не листается (ответ поля не принят)", all_filled, all_need
         if need:  # есть обязательные без ответа -> не листаем и не отправляем
             return "partial", "обязательные без ответа", all_filled, all_need
         nxt = await _find_button(frame, _NEXT_RE)
@@ -493,11 +571,14 @@ async def process(page, llm, prof, url, live):
                 await page.wait_for_timeout(2500)
                 body = (await page.inner_text("body")).lower()
                 ok = any(w in body for w in ("ответ записан", "ответ зарегистр", "спасибо",
-                                             "response has been recorded", "принят", "благодар"))
+                                             "response has been recorded", "принят", "благодар",
+                                             "отправлен", "получили ваш", "заявка принят",
+                                             "успешно отправ", "thank you", "record"))
                 return "submitted", ("подтверждено" if ok else "кнопка нажата"), all_filled, all_need
             except Exception as e:
                 return "error", f"submit fail: {repr(e)[:50]}", all_filled, all_need
         if nxt:  # промежуточная страница -> дальше
+            prev_sig = sig
             try:
                 await nxt.click(timeout=6000)
                 await page.wait_for_timeout(2200)
@@ -583,7 +664,7 @@ async def main():
             print(f"\n=== [{(vac or '?')[:38]}] {url[:62]} ===")
             if INSPECT:
                 await inspect(page, url); continue
-            status, msg, filled, need = await process(page, llm, prof, url, LIVE)
+            status, msg, filled, need = await process(page, llm, prof, fields, url, LIVE)
             for q, v in filled:
                 print(f"   ✅ {(q or '?')[:52]}  ->  {v}")
             for q, v in need:

@@ -29,6 +29,7 @@ LIVE = "--live" in sys.argv
 DRY = not LIVE
 MAX_DM = 6              # холодных ЛС за прогон — spam-safety (Telegram флагает рассылку незнакомцам)
 MAX_SUGGEST = 25       # вакансий-кандидатов в «Отклики TG» за прогон (режим-подсказка, не пишем)
+MAX_NOTIFY = 6         # уведомлений владельцу о новых вакансиях за прогон (чтобы не заспамить дайджест)
 MAX_EVAL = 80          # потолок LLM-оценок постов за прогон (стоимость)
 POSTS_PER_CH = 12      # сколько свежих постов смотреть на канал
 FRESH_DAYS = 3         # посты старше — не трогаем
@@ -420,7 +421,8 @@ async def run():
             send_mode = False
         else:
             await _check_replies(client, account)  # отметить, кто из рекрутёров ответил
-    sent_count = sug_count = evals = 0
+    sent_count = sug_count = evals = notified = 0
+    notify_on = pgconn.feature_enabled("notify", account)  # уведомлять владельца о новых вакансиях
     sent_entities = []  # чаты с рекрутёрами, кому написали -> в папку «Отклики»
     _h = (datetime.now(timezone.utc) + timedelta(hours=3)).hour  # МСК
     greet = ("Доброе утро" if 5 <= _h < 12 else "Добрый день" if 12 <= _h < 18
@@ -462,6 +464,16 @@ async def run():
                 _record_outreach(account, vid, channel, to, title, category, letter, "suggested")
                 pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
                 sug_count += 1
+                # уведомляем владельца о НОВОЙ вакансии (с прямой ссылкой на пост), лимит на прогон;
+                # доставит дайджест (feat.notify). Дедуп по вакансии -> одно уведомление на неё.
+                if notify_on and notified < MAX_NOTIFY:
+                    link = post_url or f"https://t.me/{channel}"
+                    pgconn.notify(pgconn.PRIORITY_MED,
+                                  f"🆕 Вакансия в Telegram под твой профиль: {title[:90]}"
+                                  + (f" — напиши {to}" if to else "") + ". Письмо готово в «Отклики».",
+                                  category="tg_vacancy", link=link,
+                                  dedup_key=f"tgvac:{account}:{vid}", account=account)
+                    notified += 1
                 continue
             try:
                 ent = await client.get_entity(to)

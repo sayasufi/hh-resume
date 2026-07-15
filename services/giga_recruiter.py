@@ -413,6 +413,9 @@ async def _run_session(client, entity, oa, sys_prompt, account, menu_token):
     last_id = await open_menu()
 
     while turns < MAX_TURNS and time.time() < deadline:
+        if not pgconn.feature_enabled("giga"):  # выключили на ходу -> мгновенно стоп
+            print(f"giga[{_label()}]: фича выключена во время прогона — стоп")
+            return "done", completed, turns
         if opens > MENU_REOPEN_CAP:  # бот не даёт меню/интервью -> не спамим /start, выходим
             print(f"giga[{_label()}]: {opens} переоткрытий меню без прогресса — выходим")
             return "done", completed, turns

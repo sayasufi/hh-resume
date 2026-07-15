@@ -416,6 +416,9 @@ async def run():
           f"(категории {cats}), резюме-PDF={'есть' if pdf_path else 'нет'}, приветствие={greet}")
     try:
         for vid, channel, category, title, text, contact, post_url in vacs:
+            if not pgconn.feature_enabled("tg_channels", account):  # выключили на ходу -> стоп
+                print("tg_channels: фича выключена во время прогона — останавливаюсь")
+                break
             if dm >= MAX_DM or evals >= MAX_EVAL:
                 break
             evals += 1

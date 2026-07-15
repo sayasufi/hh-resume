@@ -156,6 +156,9 @@ async def _do_bot(client, oa, sys_prompt, bot, start, vac, dry):
         seeded = None
     convo, turns, nag, prev_bot_text = [], 0, 0, ""
     while turns < MAX_TURNS:
+        if not pgconn.feature_enabled("giga"):  # выключили на ходу -> стоп посреди диалога
+            print(f"    @{bot}: giga выключен — прерываю диалог")
+            return "partial"
         if seeded is not None:
             replies, seeded = seeded, None
         else:
@@ -418,6 +421,9 @@ async def main():
 
     try:
         for t in tasks:
+            if not pgconn.feature_enabled("giga", account):  # выключили на ходу -> мгновенно стоп
+                print("auto_screen: giga выключен во время прогона — останавливаюсь")
+                break
             if (nb >= MAX_BOTS and nh >= MAX_HR) or time.time() > deadline:
                 break
             try:  # одно плохое дело не должно ронять весь прогон (и ложно флагать здоровье)

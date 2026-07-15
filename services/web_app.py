@@ -951,6 +951,10 @@ async def api_settings(account: str = None,
     cfg = await asyncio.to_thread(pgconn.app_config, account)
     features = {f: await asyncio.to_thread(pgconn.feature_enabled, f, account)
                 for f in FEATURES}
+    # tg_channels: ВКЛ = бот сам пишет рекрутёрам. По умолчанию ВЫКЛ (только собирает вакансии),
+    # чтобы никто не начинал рассылку без явного согласия. Показываем реальное значение (default False).
+    features["tg_channels"] = bool(await asyncio.to_thread(
+        pgconn.get_setting, "feat.tg_channels", False, account))
     config = {
         "salary": (cfg.get("preferences") or {}).get("salary") or "",
         "work_format": (cfg.get("preferences") or {}).get("work_format") or [],
@@ -1002,15 +1006,16 @@ async def _set_config(account: str, key: str, value) -> None:
     if key in FEATURES:
         # ГигаРекрутер нельзя включить без подключённого Telegram (user-сессии):
         # бот действует от лица пользователя в чате @Giga_recruiter_bot.
-        # ГигаРекрутер действует ОТ ЛИЦА пользователя в чатах -> нужна TG-сессия.
-        # «Из Telegram-каналов» теперь режим-подсказка (подбор вакансий в «Отклики TG»,
-        # рекрутёрам не пишет) -> сессия НЕ требуется.
-        if key == "giga" and bool(value):
+        # ВКЛючение «Из Telegram-каналов» = бот сам ПИШЕТ рекрутёрам от лица пользователя -> нужна
+        # TG-сессия. (Выключенный тумблер и так собирает вакансии в «Отклики TG» без сессии.)
+        # ГигаРекрутер тоже действует от лица пользователя -> сессия.
+        if key in ("giga", "tg_channels") and bool(value):
             cfg = await asyncio.to_thread(pgconn.app_config, account)
             if not cfg.get("tg_user_session"):
                 raise HTTPException(
-                    400, "Подключите Telegram (кнопка «Подключить» / команда /connect "
-                         "в боте) — нужно для авто-задач ГигаРекрутера.")
+                    400, "Подключите Telegram (кнопка «Подключить» / команда /connect в боте) — "
+                         "нужно, чтобы бот писал рекрутёрам. Без подключения вакансии всё равно "
+                         "собираются в «Отклики TG» для ручного отклика.")
         if key == "getmatch" and bool(value):
             cfg = await asyncio.to_thread(pgconn.app_config, account)
             linked = await asyncio.to_thread(pgconn.get_setting, "getmatch.session", "", account)

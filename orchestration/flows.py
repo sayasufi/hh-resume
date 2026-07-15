@@ -62,11 +62,10 @@ JOBS: list[dict] = [
          feature="habr",   cron="35 6-18/4 * * *",  jitter=200,  tags=["llm"],     timeout=1200),
     dict(name="habr-chat",      command=["python", "/app/services/habr_chat.py"],
          feature="habr_chat", cron="15 8-20/3 * * *", jitter=200, tags=["llm"],    timeout=600),
-    # режим-подсказка: подбирает вакансии из tg_vacancies под резюме и кладёт в «Отклики TG»
-    # (вакансия + контакт рекрутёра + готовое письмо) — рекрутёрам НЕ пишет, откликается человек.
-    # TG-сессия не нужна. Добавить "--live" -> вернётся авто-рассылка ЛС (требует сессию).
+    # feature=None -> крутится для ВСЕХ аккаунтов. Режим внутри по тумблеру feat.tg_channels:
+    #   выключен -> СОБИРАЕТ вакансии в «Отклики TG» (не пишет); включён + сессия -> ПИШЕТ рекрутёрам.
     dict(name="tg-channels",    command=["python", "/app/services/tg_channels.py"],
-         feature="tg_channels", cron="40 9-19/4 * * *", jitter=300, tags=["llm"],  timeout=1200),
+         feature=None,     cron="40 9-19/4 * * *", jitter=300, tags=["llm"],  timeout=1200),
     # центральный краулер вакансий (наш аккаунт-краулер) — broadcast-каналы через t.me/s, без флуда
     dict(name="tg-crawl",       command=["python", "/app/services/tg_crawler.py"],
          feature=None,     cron="20 6-21/3 * * *",  jitter=300,  tags=["llm"],     timeout=2400),

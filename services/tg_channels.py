@@ -6,8 +6,9 @@
 Если в посте бот-ссылка для отклика — заводим «Дело» (его добьёт auto_screen, он source-agnostic).
 Иначе — скип. Дедуп по `канал:post_id` (seen_keys 'tg_channels'), жёсткий rate-limit (холодные ЛС).
 
-DRY по умолчанию (как auto_screen) — реально пишет только с --live.
-Гейт: feat.tg_channels + tg_user_session. Запуск: python /app/services/tg_channels.py [--live]
+РЕЖИМ по тумблеру feat.tg_channels: ВЫКЛ (или нет сессии) -> СОБИРАЕМ вакансии-кандидаты
+в «Отклики TG» (не пишем); ВКЛ + tg_user_session -> ПИШЕМ рекрутёрам ЛС. Крутится для всех
+аккаунтов. --live — ручной форс отправки. Запуск: python /app/services/tg_channels.py [--live]
 """
 import asyncio
 import random
@@ -235,6 +236,12 @@ def _db_vacancies(cats, limit=150):
         conn.close()
 
 
+def _send_on(account):
+    """Отправка ЛС рекрутёрам включена, только если тумблер «Из Telegram-каналов» ЯВНО включён.
+    По умолчанию (нет записи) — режим-подсказка (сбор в «Отклики TG»), рекрутёрам не пишем."""
+    return bool(pgconn.get_setting("feat.tg_channels", False, account=account))
+
+
 def _record_outreach(account, vid, channel, contact, title, category, letter, status):
     """Запись TG-отклика (кому/что написали). dry в DRY, sent в LIVE. Идемпотентно по (account, vac_id)."""
     conn = pgconn.connect()
@@ -351,20 +358,17 @@ async def _ensure_outreach_folder(client, new_entities):
 
 async def run():
     account = pgconn.get_account()
-    if not pgconn.feature_enabled("tg_channels"):
-        print("tg_channels: feat выключен — пропуск")
-        return
     cfg = pgconn.app_config()
     enc = cfg.get("tg_user_session")
     oa = cfg.get("openai") or {}
-    # РЕЖИМ-ПОДСКАЗКА (DRY, по умолчанию): матчим вакансии и кладём в «Отклики TG» для ручного
-    # отклика — TG-сессия НЕ нужна, рекрутёрам НЕ пишем. Сессия требуется только для LIVE-рассылки.
     if not oa.get("token"):
         print("tg_channels: нет openai — пропуск")
         return
-    if LIVE and not enc:
-        print("tg_channels: LIVE-рассылка без tg-сессии — пропуск")
-        return
+    # РЕЖИМ по тумблеру «Из Telegram-каналов»:
+    #   ВКЛючён + есть tg-сессия -> ПИШЕМ рекрутёрам в личку (рассылка);
+    #   ВЫКЛючён (или нет сессии) -> СОБИРАЕМ вакансии-кандидаты в «Отклики TG» (не пишем).
+    # (--live — ручной форс-режим отправки для теста.) Задача крутится для ВСЕХ аккаунтов.
+    send_mode = bool(enc) and (LIVE or _send_on(account))
     resume = (cfg.get("resume_text") or "").strip()
     if not resume:
         print("tg_channels: нет resume_text — пропуск (матчинг будет мусорным)")
@@ -401,33 +405,38 @@ async def run():
 
     hh_url = await _hh_resume_url(cfg, account)
     pdf_path = pdf_name = None
-    if LIVE:  # PDF нужен только для реальной рассылки; в режиме-подсказке не качаем
+    if send_mode:  # PDF нужен только для реальной рассылки; в режиме-подсказке не качаем
         pdf_path, pdf_name = await _hh_resume_pdf(cfg, account)
     done_contacts = _outreach_contacts(account)     # кому уже писали -> дедуп по рекрутёру (антиспам)
-    # ЛС рекрутёру шлём ТОЛЬКО в LIVE. В DRY сессию кандидата вообще не подключаем —
-    # гарантия, что эйчарам ничего не пишется, пока не разрешат.
+    # сессию кандидата подключаем ТОЛЬКО в режиме отправки. Слетела -> откат в режим-подсказку.
     client = None
-    if LIVE:
+    if send_mode:
         api_id, api_hash = pgconn.tg_api()
         client = TelegramClient(StringSession(pgconn.dec_session(enc)), api_id, api_hash)
         await client.connect()
         if not await client.is_user_authorized():
-            print("tg_channels: tg-сессия слетела — пропуск")
-            return
-        await _check_replies(client, account)  # отметить, кто из рекрутёров ответил
-    dm = evals = 0
-    sent_entities = []  # чаты с рекрутёрами, кому написали -> в папку «Отклики» (LIVE)
+            print("tg_channels: tg-сессия слетела — перехожу в режим-подсказку")
+            client = None
+            send_mode = False
+        else:
+            await _check_replies(client, account)  # отметить, кто из рекрутёров ответил
+    sent_count = sug_count = evals = 0
+    sent_entities = []  # чаты с рекрутёрами, кому написали -> в папку «Отклики»
     _h = (datetime.now(timezone.utc) + timedelta(hours=3)).hour  # МСК
     greet = ("Доброе утро" if 5 <= _h < 12 else "Добрый день" if 12 <= _h < 18
              else "Добрый вечер" if 18 <= _h < 23 else "Здравствуйте")
-    print(f"tg_channels[{account}] режим={'LIVE' if LIVE else 'DRY'}: вакансий-кандидатов {len(vacs)} "
-          f"(категории {cats}), резюме-PDF={'есть' if pdf_path else 'нет'}, приветствие={greet}")
+    print(f"tg_channels[{account}] режим={'ПИШЕМ рекрутёрам' if send_mode else 'ПОДСКАЗКА (собираем)'}: "
+          f"вакансий {len(vacs)} (категории {cats}), приветствие={greet}")
     try:
         for vid, channel, category, title, text, contact, post_url in vacs:
-            if not pgconn.feature_enabled("tg_channels", account):  # выключили на ходу -> стоп
-                print("tg_channels: фича выключена во время прогона — останавливаюсь")
+            if evals >= MAX_EVAL:
                 break
-            if dm >= (MAX_DM if LIVE else MAX_SUGGEST) or evals >= MAX_EVAL:
+            # режим решаем на КАЖДОЙ итерации: тумблер выключили на ходу -> мгновенно
+            # переходим с отправки на сбор (и наоборот на следующем прогоне).
+            sending = client is not None and (LIVE or _send_on(account))
+            if sending and sent_count >= MAX_DM:  # дневной лимит холодных ЛС (spam-safety)
+                break
+            if not sending and sug_count >= MAX_SUGGEST:
                 break
             evals += 1
             match, c2, letter = await _decide(oa, resume, text, greet, PREF_NOTE)
@@ -445,14 +454,14 @@ async def run():
                 pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
                 continue
             done_contacts.add(to.lower())
-            if not LIVE:
+            if not sending:
                 # РЕЖИМ-ПОДСКАЗКА: рекрутёру НЕ пишем — кладём вакансию-кандидат в «Отклики TG»
                 # (вакансия + контакт + готовое письмо), откликается человек сам. Помечаем seen,
                 # чтобы не пере-оценивать: запись остаётся в списке, повтора нет.
                 print(f"  [кандидат] {category}/{title[:42]} -> {to or 'без контакта'} (из @{channel})")
                 _record_outreach(account, vid, channel, to, title, category, letter, "suggested")
                 pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
-                dm += 1
+                sug_count += 1
                 continue
             try:
                 ent = await client.get_entity(to)
@@ -470,7 +479,7 @@ async def run():
                 pgconn.add_seen(f"tg_out_{account}", str(vid)); out_seen.add(str(vid))
                 _record_outreach(account, vid, channel, to, title, category, letter, "sent")
                 sent_entities.append(ent)  # для папки «Отклики»
-                dm += 1
+                sent_count += 1
                 print(f"  [ЛС{'+PDF' if pdf_path else ''}] написал {to} (из @{channel})")
             except FloodWaitError as e:
                 # сессия во флуд-вейте — продолжать опасно (усугубим/бан). Фиксируем для
@@ -483,7 +492,7 @@ async def run():
             except Exception as e:
                 print(f"  [ЛС] {to}: не отправилось ({type(e).__name__})")
             await asyncio.sleep(random.uniform(6, 16))
-        if LIVE and client and sent_entities:  # чаты с рекрутёрами -> отдельная папка кандидата
+        if client and sent_entities:  # чаты с рекрутёрами -> отдельная папка кандидата
             try:
                 await _ensure_outreach_folder(client, sent_entities)
             except Exception as e:
@@ -492,8 +501,8 @@ async def run():
         if client:
             await client.disconnect()
     pgconn.record_health("tg_channels", True,
-                         f"{'LIVE' if LIVE else 'DRY'}: откликов {dm}, оценено {evals}", account=account)
-    print(f"tg_channels: готово — {'ЛС' if LIVE else 'DRY-совпадений'} {dm}, оценено {evals}")
+                         f"ЛС {sent_count}, кандидатов {sug_count}, оценено {evals}", account=account)
+    print(f"tg_channels: готово — написано ЛС {sent_count}, собрано кандидатов {sug_count}, оценено {evals}")
 
 
 if __name__ == "__main__":

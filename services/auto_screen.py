@@ -29,6 +29,9 @@ TME = re.compile(r"(?:https?://)?t\.me/([A-Za-z0-9_]+)(?:\?start=([\w=-]+))?")
 ATRE = re.compile(r"@([A-Za-z0-9_]{4,})")
 PHONE = re.compile(r"(?:\+7|8|7)[\s\-\(\)]*\d{3}[\s\-\(\)]*\d{3}[\s\-\(\)]*\d{2}[\s\-\(\)]*\d{2}")
 CONSENT_RE = re.compile(r"соглас|ознаком|принима|начать|продолж|поех|да[,!. ]", re.I)
+# бот требует именно НАЖАТЬ кнопку (а не ответить текстом) — значит клик мы пропустили
+PRESS_RE = re.compile(r"нажми(те)?\s+(на\s+)?кнопк|воспольз\w+\s+кнопк|кнопк\w*\s+(ниже|выше)|"
+                      r"press\s+the\s+button|use\s+the\s+button|tap\s+the\s+button", re.I)
 
 
 def _norm_phone(p):
@@ -111,6 +114,21 @@ async def _vac_url_from_nid(api, nid):
         return ""
 
 
+async def _recent_button(client, ent, look=8):
+    """Последняя inline-кнопка среди недавних сообщений бота — восстановление, если клик
+    по кнопке пропущен из-за гонки ожидания (бот прислал кнопку после _wait_reply)."""
+    try:
+        msgs = await client.get_messages(ent, limit=look)
+    except Exception:
+        return None
+    for m in msgs:  # свежие -> старые
+        for i, row in enumerate(m.buttons or []):
+            for j, b in enumerate(row):
+                if b.text:
+                    return (m, i, j, b.text)
+    return None
+
+
 async def _do_bot(client, oa, sys_prompt, bot, start, vac, dry):
     try:
         ent = await client.get_entity(bot)
@@ -136,7 +154,7 @@ async def _do_bot(client, oa, sys_prompt, bot, start, vac, dry):
         else:
             await client.send_message(ent, "/start")
         seeded = None
-    convo, turns = [], 0
+    convo, turns, nag, prev_bot_text = [], 0, 0, ""
     while turns < MAX_TURNS:
         if seeded is not None:
             replies, seeded = seeded, None
@@ -205,6 +223,31 @@ async def _do_bot(client, oa, sys_prompt, bot, start, vac, dry):
                 turns += 1
                 await asyncio.sleep(3)
                 continue
+        # анти-цикл: бот повторяется ИЛИ просит нажать кнопку, которой нет в этом ответе
+        # (клик пропущен из-за гонки) -> жмём недавнюю кнопку; не вышло -> стоп, НЕ спамим текстом.
+        if PRESS_RE.search(bot_text) or (bot_text and bot_text == prev_bot_text):
+            prev_bot_text = bot_text
+            nag += 1
+            if nag > 2:
+                print(f"    @{bot}: застряли на кнопочном шаге («{bot_text[:45]}») — стоп, отдаём человеку")
+                return "stuck"
+            btn = await _recent_button(client, ent)
+            if not btn:
+                print(f"    @{bot}: кнопки нет, бот зациклился — стоп")
+                return "stuck"
+            if dry:
+                print(f"    @{bot}: [dry] нашёл кнопку [{btn[3]}] — не жму, стоп")
+                return None
+            print(f"    @{bot}: анти-цикл -> жму кнопку [{btn[3]}] (попытка {nag})")
+            try:
+                await btn[0].click(btn[1], btn[2])
+            except Exception as e:
+                print(f"    @{bot}: клик не прошёл: {type(e).__name__}")
+            await asyncio.sleep(3)
+            turns += 1
+            continue
+        prev_bot_text = bot_text
+        nag = 0
         convo.append("Рекрутёр: " + bot_text)
         answer = (await gr._answer(oa, sys_prompt, convo, bot_text) or "").strip()
         print(f"    @{bot}\n      Q: «{bot_text[:110]}»\n      A: «{answer[:200]}»")
@@ -398,7 +441,9 @@ async def main():
                     seen.add(bot)
                     print(f"\n  [БОТ] дело #{t['id']} «{t['vac'][:42]}» -> @{bot}")
                     r = await _do_bot(client, oa, sys_prompt, bot, mt.group(2), t["vac"], DRY)
-                    if r in ("done", "dead") and LIVE:  # partial -> НЕ закрываем, дорешаем (resume)
+                    # partial -> НЕ закрываем (дорешаем, resume). stuck -> закрываем, чтобы НЕ
+                    # долбить кнопочный бот каждый прогон (иначе спам «нажмите кнопку»/«Нажал»).
+                    if r in ("done", "dead", "stuck") and LIVE:
                         _mark_done(t["id"])
                     nb += 1
                 else:

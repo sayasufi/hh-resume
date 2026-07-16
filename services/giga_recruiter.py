@@ -52,6 +52,11 @@ NOACTIVE_RE = re.compile(
     r"диалог по вакансии заверш|отклик уже у рекрут|помогаю только на этапе первичн|"
     r"нет новых вакансий|новых вакансий (пока )?нет|нет активных|"
     r"неполадк|передано рекрут", re.I)
+# Сбер не видит откликов по номеру TG-аккаунта (номер в резюме другой) — это тупик уровня
+# аккаунта: ни ответ текстом, ни повторный /start не помогут. Молчим и не трогаем бота сутки.
+NOAPPS_RE = re.compile(
+    r"не нашли (ваших )?откликов|не найдено откликов|откликов по этому номеру|"
+    r"нет откликов по (этому )?номеру", re.I)
 # филлер — подождать, не отвечать
 WAIT_RE = re.compile(
     r"нужно немного времени|ничего не писать|скоро продолж|обрабатыва|секундоч|подожд", re.I)
@@ -490,6 +495,10 @@ async def _run_session(client, entity, oa, sys_prompt, account, menu_token):
                              if (m.text or "").strip()).strip()
         if not bot_text:
             continue
+        if NOAPPS_RE.search(bot_text):     # «не нашли откликов по этому номеру» -> тупик
+            # НЕ отвечаем текстом (бот всё равно не найдёт откликов) и НЕ перезапускаем /start.
+            print(f"giga[{_label()}]: бот не видит откликов по номеру аккаунта — стоп, пауза на сутки")
+            return "noapps", completed, turns
         if NOACTIVE_RE.search(bot_text):   # «нет новых вакансий»/«диалог завершён» -> СТОП
             if cur_uuid:                   # (не переоткрываем меню по кругу = не спамим /start)
                 pgconn.add_seen("giga_vac", [cur_uuid]); done.add(cur_uuid)
@@ -599,6 +608,18 @@ async def main() -> None:
         if not menu_token:
             print("giga: токенов нет (бот ни разу не приглашал) — пропуск")
             return
+        # Жёсткая пауза: бот сказал, что по номеру аккаунта откликов нет. Это проблема номера
+        # (в резюме указан другой), новые приглашения её НЕ решают — поэтому пауза не
+        # сбрасывается pending-токеном, в отличие от обычного бэкоффа ниже.
+        nu = pgconn.get_setting("giga.noapps_until", account=account)
+        if nu:
+            try:
+                if float(nu) > time.time():
+                    print(f"giga: бот не видит откликов по номеру — пауза ещё "
+                          f"~{int((float(nu) - time.time()) / 60)} мин")
+                    return
+            except (TypeError, ValueError):
+                pass
         # Бэкофф: если в прошлый прогон всё было пройдено — не дёргаем бота чаще, чем раз
         # в 2 часа (сбрасывается появлением нового приглашения = pending-токена).
         cu = pgconn.get_setting("giga.caughtup_until", account=account)
@@ -627,10 +648,22 @@ async def main() -> None:
         _mark_all_done(account)
         # Бэкофф: ничего нового не прошли и меню исчерпано -> 2 часа не дёргаем бота;
         # прошли хоть одно (есть ещё) -> сбрасываем, чтобы продолжить на след. прогоне.
-        if completed == 0 and status == "done":
+        if status == "noapps":  # откликов по номеру нет -> сутки не трогаем бота (и не пишем)
+            pgconn.set_setting("giga.noapps_until", str(time.time() + 86400), account=account)
+            pgconn.set_setting("giga.caughtup_until", "", account=account)
+            # разово подсказываем владельцу корневую причину (иначе непонятно, почему ГР молчит)
+            pgconn.notify(pgconn.PRIORITY_MED,
+                          "ГигаРекрутер (Сбер) не видит откликов по номеру этого Telegram — "
+                          "похоже, в резюме на hh указан другой номер. Бот на паузе (сутки). "
+                          "Чтобы заработало: укажи в резюме номер этого Telegram (или подключи "
+                          "Telegram с номером из резюме).",
+                          category="giga", dedup_key=f"giga_noapps:{account}", account=account)
+        elif completed == 0 and status == "done":
             pgconn.set_setting("giga.caughtup_until", str(time.time() + 7200), account=account)
         else:
             pgconn.set_setting("giga.caughtup_until", "", account=account)
+            if completed:  # бот снова работает -> снимаем суточную паузу
+                pgconn.set_setting("giga.noapps_until", "", account=account)
         cleared = _clear_done_action_items(account)
         if cleared:
             print(f"giga: закрыто дел по пройденным интервью: {cleared}")

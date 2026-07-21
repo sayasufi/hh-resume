@@ -58,6 +58,17 @@ async def main():
                     continue
                 if (now - upd).days < STALE_DAYS:
                     continue
+                # Если последнее сообщение в чате — от работодателя (HR/скринер ждёт наш ответ),
+                # фоллоу-ап НЕ шлём: на вопрос должен ответить reply-employers по существу, а не
+                # прилетать generic «актуальна ли ещё вакансия?». seen НЕ ставим — вернёмся позже.
+                try:
+                    _msgs = (await api.get(
+                        f"/negotiations/{nid}/messages", per_page=100)).get("items", [])
+                    if _msgs and (_msgs[-1].get("author") or {}).get(
+                            "participant_type") == "employer":
+                        continue
+                except Exception:
+                    pass
                 vac = ((n.get("vacancy") or {}).get("name") or "вашу вакансию")[:60]
                 try:
                     await api.post(

@@ -572,13 +572,14 @@ def _tg_outreach_list(account: str, limit: int = 200) -> list:
             cur.execute(
                 "SELECT o.contact, o.channel, o.title, o.category, o.status, o.created_at, o.letter, "
                 "COALESCE(NULLIF(v.post_url,''), 'https://t.me/' || o.channel || '/' || v.post_id::text), "
-                "o.replied "
+                "o.replied, o.id "
                 "FROM tg_outreach o LEFT JOIN tg_vacancies v ON v.id = o.vac_id "
-                "WHERE o.account=%s ORDER BY o.created_at DESC LIMIT %s", (account, limit))
+                "WHERE o.account=%s AND o.status NOT IN ('written','dismissed') "
+                "ORDER BY o.created_at DESC LIMIT %s", (account, limit))
             return [{"contact": r[0] or "", "channel": r[1] or "", "title": r[2] or "",
                      "category": r[3] or "", "status": r[4] or "dry",
                      "at": (str(r[5])[:10] if r[5] else ""), "letter": r[6] or "",
-                     "url": r[7] or "", "replied": bool(r[8])}
+                     "url": r[7] or "", "replied": bool(r[8]), "id": r[9]}
                     for r in cur.fetchall()]
     except Exception:
         return []
@@ -1184,6 +1185,30 @@ async def api_tg_outreach(account: str = None,
                           x_init_data: str = Header(None, alias="X-Init-Data")):
     account = await _auth(x_init_data, account)
     return {"applications": await asyncio.to_thread(_tg_outreach_list, account)}
+
+
+def _tg_outreach_mark(account: str, oid, action: str) -> None:
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE tg_outreach SET status=%s WHERE id=%s AND account=%s",
+                        (action, oid, account))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@app.post("/api/tg_outreach/mark")
+async def api_tg_outreach_mark(body: dict, account: str = None,
+                               x_init_data: str = Header(None, alias="X-Init-Data")):
+    """Пометить кандидата: written (написал) / dismissed (не нужно) -> скрыть из списка."""
+    account = await _auth(x_init_data, account)
+    oid = body.get("id")
+    action = body.get("action")
+    if action not in ("written", "dismissed") or not oid:
+        raise HTTPException(400, "bad params")
+    await asyncio.to_thread(_tg_outreach_mark, account, oid, action)
+    return {"ok": True}
 
 
 @app.post("/api/getmatch/otp")

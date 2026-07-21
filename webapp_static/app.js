@@ -547,6 +547,16 @@ const loadHabrApps = () => api("/api/habr").then((r) => {
 
 // ── Отклики TG: подобранные вакансии-кандидаты (контакт + письмо; откликаешься сам) ──
 let TG_APPS = [];
+function _tgDayLabel(at) {
+  if (!at) return "";
+  const d = new Date(at + "T00:00:00"), now = new Date();
+  const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diff = Math.round((t0 - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+  if (diff === 0) return "Сегодня";
+  if (diff === 1) return "Вчера";
+  const m = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+  return d.getDate() + " " + (m[d.getMonth()] || "");
+}
 function renderTgApps() {
   const box = $("#tg-apps"), cnt = $("#tg-count");
   if (!box) return;
@@ -558,8 +568,13 @@ function renderTgApps() {
          : "Пока пусто. Включи «Telegram-отклики» в Настройках — бот подберёт из каналов вакансии под твоё резюме и сложит сюда: вакансия + контакт рекрутёра + готовое письмо. Откликаешься сам — бот рекрутёрам не пишет.") + "</div>";
     return;
   }
-  box.innerHTML = '<div class="list">' + items.map((a) => {
-    const sub = [a.channel ? "@" + a.channel : "", a.category, a.at].filter(Boolean).join(" · ");
+  let html = '<div class="list">', lastDay = null;
+  items.forEach((a) => {
+    if (a.at !== lastDay) {  // разделитель по дню
+      lastDay = a.at;
+      html += `<div class="tg-day" style="text-align:center;color:var(--hint);font-size:12px;font-weight:600;margin:12px 0 4px;opacity:.75">— ${esc(_tgDayLabel(a.at))} —</div>`;
+    }
+    const sub = [a.channel ? "@" + a.channel : "", a.category].filter(Boolean).join(" · ");
     const st = a.status === "sent"
       ? (a.replied
           ? '<span class="gm-st ok">✓ ответили</span>'
@@ -567,23 +582,44 @@ function renderTgApps() {
       : '<span class="gm-st ok">💡 можно откликнуться</span>';
     const uname = (a.contact || "").replace(/^@/, "");
     const vacLink = a.url ? `<a class="vac-open" href="#" data-vurl="${esc(a.url)}" style="color:var(--accent);text-decoration:none">открыть пост ↗</a>` : "(ссылка недоступна)";
-    return '<div class="cell act tg-out"><div class="dlg-main act-text">'
+    const marks = `<div class="tg-marks" style="display:flex;gap:8px;margin-top:8px">`
+      + `<button class="tg-mark" data-id="${a.id}" data-act="written" style="flex:1;padding:7px;border:none;border-radius:8px;background:var(--accent);color:#fff;font:inherit;cursor:pointer">✓ написал</button>`
+      + `<button class="tg-mark" data-id="${a.id}" data-act="dismissed" style="flex:1;padding:7px;border:none;border-radius:8px;background:var(--card2,rgba(128,128,128,.18));color:var(--hint);font:inherit;cursor:pointer">✕ не нужно</button>`
+      + `</div>`;
+    html += '<div class="cell act tg-out"><div class="dlg-main act-text">'
       + `<div class="dlg-title">${esc(a.contact || "—")} ${st}</div>`
       + `<div class="dlg-emp">${esc(a.title)}</div>`
       + `<div class="dlg-date">${esc(sub)} · нажми — вакансия + письмо</div>`
+      + marks
       + `<div class="tg-letter"><b>Вакансия:</b> ${vacLink}`
       + `<br><br><b>📎 Письмо (с резюме-PDF)</b><br>${esc(a.letter || "(без письма)")}</div></div>`
       + (uname ? `<button class="abtn open" data-url="https://t.me/${esc(uname)}">↗</button>` : "")
       + "</div>";
-  }).join("") + "</div>";
+  });
+  box.innerHTML = html + "</div>";
   box.querySelectorAll(".abtn[data-url]").forEach((el) => {
     el.onclick = (e) => { e.stopPropagation(); hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
   });
   box.querySelectorAll(".vac-open[data-vurl]").forEach((el) => {
     el.onclick = (e) => { e.preventDefault(); e.stopPropagation(); hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.vurl); else window.open(el.dataset.vurl, "_blank"); };
   });
+  box.querySelectorAll(".tg-mark[data-id]").forEach((el) => {
+    el.onclick = async (e) => {
+      e.stopPropagation(); hap("light");
+      const id = +el.dataset.id, act = el.dataset.act;
+      el.disabled = true;
+      try {
+        await api("/api/tg_outreach/mark", { method: "POST", body: JSON.stringify({ id, action: act }) });
+        TG_APPS = TG_APPS.filter((x) => x.id !== id);
+        renderTgApps();
+      } catch (ex) { el.disabled = false; try { err("Не удалось сохранить"); } catch (_) {} }
+    };
+  });
   box.querySelectorAll(".tg-out .act-text").forEach((el) => {
-    el.onclick = () => { el.closest(".tg-out").classList.toggle("expanded"); hap("sel"); };
+    el.onclick = (e) => {
+      if (e.target.closest(".tg-mark") || e.target.closest("a")) return;  // не по кнопкам
+      el.closest(".tg-out").classList.toggle("expanded"); hap("sel");
+    };
   });
 }
 const loadTgApps = () => api("/api/tg_outreach").then((r) => {

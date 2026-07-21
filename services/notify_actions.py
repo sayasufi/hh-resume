@@ -13,13 +13,18 @@
 import asyncio
 import re
 import sys
+from datetime import datetime
 
 from hh_applicant_tool.ai import ChatOpenAI
 from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
+from hh_applicant_tool.utils.date import parse_api_datetime
 
 DRY = "--dry" in sys.argv
+SCAN_DAYS = 4     # чаты, обновлённые за последние N дней (has_new уже снят reply_employers)
+MAX_NEW = 40      # новых классификаций (LLM/дел) за прогон — бюджет
+READ_CAP = 160    # прочитанных чатов за прогон — бюджет API
 
 SYS = (
     "Ты анализируешь ПОСЛЕДНЕЕ сообщение работодателя в чате на hh.ru. Определи, "
@@ -120,6 +125,7 @@ async def main():
     queued = []  # (prio, task, link, dedup, nid, chat_id, vacancy)
     page = 0
     scanned = 0
+    reads = 0
     try:
         while True:
             r = await api.get(
@@ -129,18 +135,26 @@ async def main():
             if not items:
                 break
             for n in items:
+                if scanned >= MAX_NEW or reads >= READ_CAP:
+                    break
                 if n.get("state", {}).get("id") == "discard":
                     continue
                 nid = n["id"]
                 if str(nid) in handoff:
                     continue
-                # ВАЖНО: GET /negotiations/{nid}/messages помечает переписку ПРОЧИТАННОЙ
-                # (обратной операции у hh нет). Поэтому открываем чат ТОЛЬКО если hh сам
-                # говорит, что там есть новое — иначе снимали бы «непрочитано» у сотен
-                # чужих чатов, и пользователь переставал замечать ответы работодателей.
+                # reply_employers читает историю ВСЕХ чатов -> has_new_messages почти всегда
+                # уже снят, и notify_actions голодал (scanned: 0, дела не создавались). Берём
+                # чаты по СВЕЖЕСТИ (updated_at за SCAN_DAYS). Чтение и так уже сделал reply
+                # (непрочитанное не теряем сверх этого), а дубли режет seen по (nid:last_msg_id).
                 if not (n.get("has_new_messages") or n.get("has_updates")):
-                    continue
+                    try:
+                        _u = parse_api_datetime(n.get("updated_at"))
+                        if (datetime.now(_u.tzinfo) - _u).days > SCAN_DAYS:
+                            continue
+                    except Exception:
+                        continue
                 v = n.get("vacancy") or {}
+                reads += 1
                 try:
                     m = await api.get(f"/negotiations/{nid}/messages", page=0)
                     _pages = m.get("pages", 1)
@@ -189,7 +203,7 @@ async def main():
                     prio, task, f"https://hh.ru/chat/{chat_id}",
                     f"action:{key}", nid, chat_id, v.get("name", ""), action_url,
                 ))
-            if page + 1 >= r.get("pages", 0):
+            if scanned >= MAX_NEW or reads >= READ_CAP or page + 1 >= r.get("pages", 0):
                 break
             page += 1
     finally:

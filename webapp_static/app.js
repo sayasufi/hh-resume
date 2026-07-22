@@ -557,6 +557,15 @@ function _tgDayLabel(at) {
   const m = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
   return d.getDate() + " " + (m[d.getMonth()] || "");
 }
+function _copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try { document.execCommand("copy"); } catch (_) {}
+  document.body.removeChild(ta);
+  return Promise.resolve();
+}
 function renderTgApps() {
   const box = $("#tg-apps"), cnt = $("#tg-count");
   if (!box) return;
@@ -568,40 +577,53 @@ function renderTgApps() {
          : "Пока пусто. Включи «Telegram-отклики» в Настройках — бот подберёт из каналов вакансии под твоё резюме и сложит сюда: вакансия + контакт рекрутёра + готовое письмо. Откликаешься сам — бот рекрутёрам не пишет.") + "</div>";
     return;
   }
-  let html = '<div class="list">', lastDay = null;
+  let html = "", lastDay = null, listOpen = false;
   items.forEach((a) => {
-    if (a.at !== lastDay) {  // разделитель по дню
+    if (a.at !== lastDay) {  // группируем карточки по дням
+      if (listOpen) html += "</div>";
       lastDay = a.at;
-      html += `<div class="tg-day" style="text-align:center;color:var(--hint);font-size:12px;font-weight:600;margin:12px 0 4px;opacity:.75">— ${esc(_tgDayLabel(a.at))} —</div>`;
+      html += `<div class="tg-day">${esc(_tgDayLabel(a.at))}</div><div class="list">`;
+      listOpen = true;
     }
-    const sub = [a.channel ? "@" + a.channel : "", a.category].filter(Boolean).join(" · ");
-    const st = a.status === "sent"
-      ? (a.replied
-          ? '<span class="gm-st ok">✓ ответили</span>'
-          : '<span class="gm-st wait">отправлено · ждём</span>')
-      : '<span class="gm-st ok">💡 можно откликнуться</span>';
+    const status = a.status === "sent" ? (a.replied ? "✓ ответили" : "отправлено") : "";
+    const meta = [a.contact, a.channel ? "@" + a.channel : "", a.category, status].filter(Boolean).join(" · ");
     const uname = (a.contact || "").replace(/^@/, "");
-    const vacLink = a.url ? `<a class="vac-open" href="#" data-vurl="${esc(a.url)}" style="color:var(--accent);text-decoration:none">открыть пост ↗</a>` : "(ссылка недоступна)";
-    const marks = `<div class="tg-marks" style="display:flex;gap:8px;margin-top:8px">`
-      + `<button class="tg-mark" data-id="${a.id}" data-act="written" style="flex:1;padding:7px;border:none;border-radius:8px;background:var(--accent);color:#fff;font:inherit;cursor:pointer">✓ написал</button>`
-      + `<button class="tg-mark" data-id="${a.id}" data-act="dismissed" style="flex:1;padding:7px;border:none;border-radius:8px;background:var(--card2,rgba(128,128,128,.18));color:var(--hint);font:inherit;cursor:pointer">✕ не нужно</button>`
-      + `</div>`;
-    html += '<div class="cell act tg-out"><div class="dlg-main act-text">'
-      + `<div class="dlg-title">${esc(a.contact || "—")} ${st}</div>`
-      + `<div class="dlg-emp">${esc(a.title)}</div>`
-      + `<div class="dlg-date">${esc(sub)} · нажми — вакансия + письмо</div>`
-      + marks
-      + `<div class="tg-letter"><b>Вакансия:</b> ${vacLink}`
-      + `<br><br><b>📎 Письмо (с резюме-PDF)</b><br>${esc(a.letter || "(без письма)")}</div></div>`
-      + (uname ? `<button class="abtn open" data-url="https://t.me/${esc(uname)}">↗</button>` : "")
-      + "</div>";
+    html += '<div class="cell act tg-out">'
+      + '<div class="dlg-main act-text">'
+      +   `<div class="dlg-title">${esc(a.title || "Вакансия")}</div>`
+      +   `<div class="dlg-emp">${esc(meta)}</div>`
+      +   '<div class="tg-letter">' + esc(a.letter || "(без письма)")
+      +     '<div class="tg-letter-actions">'
+      +       `<button class="tg-copy" data-copy="${a.id}">📋 Копировать письмо</button>`
+      +       (a.url ? `<a class="tg-vac" href="#" data-vurl="${esc(a.url)}">Вакансия ↗</a>` : "")
+      +     '</div>'
+      +   '</div>'
+      + '</div>'
+      + '<div class="act-btns">'
+      +   (uname ? `<button class="abtn open" data-url="https://t.me/${esc(uname)}" aria-label="Написать">↗</button>` : "")
+      +   `<button class="abtn done tg-mark" data-id="${a.id}" data-act="written" aria-label="Написал">✓</button>`
+      +   `<button class="abtn del tg-mark" data-id="${a.id}" data-act="dismissed" aria-label="Не нужно">✕</button>`
+      + '</div>'
+      + '</div>';
   });
-  box.innerHTML = html + "</div>";
-  box.querySelectorAll(".abtn[data-url]").forEach((el) => {
+  if (listOpen) html += "</div>";
+  box.innerHTML = html;
+  box.querySelectorAll(".abtn.open[data-url]").forEach((el) => {
     el.onclick = (e) => { e.stopPropagation(); hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.url); else window.open(el.dataset.url, "_blank"); };
   });
-  box.querySelectorAll(".vac-open[data-vurl]").forEach((el) => {
+  box.querySelectorAll(".tg-vac[data-vurl]").forEach((el) => {
     el.onclick = (e) => { e.preventDefault(); e.stopPropagation(); hap("sel"); if (tg && tg.openLink) tg.openLink(el.dataset.vurl); else window.open(el.dataset.vurl, "_blank"); };
+  });
+  box.querySelectorAll(".tg-copy[data-copy]").forEach((el) => {
+    el.onclick = async (e) => {
+      e.stopPropagation();
+      const a = TG_APPS.find((x) => x.id === +el.dataset.copy);
+      if (!a) return;
+      await _copyText(a.letter || "");
+      hap("light");
+      const t = el.textContent; el.textContent = "✓ Скопировано"; el.classList.add("done");
+      setTimeout(() => { el.textContent = t; el.classList.remove("done"); }, 1400);
+    };
   });
   box.querySelectorAll(".tg-mark[data-id]").forEach((el) => {
     el.onclick = async (e) => {
@@ -617,7 +639,7 @@ function renderTgApps() {
   });
   box.querySelectorAll(".tg-out .act-text").forEach((el) => {
     el.onclick = (e) => {
-      if (e.target.closest(".tg-mark") || e.target.closest("a")) return;  // не по кнопкам
+      if (e.target.closest("button") || e.target.closest("a")) return;  // не по кнопкам/ссылкам
       el.closest(".tg-out").classList.toggle("expanded"); hap("sel");
     };
   });

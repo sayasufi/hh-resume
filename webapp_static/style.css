@@ -267,10 +267,25 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 .cat-row i { cursor: pointer; }
 .cat-chans { padding-top: 4px; }
 
-/* tg-отклики: разворот письма */
-.tg-out .tg-letter { display: none; margin-top: 8px; font-size: 13px; color: var(--sub);
+/* tg-отклики: подобранные вакансии-кандидаты */
+.tg-day { text-align: center; color: var(--sephdr); font-size: 12px; font-weight: 600;
+  letter-spacing: .02em; margin: 16px 0 8px; }
+.tg-out.act { align-items: flex-start; }
+.tg-out .dlg-emp { margin-bottom: 0; }
+.tg-out .act-btns { flex-direction: row; gap: 6px; align-items: flex-start; }
+.tg-out .act-btns .abtn { min-width: 40px; padding: 9px 0; text-align: center;
+  font-size: 15px; font-weight: 600; line-height: 1; }
+.tg-out .tg-letter { display: none; margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--sep); font-size: 13px; color: var(--sub);
   line-height: 1.5; white-space: pre-wrap; }
 .tg-out.expanded .tg-letter { display: block; }
+.tg-letter-actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+.tg-copy { background: var(--accent-soft); color: var(--accent); border: none; border-radius: 999px;
+  padding: 7px 13px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: transform .12s var(--ease); }
+.tg-copy:active { transform: scale(.94); }
+.tg-copy.done { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+.tg-vac { color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
 
 /* ── нижняя навигация (SVG) ─────────────────────────── */
 #tabs { position: fixed; bottom: 0; left: 0; right: 0; display: flex; max-width: 600px;

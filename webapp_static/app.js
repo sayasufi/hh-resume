@@ -588,9 +588,10 @@ function renderTgApps() {
     const status = a.status === "sent" ? (a.replied ? "✓ ответили" : "отправлено") : "";
     const meta = [a.contact, a.channel ? "@" + a.channel : "", a.category, status].filter(Boolean).join(" · ");
     const uname = (a.contact || "").replace(/^@/, "");
+    const lang = a.lang ? `<span class="tg-lang tg-lang-${a.lang}">${a.lang.toUpperCase()}</span> ` : "";
     html += '<div class="cell act tg-out">'
       + '<div class="dlg-main act-text">'
-      +   `<div class="dlg-title">${esc(a.title || "Вакансия")}</div>`
+      +   `<div class="dlg-title">${lang}${esc(a.title || "Вакансия")}</div>`
       +   `<div class="dlg-emp">${esc(meta)}</div>`
       +   '<div class="tg-letter">' + esc(a.letter || "(без письма)")
       +     '<div class="tg-letter-actions">'

@@ -286,6 +286,10 @@ button.cell { width: 100%; background: transparent; border: none; color: var(--t
 .tg-copy:active { transform: scale(.94); }
 .tg-copy.done { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
 .tg-vac { color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.tg-lang { display: inline-block; font-size: 10px; font-weight: 800; line-height: 1; padding: 2px 5px;
+  border-radius: 5px; vertical-align: 2px; letter-spacing: .04em; }
+.tg-lang-ru { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.tg-lang-en { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
 
 /* ── нижняя навигация (SVG) ─────────────────────────── */
 #tabs { position: fixed; bottom: 0; left: 0; right: 0; display: flex; max-width: 600px;

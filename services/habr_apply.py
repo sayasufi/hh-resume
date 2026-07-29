@@ -15,6 +15,16 @@ from hh_applicant_tool.storage import pgconn
 
 DRY = "--dry" in sys.argv
 DEFAULT_MAX = 15
+# Стоп-слова в НАЗВАНИИ вакансии — ОБЩИЕ с hh (тот же ключ apply.excluded_title_terms).
+# Не задано -> тот же дефолт, что в apply_similar (не-IT преподавательские профессии).
+DEFAULT_TITLE_STOP = ("преподавател", "учител", "репетитор", "воспитател", "педагог", "вожат", "методист")
+
+
+def _title_stop_terms(account):
+    raw = pgconn.get_setting("apply.excluded_title_terms", account=account)
+    if raw:
+        return [x.strip() for x in raw.lower().split(",") if x.strip()]
+    return list(DEFAULT_TITLE_STOP)
 
 LETTER_SYS = (
     "Ты — кандидат, пишешь короткое сопроводительное к отклику на вакансию на Хабр Карьере. "
@@ -114,6 +124,7 @@ async def run():
         print(f"habr: вошли, откликаемся по подходящим (профиль Habr), лимит {limit}")
 
         seen = pgconn.seen_keys("habr")
+        stop_terms = _title_stop_terms(account)  # общий с hh стоп-лист названий
         applied = 0
         page = 1
         MAX_PAGES = 8  # до ~200 вакансий за прогон
@@ -141,6 +152,10 @@ async def run():
                     if not cprefs.format_ok(_vf, wanted_wf):
                         continue
                 title = v.get("title", "")
+                _tl = title.lower()
+                if any(s in _tl for s in stop_terms):  # общий с hh фильтр стоп-слов в названии
+                    print(f"habr: пропуск по стоп-слову в названии: {title[:45]}")
+                    continue
                 company = (v.get("company") or {}).get("title", "")
                 cover = await _gen_letter(oa, resume, title, company, _extra)
                 if DRY:

@@ -205,14 +205,16 @@ class HHApplicantTool(MegaTool):
         return rv
 
     async def get_negotiations(
-        self, status: str = "active"
+        self, status: str = "active", order_by: str | None = None
     ) -> AsyncIterable[api.datatypes.Negotiation]:
+        extra = {"order_by": order_by} if order_by else {}
         for page in count():
             r: dict[str, Any] = await self.api_client.get(
                 "/negotiations",
                 page=page,
                 per_page=100,
                 status=status,
+                **extra,
             )
             items = r.get("items", [])
             if not items:

@@ -17,6 +17,7 @@ from ..api import BadResponse, Redirect, datatypes
 from ..api.datatypes import PaginatedItems, SearchVacancy
 from ..api.errors import ApiError, LimitExceeded
 from ..utils import prefs as cprefs
+from ..utils import search_queries as sq
 
 # Дефолтные стоп-слова в НАЗВАНИИ вакансии (если apply.excluded_title_terms не задан):
 # отсекаем явно не-айтишные профессии по заголовку. Стемы (подстрока) ловят склонения.
@@ -39,6 +40,9 @@ FIT_SYS = (
     "ДА — если профессия та же или смежная и основной стек/направление совпадает хотя бы "
     "частично. Если сомневаешься — ДА."
 )
+# Источник «поиск по запросам» (см. utils/search_queries.py): окно и глубина выдачи.
+SEARCH_PERIOD_DAYS = 14
+SEARCH_PAGES = 2  # по 100 вакансий на запрос; свежие — первыми
 # Мягкий тайм-бюджет прогона: с AI-письмами 200 откликов не влезают в жёсткий kill
 # оркестратора (1800с) -> выходим ЧИСТО заранее, остаток добьётся часовыми прогонами.
 APPLY_MAX_RUNTIME_SEC = int(os.getenv("APPLY_MAX_RUNTIME_SEC", "1500"))
@@ -87,6 +91,8 @@ def _ensure_hh_apps_columns() -> None:
             with conn.cursor() as cur:
                 cur.execute("ALTER TABLE hh_apps ADD COLUMN IF NOT EXISTS employer_id text")
                 cur.execute("ALTER TABLE hh_apps ADD COLUMN IF NOT EXISTS title text")
+                # откуда вакансия: search (поиск по запросам) | similar (похожие hh)
+                cur.execute("ALTER TABLE hh_apps ADD COLUMN IF NOT EXISTS source text")
             conn.commit()
         finally:
             conn.close()
@@ -500,6 +506,17 @@ class Operation(BaseOperation):
             if (args.use_ai and fit_on and _oa.get("token")) else None
         )
         self._fit_no = pgconn.seen_keys("fit_no") if self.fit_chat else set()
+        # Источник «поиск по запросам» (apply.search_source, по умолчанию ВКЛ): запросы по
+        # резюме собирает LLM один раз на версию профиля и хранит в apply.search_queries.
+        _src = await tool.storage.settings.get_value("apply.search_source")
+        self.search_source = (str(_src).lower() not in ("false", "0", "no")
+                              if _src is not None else True)
+        self.query_chat = (
+            ChatOpenAI(token=_oa["token"], model=_oa.get("model"),
+                       completion_endpoint=_oa.get("completion_endpoint"),
+                       system_prompt=sq.QUERY_SYS, temperature=0.2, max_completion_tokens=200)
+            if (args.use_ai and self.search_source and _oa.get("token")) else None
+        )
         self._applied_titles: set[tuple[str, str]] = set()  # (employer_id, название) за прогон
         self._letter_ai_errors = 0
         await asyncio.to_thread(_ensure_hh_apps_columns)
@@ -670,7 +687,7 @@ class Operation(BaseOperation):
 
         do_apply = True
 
-        async for vacancy in self._get_similar_vacancies(resume_id=resume["id"]):
+        async for vacancy, source in self._iter_candidates(resume):
             # Дневной лимит проверяем НА КАЖДОМ отклике, а не только на входе в прогон:
             # иначе один прогон выгребал вакансии до упора (у пользователя было 115 при лимите 15).
             if self.applications_count >= self.max_applications_per_day:
@@ -1064,13 +1081,13 @@ class Operation(BaseOperation):
                             with _conn.cursor() as _cur:
                                 _cur.execute(
                                     "INSERT INTO hh_apps(account, vacancy_id, resume_id, "
-                                    "used_ai, letter_len, model, employer_id, title) "
-                                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+                                    "used_ai, letter_len, model, employer_id, title, source) "
+                                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                                     "ON CONFLICT(account, vacancy_id) DO NOTHING",
                                     (pgconn.get_account(), int(vacancy_id),
                                      self.resume_id, bool(self.openai_chat),
                                      len(params.get("message", "")), "",
-                                     _emp_id or None, vacancy.get("name") or None),
+                                     _emp_id or None, vacancy.get("name") or None, source),
                                 )
                             _conn.commit()
                             _conn.close()
@@ -1175,6 +1192,69 @@ class Operation(BaseOperation):
 
         return params
 
+    async def _iter_candidates(
+        self, resume: datatypes.Resume
+    ) -> AsyncIterator[tuple[SearchVacancy, str]]:
+        """Кандидаты на отклик: сначала поиск по запросам (свежие первыми), затем похожие hh.
+        Дубли по id между источниками отбрасываются."""
+        seen: set[str] = set()
+        if self.search_source:
+            async for vacancy in self._get_search_vacancies():
+                if str(vacancy["id"]) not in seen:
+                    seen.add(str(vacancy["id"]))
+                    yield vacancy, "search"
+        async for vacancy in self._get_similar_vacancies(resume_id=resume["id"]):
+            if str(vacancy["id"]) not in seen:
+                seen.add(str(vacancy["id"]))
+                yield vacancy, "similar"
+
+    async def _get_search_vacancies(self) -> AsyncIterator[SearchVacancy]:
+        """GET /vacancies по запросам пользователя: по названию, за SEARCH_PERIOD_DAYS, с его
+        форматом работы и городами. Сбой LLM/поиска -> источник пропускается, не валит прогон."""
+        fr = self._full_resume or {}
+        key = sq.profile_key(
+            fr.get("title") or "", fr.get("skill_set") or [],
+            [e.get("position") for e in (fr.get("experience") or [])],
+        )
+        try:
+            queries = await sq.ensure_queries(
+                self.tool.storage.settings, self.query_chat, self._profile_text, key)
+        except AIError as ex:
+            logger.warning("Поисковые запросы не собраны (%s) — только похожие вакансии", ex)
+            return
+        # Запрос, который противоречит стоп-листу пользователя (напр. «бизнес-аналитик» при
+        # исключённых бизнес-аналитиках), не ищем вовсе: генератор про стоп-лист не знает.
+        _stop = [self._norm_words(t) for t in self.excluded_title_terms]
+        dropped = [q for q in queries if any(t and t in self._norm_words(q) for t in _stop)]
+        queries = [q for q in queries if q not in dropped]
+        if dropped:
+            logger.info("Запросы против стоп-слов пропущены: %s", dropped)
+        if not queries:
+            return
+        base = {"search_field": "name", "period": SEARCH_PERIOD_DAYS,
+                "order_by": "publication_time", "per_page": 100}
+        if (wf := cprefs.hh_work_format_ids(self.wanted_wf)):
+            base["work_format"] = wf
+        if self.allowed_areas:
+            base["area"] = sorted(self.allowed_areas)
+        found: dict[str, SearchVacancy] = {}
+        for q in queries:
+            for page in range(SEARCH_PAGES):
+                try:
+                    res = await self.api_client.get("/vacancies", {**base, "text": q, "page": page})
+                except ApiError as ex:
+                    logger.warning("Поиск «%s» не удался: %s", q, ex)
+                    break
+                for item in res.get("items") or []:
+                    found.setdefault(str(item["id"]), item)
+                if page + 1 >= (res.get("pages") or 0):
+                    break
+        items = sorted(found.values(), key=lambda v: v.get("published_at") or "", reverse=True)
+        logger.info("Поиск по запросам %s: %d вакансий", queries, len(items))
+        print(f"🔎 Поиск по запросам: {len(items)} вакансий ({'; '.join(queries)})")
+        for item in items:
+            yield item
+
     async def _get_similar_vacancies(
         self, resume_id: str
     ) -> AsyncIterator[SearchVacancy]:
@@ -1258,10 +1338,15 @@ class Operation(BaseOperation):
             return False
         return True
 
+    @staticmethod
+    def _norm_words(s: str) -> str:
+        """«Бизнес-аналитик» == «бизнес аналитик»: дефисы как пробелы, регистр не важен."""
+        return " ".join(re.sub(r"[-‐–—/]", " ", (s or "").lower()).split())
+
     def _is_title_excluded(self, vacancy: SearchVacancy) -> bool:
         """Стоп-слова ТОЛЬКО по названию вакансии (не по описанию)."""
-        name = (vacancy.get("name") or "").lower()
-        return any(t in name for t in self.excluded_title_terms)
+        name = self._norm_words(vacancy.get("name") or "")
+        return any(self._norm_words(t) in name for t in self.excluded_title_terms)
 
     def _is_excluded(self, vacancy: SearchVacancy) -> bool:
         snippet = vacancy.get("snippet") or {}

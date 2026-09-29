@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import random
@@ -10,6 +11,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, AsyncIterator, Iterator
 
+from ..ai import ChatOpenAI
 from ..ai.base import AIError
 from ..api import BadResponse, Redirect, datatypes
 from ..api.datatypes import PaginatedItems, SearchVacancy
@@ -21,6 +23,21 @@ from ..utils import prefs as cprefs
 # Без «тренер/наставник» — есть AI-тренер / тех-наставник. Переопределяется настройкой.
 DEFAULT_TITLE_STOP = (
     "преподавател", "учител", "репетитор", "воспитател", "педагог", "вожат", "методист",
+)
+# Фильтр «вакансия по профилю резюме» (LLM ДА/НЕТ). similar_vacancies от hh со временем
+# уплывает: 27.09.2026 у backend-разработчика 49 из 52 откликов ушли в продажи, плюс PHP/1С/iOS.
+# Стоп-слова по названию ловят только очевидное; стек и профессию решает этот фильтр.
+FIT_SYS = (
+    "Ты фильтр вакансий для соискателя. По профилю кандидата и вакансии ответь ОДНИМ словом: "
+    "ДА или НЕТ.\n"
+    "НЕТ — если вакансия относится к ДРУГОЙ профессии, чем у кандидата (например, продажи, "
+    "работа с клиентами, колл-центр, поддержка пользователей, маркетинг, SMM, рекрутинг, "
+    "преподавание, авторство курсов/контента — для инженера, разработчика или аналитика), ИЛИ "
+    "требует другого ОСНОВНОГО стека/специализации, которых нет в профиле (например, PHP, 1С, "
+    "Java, C#, iOS, Unity, C++, embedded для Python/Go-бэкендера; программист или консультант 1С "
+    "для аналитика данных).\n"
+    "ДА — если профессия та же или смежная и основной стек/направление совпадает хотя бы "
+    "частично. Если сомневаешься — ДА."
 )
 # Мягкий тайм-бюджет прогона: с AI-письмами 200 откликов не влезают в жёсткий kill
 # оркестратора (1800с) -> выходим ЧИСТО заранее, остаток добьётся часовыми прогонами.
@@ -36,6 +53,72 @@ from ..utils.string import (
 
 if TYPE_CHECKING:
     from ..main import HHApplicantTool
+
+
+_CLICHES = {
+    "«меня заинтересовала вакансия»": re.compile(r"меня\s+(?:очень\s+|крайне\s+)?заинтересовал", re.I),
+    "«мне близок»": re.compile(r"мне\s+близ(?:ок|ка|ко|ки)", re.I),
+    "«глубокий опыт/экспертиза»": re.compile(r"глубок\w+\s+(?:опыт|экспертиз|понимани)|экспертиз", re.I),
+    "«в моём багаже»": re.compile(r"в\s+мо[её]м\s+багаже", re.I),
+    "«буду рад применить свои навыки»": re.compile(r"буду\s+рад\w*\s+применить", re.I),
+    "«несмотря на»": re.compile(r"несмотря\s+на", re.I),
+}
+
+
+def _letter_cliches(text: str) -> list[str]:
+    """Шаблонные обороты, по которым письмо с первой строки читается как бот."""
+    return [name for name, rx in _CLICHES.items() if rx.search(text or "")]
+
+
+def _norm_title(name: str) -> str:
+    return " ".join((name or "").lower().split())
+
+
+def _strip_tags(s: str | None) -> str:
+    return " ".join(re.sub(r"<[^>]+>", " ", s or "").split())
+
+
+def _ensure_hh_apps_columns() -> None:
+    """hh_apps: работодатель и название — для дедупа «та же вакансия того же работодателя»."""
+    from ..storage import pgconn
+    try:
+        conn = pgconn.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("ALTER TABLE hh_apps ADD COLUMN IF NOT EXISTS employer_id text")
+                cur.execute("ALTER TABLE hh_apps ADD COLUMN IF NOT EXISTS title text")
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as ex:
+        logger.debug("hh_apps: колонки не добавлены: %r", ex)
+
+
+def _already_applied_same(employer_id: str, title: str, vacancy_id) -> bool:
+    """Уже откликались на вакансию с тем же названием у того же работодателя (перевыложенная
+    вакансия или дубль): раньше одному работодателю уходило по 3–4 одинаковых отклика."""
+    from ..storage import pgconn
+    try:
+        conn = pgconn.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM hh_apps WHERE account=%s AND employer_id=%s AND "
+                    "lower(regexp_replace(title, '\\s+', ' ', 'g'))=%s "
+                    "AND created_at > now() - interval '60 days' "
+                    "UNION ALL "
+                    "SELECT 1 FROM negotiations n JOIN vacancies v ON v.id=n.vacancy_id "
+                    "WHERE n.account=%s AND n.employer_id=%s AND n.vacancy_id<>%s AND "
+                    "lower(regexp_replace(v.name, '\\s+', ' ', 'g'))=%s LIMIT 1",
+                    (pgconn.get_account(), str(employer_id), title,
+                     pgconn.get_account(), int(employer_id), int(vacancy_id), title),
+                )
+                return cur.fetchone() is not None
+        finally:
+            conn.close()
+    except Exception as ex:
+        logger.debug("дедуп откликов недоступен: %r", ex)
+        return False
 
 
 logger = logging.getLogger(__package__)
@@ -118,18 +201,30 @@ class Operation(BaseOperation):
             "--first-prompt",
             help="Начальный помпт чата для генерации сопроводительного письма",
             default=(
-                "Ты помогаешь написать короткое, живое и профессиональное "
-                "сопроводительное письмо на русском языке для отклика на hh.ru.\n"
+                "Ты пишешь короткое сопроводительное письмо для отклика на hh.ru от лица "
+                "кандидата — так, как написал бы живой инженер/аналитик рекрутеру, а не "
+                "по шаблону. Его прочитают за 10 секунд.\n"
                 "\n"
-                "Правила:\n"
-                "- Пиши от первого лица (как кандидат).\n"
-                "- Тон: дружелюбно и по делу, без канцелярита и пафоса.\n"
-                "- Не используй плейсхолдеры и не упоминай, что ты ИИ.\n"
-                "- Ничего не выдумывай: опирайся только на факты из входных данных.\n"
-                "- Не добавляй негатив/оговорки (например: «нет опыта…»).\n"
-                "- Длина: 4–7 предложений, желательно 600–1200 знаков.\n"
-                "- Формат: 1–2 абзаца, без заголовков.\n"
-                "- В конце подпись именем (если оно дано во входных данных).\n"
+                "КАК ПИСАТЬ:\n"
+                "- 3–5 коротких предложений, 350–700 знаков, один абзац, без заголовков и списков.\n"
+                "- Начни с «Здравствуйте!» и СРАЗУ с самого сильного факта из опыта, который "
+                "закрывает главное требование вакансии (стек, домен, задача). Не пересказывай "
+                "вакансию и не повторяй её название.\n"
+                "- Дальше 1–2 конкретных факта: что делал, на чём, в какой компании. Цифры и "
+                "результаты — ТОЛЬКО если они дословно есть во входных данных; не придумывай "
+                "проценты и метрики.\n"
+                "- Если в описании вакансии есть что-то конкретное, что правда связано с опытом "
+                "кандидата, — одна фраза об этом. Общих слов про «подход компании» не пиши.\n"
+                "- Не пиши о своей готовности к формату, графику, занятости (part-time, проект), "
+                "переезду, оформлению и другим условиям — только об опыте.\n"
+                "- Закончи простой фразой вроде «Готов рассказать подробнее» и подписью ТОЛЬКО "
+                "именем (без фамилии и отчества).\n"
+                "- Пиши просто, от первого лица. Не упоминай, что ты ИИ, без плейсхолдеров.\n"
+                "\n"
+                "ЗАПРЕЩЁННЫЕ КЛИШЕ (так пишут все боты): «меня (очень) заинтересовала вакансия», "
+                "«мне близок/близка/близко», «глубокий опыт», «экспертиза», «в моём багаже», "
+                "«буду рад применить свои навыки», «масштаб задач», «амбициозн», «несмотря на», "
+                "«коррелирует», «драйвит», «уверен, что смогу», «ценный вклад».\n"
                 "\n"
                 "Выводи только готовый текст письма."
             ),  # noqa: E501
@@ -138,11 +233,9 @@ class Operation(BaseOperation):
             "--prompt",
             help="Промпт для генерации сопроводительного письма",
             default=(
-                "Составь сопроводительное письмо для отклика на вакансию.\n"
-                "Сделай текст человечным и конкретным: почему интересна роль "
-                "и 2–3 релевантных факта/результата из моего опыта под требования вакансии.\n"
-                "Пиши кратко (4–7 предложений), без воды, без клише и без повторения "
-                "описания вакансии целиком. Не используй плейсхолдеры."
+                "Напиши сопроводительное письмо к этой вакансии по правилам выше: коротко, "
+                "с первого предложения — релевантный факт из моего опыта под главное "
+                "требование, без клише и выдуманных цифр."
             ),  # noqa: E501
         )
         parser.add_argument(
@@ -395,6 +488,21 @@ class Operation(BaseOperation):
         self.openai_chat = (
             tool.get_openai_chat(args.first_prompt) if args.use_ai else None
         )
+        # Фильтр по профилю резюме (apply.fit_check, по умолчанию ВКЛ). Отказы кэшируем в
+        # seen_keys('fit_no'), чтобы не спрашивать LLM про ту же вакансию каждый час.
+        _fit =await tool.storage.settings.get_value("apply.fit_check")
+        fit_on = str(_fit).lower() not in ("false", "0", "no") if _fit is not None else True
+        _oa = tool.config.get("openai") or {}
+        self.fit_chat = (
+            ChatOpenAI(token=_oa["token"], model=_oa.get("model"),
+                       completion_endpoint=_oa.get("completion_endpoint"),
+                       system_prompt=FIT_SYS, temperature=0, max_completion_tokens=8)
+            if (args.use_ai and fit_on and _oa.get("token")) else None
+        )
+        self._fit_no = pgconn.seen_keys("fit_no") if self.fit_chat else set()
+        self._applied_titles: set[tuple[str, str]] = set()  # (employer_id, название) за прогон
+        self._letter_ai_errors = 0
+        await asyncio.to_thread(_ensure_hh_apps_columns)
         # Дневной лимит откликов — per-user из settings (apply.max_per_day), дефолт 100
         mpd = await tool.storage.settings.get_value("apply.max_per_day")
         try:
@@ -502,6 +610,16 @@ class Operation(BaseOperation):
         #     except RepositoryError as e:
         #         logger.warning(e)
 
+        # LLM лежит -> письма молча уходят шаблоном (так было весь простой 19.08–18.09).
+        if self._letter_ai_errors >= 3 and not self.dry_run:
+            from ..storage import pgconn
+            pgconn.notify(
+                pgconn.PRIORITY_HIGH,
+                f"LLM недоступна — {self._letter_ai_errors} сопроводительных ушли шаблоном. "
+                "Проверь локальную LLM.",
+                category="action", dedup_key=f"llm_down_apply:{date.today().isoformat()}",
+            )
+
         print("📝 Отклики на вакансии разосланы!")
 
     async def _apply_resume(
@@ -548,6 +666,7 @@ class Operation(BaseOperation):
         # Сохраняем полное резюме и содержимое файла для использования в промпте
         self._full_resume = full_resume
         self._resume_file_content = resume_file_content
+        self._profile_text = self._build_profile(resume, full_resume, resume_file_content)
 
         do_apply = True
 
@@ -703,6 +822,20 @@ class Operation(BaseOperation):
                     logger.warning("Вакансия содержит недопустимые словосочетания: %s",vacancy["alternate_url"])
                     continue
 
+                _emp_id = str(employer.get("id") or "")
+                _title_key = (_emp_id, _norm_title(vacancy.get("name") or ""))
+                if _emp_id and (
+                    _title_key in self._applied_titles
+                    or await asyncio.to_thread(
+                        _already_applied_same, _emp_id, _title_key[1], vacancy_id)
+                ):
+                    logger.warning("Пропуск дубля: уже откликались на «%s» (%s)",
+                                   vacancy.get("name"), employer.get("name"))
+                    continue
+
+                if not await self._fits_profile(vacancy):
+                    continue
+
                 params = {
                     "resume_id": resume["id"],
                     "vacancy_id": vacancy_id,
@@ -843,8 +976,12 @@ class Operation(BaseOperation):
                                 msg += f"Требования: {message_placeholders['vacancy_requirements']}\n"
                         
                         msg += f"\nНазвание моего резюме: {message_placeholders['resume_title']}\n"
-                        if full_name:
-                            msg += f"Мое полное имя: {full_name}\n"
+                        # Подпись — только имя: «Рябов Семен Александрович» под письмом звучит
+                        # как канцелярия (и hh всё равно показывает ФИО в отклике).
+                        if message_placeholders.get("first_name"):
+                            msg += f"Имя для подписи: {message_placeholders['first_name']}\n"
+                        elif full_name:
+                            msg += f"Имя для подписи: {full_name}\n"
                         # Город — из hh-резюме (area.name), уже есть в self._full_resume
                         # (без доп. запроса). Чтобы письмо не привязывало кандидата к
                         # городу вуза из resume_text (напр. Волгоград вместо Москвы).
@@ -863,8 +1000,19 @@ class Operation(BaseOperation):
                         logger.debug("Full name in prompt: %s", full_name)
                         logger.debug("prompt length: %d chars", len(msg))
                         try:
-                            msg = await self.openai_chat.send_message(msg)
+                            _prompt = msg
+                            msg = await self.openai_chat.send_message(_prompt)
+                            # LLM всё равно скатывается в шаблон «Меня заинтересовала… мне
+                            # близок…» — одна перегенерация с явным указанием, что поправить.
+                            if (_bad := _letter_cliches(msg)):
+                                logger.debug("письмо с клише %s — перегенерирую", _bad)
+                                _retry = await self.openai_chat.send_message(
+                                    _prompt + "\n\nНЕ используй: " + ", ".join(_bad)
+                                    + ". Начни с «Здравствуйте!» и сразу с факта из опыта.")
+                                if len(_letter_cliches(_retry)) < len(_bad):
+                                    msg = _retry
                         except AIError as ex:
+                            self._letter_ai_errors += 1
                             logger.warning(
                                 f"Ошибка при генерации письма через AI: {ex}. "
                                 "Используется шаблонное сообщение."
@@ -901,6 +1049,7 @@ class Operation(BaseOperation):
                         )
                         assert res == {}
                         self.applications_count += 1
+                        self._applied_titles.add(_title_key)
                         # Сохраняем счетчик в базу данных
                         await self.tool.storage.settings.set_value("_applications_count", str(self.applications_count))
                         # Счётчик активности Mini App (best-effort; pgconn — этот метод
@@ -915,12 +1064,13 @@ class Operation(BaseOperation):
                             with _conn.cursor() as _cur:
                                 _cur.execute(
                                     "INSERT INTO hh_apps(account, vacancy_id, resume_id, "
-                                    "used_ai, letter_len, model) "
-                                    "VALUES (%s,%s,%s,%s,%s,%s) "
+                                    "used_ai, letter_len, model, employer_id, title) "
+                                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
                                     "ON CONFLICT(account, vacancy_id) DO NOTHING",
                                     (pgconn.get_account(), int(vacancy_id),
                                      self.resume_id, bool(self.openai_chat),
-                                     len(params.get("message", "")), ""),
+                                     len(params.get("message", "")), "",
+                                     _emp_id or None, vacancy.get("name") or None),
                                 )
                             _conn.commit()
                             _conn.close()
@@ -1056,6 +1206,57 @@ class Operation(BaseOperation):
         return [
             x.strip() for x in excluded_terms.lower().split(",") if x.strip()
         ]
+
+    @staticmethod
+    def _build_profile(resume: dict, full_resume: dict, resume_text: str | None) -> str:
+        """Короткий профиль кандидата для фильтра релевантности."""
+        parts = [f"Резюме: {resume.get('title') or ''}"]
+        skills = full_resume.get("skill_set") or full_resume.get("skills") or []
+        if isinstance(skills, list) and skills:
+            parts.append("Навыки: " + ", ".join(map(str, skills[:40])))
+        elif isinstance(skills, str) and skills.strip():
+            parts.append("Навыки: " + skills.strip()[:600])
+        exp = [f"{e.get('position', '')} в {e.get('company', '')}"
+               for e in (full_resume.get("experience") or [])[:4]]
+        if exp:
+            parts.append("Опыт: " + "; ".join(exp))
+        # Детали опыта — из полного текста резюме: без них фильтр не видел, например, что
+        # бэкендер работает с Asterisk/телефонией, и отсекал «VoIP / Asterisk Engineer».
+        if resume_text:
+            parts.append("Из резюме:\n" + " ".join(resume_text.split())[:1500])
+        return "\n".join(parts)
+
+    async def _fits_profile(self, vacancy: SearchVacancy) -> bool:
+        """LLM-фильтр: вакансия по профессии/стеку кандидата? Сбой LLM -> пропускаем в отклик
+        (fail-open: грубый мусор уже отсекли стоп-слова)."""
+        if not self.fit_chat:
+            return True
+        vid = str(vacancy.get("id"))
+        if vid in self._fit_no:
+            return False
+        snippet = vacancy.get("snippet") or {}
+        roles = ", ".join(r.get("name", "") for r in vacancy.get("professional_roles") or [])
+        query = (
+            f"КАНДИДАТ:\n{self._profile_text}\n\n"
+            f"ВАКАНСИЯ: {vacancy.get('name') or ''}\n"
+            f"Компания: {(vacancy.get('employer') or {}).get('name') or ''}\n"
+            + (f"Проф. роль: {roles}\n" if roles else "")
+            + f"Требования: {_strip_tags(snippet.get('requirement'))[:400]}\n"
+            f"Обязанности: {_strip_tags(snippet.get('responsibility'))[:400]}"
+        )
+        try:
+            ans = (await self.fit_chat.send_message(query)).strip().upper()
+        except AIError as ex:
+            logger.debug("fit-check недоступен (%s) — пропускаю в отклик", ex)
+            return True
+        if ans.startswith(("НЕТ", "NO")):
+            from ..storage import pgconn
+            self._fit_no.add(vid)
+            await asyncio.to_thread(pgconn.add_seen, "fit_no", vid)
+            logger.warning("Пропуск: не по профилю резюме: %s (%s)", vacancy.get("name"),
+                           (vacancy.get("employer") or {}).get("name"))
+            return False
+        return True
 
     def _is_title_excluded(self, vacancy: SearchVacancy) -> bool:
         """Стоп-слова ТОЛЬКО по названию вакансии (не по описанию)."""

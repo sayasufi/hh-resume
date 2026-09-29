@@ -13,6 +13,8 @@ from .runner import run_op
 from .targets import active_targets
 
 JOBS: list[dict] = [
+    # Cron — в UTC (МСК = UTC+3). Всё, что ПИШЕТ работодателям (apply/reply/followup), держим
+    # в 09:00–21:59 МСК: сообщения в час ночи выдают бота.
     dict(name="refresh-token",  command=["python", "-m", "hh_applicant_tool", "refresh-token"],
          feature=None,     cron="* * * * *",        jitter=0,    tags=[],          timeout=120),
     dict(name="update-resumes", command=["python", "-m", "hh_applicant_tool", "update-resumes"],
@@ -22,20 +24,20 @@ JOBS: list[dict] = [
     dict(name="online-ping", command=["python", "/app/services/online_ping.py"],
          feature="browse", cron="*/7 * * * *",   jitter=120,  tags=[],          timeout=180),
     dict(name="followup-stalled", command=["python", "/app/services/followup_stalled.py"],
-         feature="reply",  cron="45 9-18/3 * * *",  jitter=200,  tags=[],          timeout=600),
+         feature="reply",  cron="45 6-15/3 * * *",  jitter=200,  tags=[],          timeout=600),
     dict(name="views-snapshot", command=["python", "/app/services/views_snapshot.py"],
          feature=None,     cron="7 * * * *",       jitter=120,  tags=[],          timeout=300),
     dict(name="apply-similar",  command=["python", "-m", "hh_applicant_tool", "apply-similar", "--order-by", "relevance"],
-         feature="apply",  cron="0 5-19 * * *",     jitter=300,  tags=["llm"],     timeout=1800),
+         feature="apply",  cron="0 6-17 * * *",     jitter=300,  tags=["llm"],     timeout=1800),
     dict(name="notify-actions", command=["python", "/app/services/notify_actions.py"],
-         feature="reply", cron="20 5-19 * * *",     jitter=120,  tags=["llm"],     timeout=900),
+         feature="notify", cron="20 5-19 * * *",    jitter=120,  tags=["llm"],     timeout=900),
     # авто-заполнение внешних анкет/форм из «Дел» (Playwright + LLM). LIVE: реально отправляет.
     # Аккаунт берётся из HH_ACCOUNT (run_op), профиль — hh /me + резюме. Гейт: feat.forms.
     # ВНИМАНИЕ: Prefect считает cron в UTC (timezone=None). 6-14/4 UTC = 9:25/13:25/17:25 МСК.
     dict(name="form-fill",      command=["python", "/app/services/form_fill.py", "--live", "--limit", "20"],
          feature="forms", cron="25 6-14/4 * * *",   jitter=400,  tags=["llm", "browser"], timeout=2400),
     dict(name="reply-employers", command=["python", "-m", "hh_applicant_tool", "reply-employers", "--use-ai"],
-         feature="reply",  cron="*/20 5-22 * * *",    jitter=120,  tags=["llm"],     timeout=1800),
+         feature="reply",  cron="*/20 6-18 * * *",    jitter=120,  tags=["llm"],     timeout=1800),
     dict(name="apply-tests",    command=["python", "/app/services/apply_tests.py", "--apply", "--limit", "10"],
          feature="tests",  cron="0 6-18/3 * * *",   jitter=90,   tags=["browser"], timeout=1800),
     dict(name="search-status", command=["python", "/app/services/set_search_status.py"],

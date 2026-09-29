@@ -27,6 +27,36 @@ def _max_concurrent() -> int:
         return 8
 
 
+def _local_priority() -> int | None:
+    """Приоритет запросов в локальный vLLM (llm.priority, _global). vLLM на b6000-2 общий со
+    звонками голосового бота и запущен с --scheduling-policy priority: меньше = раньше
+    (звонки 0, индексация RAG 100). hh — фон, поэтому ставим больше (200). Не задано ->
+    поле не шлём (vLLM с политикой fcfs отклоняет ненулевой priority)."""
+    try:
+        from hh_applicant_tool.storage import pgconn
+        v = pgconn.get_setting("llm.priority", None, account="_global")
+        return int(v) if v not in (None, "") else None
+    except Exception:
+        return None
+
+
+# Здоровье локальной LLM: пишем в health(_global, llm) только при СМЕНЕ состояния в процессе,
+# чтобы не бить БД на каждый вызов. Кабинет/health_check показывают «LLM недоступна».
+_llm_ok: bool | None = None
+
+
+def _record_llm(ok: bool, detail: str = "") -> None:
+    global _llm_ok
+    if _llm_ok is ok:
+        return
+    _llm_ok = ok
+    try:
+        from hh_applicant_tool.storage import pgconn
+        pgconn.record_health("llm", ok, detail, account="_global")
+    except Exception:
+        pass
+
+
 def _sync_acquire(n):
     """Возврат: conn (с ._llm_slot) если слот взят; 'busy' если все заняты; None при ошибке БД (fail-open)."""
     try:
@@ -179,13 +209,16 @@ class ChatOpenAI:
             self._resolved_model = None
         return self._resolved_model
 
-    async def _post_chat(self, client, messages, token, model, endpoint, max_param):
+    async def _post_chat(self, client, messages, token, model, endpoint, max_param,
+                         priority=None):
         body = {
             "messages": messages,
             "temperature": self.temperature,
             max_param: self.max_completion_tokens,
             "model": model,
         }
+        if priority is not None:
+            body["priority"] = priority
         response = await client.post(
             endpoint, json=body, headers={"Authorization": f"Bearer {token}"}
         )
@@ -219,7 +252,10 @@ class ChatOpenAI:
                             # пустой content (reasoning-модель/обрезка) — не отдаём мусор, фолбэк
                             logger.warning("OpenRouter вернул пустой content — фолбэк на локалку")
                         except httpx.HTTPStatusError as ex:
-                            if ex.response is not None and ex.response.status_code == 429:
+                            # 429 — лимит ключа; 404 — модели больше нет (gpt-oss-120b:free пропала
+                            # ~16.09.2026, после чего ~2000 запросов в день уходили в 404 впустую).
+                            # В обоих случаях ключ на сегодня выключаем, дальше сразу локалка.
+                            if ex.response is not None and ex.response.status_code in (404, 429):
                                 await asyncio.to_thread(_orexhaust, provider["slot"])  # этот ключ исчерпан; след. вызов возьмёт другой
                             logger.warning("OpenRouter %s — фолбэк на локалку",
                                            getattr(ex.response, "status_code", "?"))
@@ -229,14 +265,19 @@ class ChatOpenAI:
                     # локалка: выпало на неё / OR не настроен / исчерпан / упал
                     model = await self._resolve_model(client)
                     if not model:
+                        _record_llm(False, "не удалось определить модель (vLLM пуст/недоступен)")
                         raise OpenAIError(
                             "LLM недоступна: не удалось определить модель "
                             "(vLLM пуст/недоступен)"
                         )
-                    return await self._post_chat(
+                    _prio = await asyncio.to_thread(_local_priority)
+                    out = await self._post_chat(
                         client, messages, self.token, model,
-                        self.completion_endpoint, "max_completion_tokens")
+                        self.completion_endpoint, "max_completion_tokens", priority=_prio)
+                    _record_llm(True)
+                    return out
             except httpx.HTTPError as ex:
+                _record_llm(False, f"сеть/HTTP: {ex}"[:160])
                 raise OpenAIError(f"Network error: {ex}") from ex
         finally:
             if _slot is not None:

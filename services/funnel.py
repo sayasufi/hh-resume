@@ -103,9 +103,12 @@ async def main():
                     nid, account, st, vac.get("id"), emp.get("id"),
                     n.get("chat_id"), rid, n.get("created_at"), n.get("updated_at"),
                 ))
+                # hh отдаёт одни и те же отклики то «invitation» (легаси), то «interview» —
+                # без нормализации dlg_events получал сотни ложных «смен стадии» в день.
                 dlg_rows.append((
                     account, str(nid), vac.get("name") or "Вакансия",
-                    emp.get("name") or "", st, label, emoji, rank,
+                    emp.get("name") or "", "interview" if st == "invitation" else st,
+                    label, emoji, rank,
                     bool(n.get("has_updates")), vac.get("alternate_url") or "",
                     (n.get("updated_at") or "")[:10], (n.get("created_at") or "")[:10],
                 ))

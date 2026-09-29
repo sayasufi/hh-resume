@@ -257,10 +257,28 @@ async def gather_card(cfg, account, has_problem) -> dict:
     }
 
 
-def build_caption(action_rows) -> str:
-    """HTML-подпись к фото — кликабельные действия (HIGH/MED)."""
+CAPTION_LIMIT = 1000  # у Telegram подпись к фото <= 1024 символа
+
+
+def _line_chunks(text: str, limit: int) -> list[str]:
+    """Режем по строкам (строка = целый HTML-фрагмент), чтобы не порвать тег <a>/<b>."""
+    out, cur = [], ""
+    for line in (text or "").split("\n"):
+        if cur and len(cur) + len(line) + 1 > limit:
+            out.append(cur)
+            cur = ""
+        cur = f"{cur}\n{line}" if cur else line
+    if cur:
+        out.append(cur)
+    return out
+
+
+def build_caption(action_rows) -> tuple[str, str]:
+    """HTML-подпись к фото — кликабельные действия (HIGH/MED). Что не влезло в подпись,
+    возвращается вторым элементом и уходит отдельным сообщением: раньше хвост резался
+    [:1000] и пропадал, хотя все уведомления помечались отправленными."""
     if not action_rows:
-        return "✅ Срочных дел нет — всё под контролем."
+        return "✅ Срочных дел нет — всё под контролем.", ""
     parts, last = [], None
     for _id, prio, text, link, _cat in action_rows:
         if prio != last:
@@ -271,7 +289,14 @@ def build_caption(action_rows) -> str:
         if link:
             line += f' <a href="{html.escape(link)}">открыть →</a>'
         parts.append(line)
-    return "\n".join(parts)[:1000]
+    cap, rest, size = [], [], 0
+    for line in parts:
+        if not rest and size + len(line) + 1 <= CAPTION_LIMIT:
+            cap.append(line)
+            size += len(line) + 1
+        else:
+            rest.append(line)
+    return "\n".join(cap), "\n".join(rest)
 
 
 def build_text(rows) -> str:
@@ -308,9 +333,11 @@ async def main() -> None:
     # Есть ежедневная сводка (heartbeat/funnel) -> рендерим красивую карточку.
     png = await digest_card.render_png(await gather_card(cfg, account, has_problem)) if low else None
 
+    caption, overflow = build_caption(actions)
     if DRY:
         print("DRY:", ("карточка PNG %d байт" % len(png)) if png else "текст-фолбэк")
-        print(build_caption(actions) if png else build_text(rows))
+        print((caption + ("\n--- отдельным сообщением ---\n" + overflow if overflow else ""))
+              if png else build_text(rows))
         return
 
     tg = cfg.get("telegram") or {}
@@ -325,10 +352,17 @@ async def main() -> None:
         if png:
             try:
                 await bot.send_photo(dm, BufferedInputFile(png, filename="digest.png"),
-                                     caption=build_caption(actions))
+                                     caption=caption)
             except Exception as e:
                 print("TG photo error:", repr(e)[:160])
                 ok = False
+            for chunk in _line_chunks(overflow, 3800) if ok else ():
+                try:
+                    await bot.send_message(dm, chunk)
+                except Exception as e:
+                    print("TG error:", repr(e)[:160])
+                    ok = False
+                await asyncio.sleep(0.3)
         else:
             text = build_text(rows)
             for i in range(0, len(text), 3800):

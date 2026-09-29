@@ -4,13 +4,16 @@ Per-account (feature=reply). Один раз на отклик (дедуп seen_
 лимит за прогон, только messaging_status=ok. НЕ спам: одно сообщение, не повторяем."""
 import asyncio
 import random
+import sys
 from datetime import datetime, timezone
 
 from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
+from hh_applicant_tool.utils import dialog_rules as rules
 from hh_applicant_tool.utils.date import parse_api_datetime
 
+DRY = "--dry" in sys.argv  # показать, кому бы напомнили, ничего не отправляя и не помечая
 STALE_DAYS = 7
 MAX_PER_RUN = 6
 TEMPLATES = (
@@ -37,6 +40,11 @@ async def main():
         refresh_hook=pgconn.locked_token_refresh,
     )
     seen = set(map(str, pgconn.seen_keys("followup")))
+    # Не больше ОДНОГО фоллоуапа работодателю в день: раньше одному HR прилетало 5 разных
+    # шаблонов подряд (по каждой вакансии) — очевидный бот.
+    today = datetime.now().date().isoformat()
+    emp_today = {k.split(":", 1)[0] for k in pgconn.seen_keys("followup_emp")
+                 if k.endswith(":" + today)}
     now = datetime.now(timezone.utc)
     sent = 0
     try:
@@ -58,18 +66,41 @@ async def main():
                     continue
                 if (now - upd).days < STALE_DAYS:
                     continue
+                emp_id = str(((n.get("vacancy") or {}).get("employer") or {}).get("id") or "")
+                if emp_id and emp_id in emp_today:
+                    continue  # этому работодателю сегодня уже напоминали — вернёмся завтра
                 # Если последнее сообщение в чате — от работодателя (HR/скринер ждёт наш ответ),
                 # фоллоу-ап НЕ шлём: на вопрос должен ответить reply-employers по существу, а не
                 # прилетать generic «актуальна ли ещё вакансия?». seen НЕ ставим — вернёмся позже.
                 try:
                     _msgs = (await api.get(
                         f"/negotiations/{nid}/messages", per_page=100)).get("items", [])
-                    if _msgs and (_msgs[-1].get("author") or {}).get(
-                            "participant_type") == "employer":
-                        continue
                 except Exception:
-                    pass
-                vac = ((n.get("vacancy") or {}).get("name") or "вашу вакансию")[:60]
+                    continue  # не прочитали чат — не шлём вслепую
+                if _msgs and (_msgs[-1].get("author") or {}).get(
+                        "participant_type") == "employer":
+                    continue
+                _emp = [m.get("text") or "" for m in _msgs
+                        if (m.get("author") or {}).get("participant_type") == "employer"]
+                _ours = [m.get("text") or "" for m in _msgs
+                         if (m.get("author") or {}).get("participant_type") != "employer"]
+                # Мяч на нашей стороне (просили написать в TG, анкету, ТЗ; или мы сами что-то
+                # пообещали) — «актуальна ли вакансия?» тут неуместно. Не напоминаем вовсе.
+                if rules.ball_on_our_side(_emp, _ours):
+                    if DRY:
+                        print("  мяч на нашей стороне — не напоминаем:", nid)
+                    else:
+                        pgconn.add_seen("followup", str(nid))
+                    seen.add(str(nid))
+                    continue
+                vac = rules.short_title((n.get("vacancy") or {}).get("name") or "вашу вакансию")
+                if DRY:
+                    print("🧪 dry фоллоу-ап:", nid, "|", random.choice(TEMPLATES).format(vac=vac))
+                    sent += 1
+                    if emp_id:
+                        emp_today.add(emp_id)
+                    seen.add(str(nid))
+                    continue
                 try:
                     await api.post(
                         f"/negotiations/{nid}/messages",
@@ -78,6 +109,9 @@ async def main():
                     )
                     sent += 1
                     pgconn.bump_activity("followup", 1)
+                    if emp_id:
+                        pgconn.add_seen("followup_emp", f"{emp_id}:{today}")
+                        emp_today.add(emp_id)
                     print("📨 Фоллоу-ап:", (n.get("vacancy") or {}).get("alternate_url", nid))
                 except Exception as e:
                     print("followup", nid, type(e).__name__, str(e)[:70])

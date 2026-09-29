@@ -140,7 +140,9 @@ def _ensure_tables() -> None:
                         "ON dlg_events(account, nid, at)")
             cur.execute(
                 "CREATE OR REPLACE FUNCTION log_dlg_state_change() RETURNS trigger AS "
-                "$f$ BEGIN IF OLD.state_id IS DISTINCT FROM NEW.state_id THEN "
+                "$f$ BEGIN IF OLD.state_id IS DISTINCT FROM NEW.state_id AND NOT "
+                "(OLD.state_id IN ('invitation','interview') AND "
+                "NEW.state_id IN ('invitation','interview')) THEN "
                 "INSERT INTO dlg_events(account, nid, old_state, new_state) "
                 "VALUES (NEW.account, NEW.nid, OLD.state_id, NEW.state_id); END IF; "
                 "RETURN NEW; END $f$ LANGUAGE plpgsql")
@@ -364,6 +366,8 @@ async def _sync_dialogs(account: str) -> int:
         for n in data.get("items", []):
             vac = n.get("vacancy") or {}
             sid = (n.get("state") or {}).get("id") or ""
+            if sid == "invitation":  # легаси-двойник interview (hh отдаёт то одно, то другое)
+                sid = "interview"
             emoji, label = _NEG_STATE.get(
                 sid, ("•", (n.get("state") or {}).get("name") or sid))
             rows.append((
@@ -719,6 +723,16 @@ def _source_health(account: str) -> list:
         out.append(row("Telegram-отклики", "down", "Telegram-сессия недоступна", sess_reason, h_sess))
     else:
         out.append(row("Telegram-отклики", *by_run(h_tc), h_tc))
+
+    # Локальная LLM (общая на всех). Без неё письма уходят шаблоном, а ответы работодателям
+    # не пишутся вовсе — 19.08–18.09.2026 это месяц шло молча при «ок» у всех источников.
+    h_llm = pgconn.read_health("llm", "_global")
+    if h_llm and h_llm.get("ts"):
+        if h_llm.get("ok"):
+            out.append(row("LLM (письма и ответы)", "ok", "работает", "", h_llm))
+        else:
+            out.append(row("LLM (письма и ответы)", "down", "LLM недоступна",
+                           (h_llm.get("detail") or "")[:80], h_llm))
     return out
 
 

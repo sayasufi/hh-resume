@@ -6,6 +6,7 @@
 """
 import os
 import sys
+from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # /app
 
@@ -22,10 +23,13 @@ def run():
             broken.append(s["src"])
             reason = s["label"] + (f" — {s['detail']}" if s.get("detail") else "")
             prio = pgconn.PRIORITY_HIGH if s["state"] == "down" else pgconn.PRIORITY_MED
+            # dedup по дню: раньше ключ был вечным (health:<src>) — об источнике алертило
+            # один раз за всё время, повторные падения проходили молча.
             pgconn.notify(
                 prio,
                 f"⚠️ Источник «{s['src']}»: {reason}. Проверь — иначе отклики по нему не идут.",
-                category="action", dedup_key=f"health:{s['src']}")
+                category="action",
+                dedup_key=f"health:{s['src']}:{date.today().isoformat()}")
     print(f"health[{account}]: " +
           ("проблемы — " + ", ".join(broken) if broken else "все источники ок"))
 

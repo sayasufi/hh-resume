@@ -19,6 +19,7 @@ from hh_applicant_tool.ai import ChatOpenAI
 from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
+from hh_applicant_tool.utils import dialog_rules as rules
 from hh_applicant_tool.utils.date import parse_api_datetime
 
 DRY = "--dry" in sys.argv
@@ -85,12 +86,71 @@ def _norm_cat(raw: str):
     return None
 
 
+_HOT_STATES = ("invitation", "interview")
+
+
+def _has_open_action(nid) -> bool:
+    """По этому чату уже есть невыполненное «Дело» — второе уведомление (напоминание
+    работодателя о той же анкете/демо) не шлём."""
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM action_items WHERE account=%s AND nid=%s AND NOT done "
+                        "LIMIT 1", (pgconn.get_account(), nid))
+            return cur.fetchone() is not None
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+async def light_mode(api: ApiClient) -> None:
+    """feat.reply выключен: владелец ведёт чаты сам, поэтому в переписку НЕ заходим (чтение
+    снимает «непрочитано»). Но о приглашениях сообщаем — по метаданным списка откликов,
+    иначе они тонули молча (у аккаунта с выключенным reply «Дел» не было с 18.08)."""
+    seen = pgconn.seen_keys("invite")
+    fresh, queued = [], 0
+    try:
+        for page in range(10):
+            r = await api.get("/negotiations", page=page, per_page=100, status="all",
+                              order_by="updated_at")
+            items = r.get("items") or []
+            stop = False
+            for n in items:
+                upd = parse_api_datetime(n["updated_at"])
+                if (datetime.now(upd.tzinfo) - upd).days > SCAN_DAYS:
+                    stop = True
+                    break
+                if (n.get("state") or {}).get("id") not in _HOT_STATES:
+                    continue
+                nid = str(n["id"])
+                if nid in seen:
+                    continue
+                v = n.get("vacancy") or {}
+                emp = (v.get("employer") or {}).get("name") or ""
+                if not DRY:
+                    pgconn.notify(
+                        pgconn.PRIORITY_HIGH,
+                        f"Приглашение: {v.get('name', '')} — {emp}. Ответь в чате.",
+                        category="interview",
+                        link=f"https://hh.ru/chat/{n.get('chat_id') or nid}",
+                        dedup_key=f"invite:{nid}",
+                    )
+                fresh.append(nid)
+                queued += 1
+            if stop or page + 1 >= r.get("pages", 0):
+                break
+    finally:
+        await api.aclose()
+    if fresh and not DRY:
+        pgconn.add_seen("invite", fresh)
+    print(f"notify_actions (без чтения чатов): приглашений в очередь {queued}")
+
+
 async def main():
-    # Чтение чата hh НЕОБРАТИМО снимает «непрочитано» (обратной операции у hh нет),
-    # поэтому лезем в переписку только если пользователь разрешил боту работать с чатами
-    # («Ответы работодателям»). Выключено -> вообще не заходим, «непрочитано» цело.
-    if not pgconn.feature_enabled("reply"):
-        print("feat.reply выключен — бот в чаты hh не заходит, пропуск notify_actions")
+    # Уведомления нужны, только если их доставляют (send-digest под feat.notify).
+    if not pgconn.feature_enabled("notify"):
+        print("feat.notify выключен — пропуск notify_actions")
         return
     cfg = pgconn.app_config()
     # Аккаунт без hh-токена (напр. служебный Telegram-краулер) — пропускаем мягко,
@@ -98,6 +158,18 @@ async def main():
     tok = cfg.get("token") or {}
     if not tok.get("access_token"):
         print("notify_actions: нет hh-токена — пропуск аккаунта", pgconn.get_account())
+        return
+    # Чтение чата hh НЕОБРАТИМО снимает «непрочитано» (обратной операции у hh нет),
+    # поэтому в переписку лезем, только если пользователь разрешил боту работать с чатами
+    # («Ответы работодателям»). Выключено -> лёгкий режим по метаданным, «непрочитано» цело.
+    if not pgconn.feature_enabled("reply"):
+        await light_mode(ApiClient(
+            access_token=tok["access_token"],
+            refresh_token=tok["refresh_token"],
+            access_expires_at=tok["access_expires_at"],
+            user_agent=generate_android_useragent(),
+            refresh_hook=pgconn.locked_token_refresh,
+        ))
         return
     oa = cfg.get("openai") or {}
     if not oa.get("token"):
@@ -175,6 +247,16 @@ async def main():
                     continue
                 if giga_active and GR_MARK_RE.search(last.get("text") or ""):
                     fresh_seen.append(key)  # ГР-приглашение: бот пройдёт сам, юзера не дёргаем
+                    continue
+                # Воронки «пройдите демо / получите оффер онлайн» (offer-job и т.п.) и авто-
+                # шаблоны hh — не «дела». Раньше каждое напоминание воронки давало новое дело.
+                if (rules.is_funnel_spam(last.get("text") or "")
+                        or rules.is_no_reply_needed(last.get("text") or "")):
+                    fresh_seen.append(key)
+                    continue
+                # По этому чату уже есть открытое «дело» — повторное напоминание не шлём.
+                if await asyncio.to_thread(_has_open_action, nid):
+                    fresh_seen.append(key)
                     continue
                 scanned += 1
                 q = (

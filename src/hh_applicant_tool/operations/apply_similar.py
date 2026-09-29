@@ -645,11 +645,11 @@ class Operation(BaseOperation):
         # LLM лежит -> письма молча уходят шаблоном (так было весь простой 19.08–18.09).
         if self._letter_ai_errors >= 3 and not self.dry_run:
             from ..storage import pgconn
-            pgconn.notify(
+            pgconn.notify_admins(  # инфраструктура — только владельцу системы
                 pgconn.PRIORITY_HIGH,
                 f"LLM недоступна — {self._letter_ai_errors} сопроводительных ушли шаблоном. "
                 "Проверь локальную LLM.",
-                category="action", dedup_key=f"llm_down_apply:{date.today().isoformat()}",
+                dedup_key=f"llm_down_apply:{date.today().isoformat()}",
             )
 
         print("📝 Отклики на вакансии разосланы!")

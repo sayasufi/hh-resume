@@ -439,9 +439,9 @@ class Operation(BaseOperation):
             msg = (f"LLM недоступна — бот не ответил работодателям в {stats['ai_error']} "
                    "чатах. Проверь локальную LLM или ответь сам.")
             print("🔴", msg)
-            if not self.dry_run:
-                pgconn.notify(pgconn.PRIORITY_HIGH, msg, category="action",
-                              dedup_key=f"llm_down:{date.today().isoformat()}")
+            if not self.dry_run:  # инфраструктура — только владельцу системы
+                pgconn.notify_admins(pgconn.PRIORITY_HIGH, msg,
+                                     dedup_key=f"llm_down:{date.today().isoformat()}")
 
     def _done(self, key: str) -> None:
         self._done_new.append(key)

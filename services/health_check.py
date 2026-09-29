@@ -32,6 +32,15 @@ def run():
                 dedup_key=f"health:{s['src']}:{date.today().isoformat()}")
     print(f"health[{account}]: " +
           ("проблемы — " + ", ".join(broken) if broken else "все источники ок"))
+    # Локальная LLM — инфраструктура, не «источник»: пользователям не показываем, а владельцу
+    # системы алертим (19.08–18.09.2026 она месяц лежала молча при «ок» у всех источников).
+    h = pgconn.read_health("llm", "_global")
+    if h and h.get("ts") and not h.get("ok"):
+        pgconn.notify_admins(
+            pgconn.PRIORITY_HIGH,
+            f"⚠️ LLM недоступна ({(h.get('detail') or '')[:80]}) — письма уходят шаблоном, "
+            "ответы работодателям стоят.",
+            dedup_key=f"health:llm:{date.today().isoformat()}")
 
 
 if __name__ == "__main__":

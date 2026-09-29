@@ -221,7 +221,7 @@ def _account_for_user(tg_user_id) -> str | None:
 
 
 # Админ: может смотреть/настраивать ЛЮБОЙ аккаунт. По tg_user_id (стабильно) + username.
-ADMIN_TG_IDS = {"5222335152"}
+ADMIN_TG_IDS = pgconn.ADMIN_TG_IDS
 
 
 def _is_admin(user: dict) -> bool:
@@ -723,16 +723,6 @@ def _source_health(account: str) -> list:
         out.append(row("Telegram-отклики", "down", "Telegram-сессия недоступна", sess_reason, h_sess))
     else:
         out.append(row("Telegram-отклики", *by_run(h_tc), h_tc))
-
-    # Локальная LLM (общая на всех). Без неё письма уходят шаблоном, а ответы работодателям
-    # не пишутся вовсе — 19.08–18.09.2026 это месяц шло молча при «ок» у всех источников.
-    h_llm = pgconn.read_health("llm", "_global")
-    if h_llm and h_llm.get("ts"):
-        if h_llm.get("ok"):
-            out.append(row("LLM (письма и ответы)", "ok", "работает", "", h_llm))
-        else:
-            out.append(row("LLM (письма и ответы)", "down", "LLM недоступна",
-                           (h_llm.get("detail") or "")[:80], h_llm))
     return out
 
 

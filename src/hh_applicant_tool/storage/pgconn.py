@@ -581,6 +581,29 @@ def notify(priority: int, text: str, category: str | None = None,
         conn.close()
 
 
+# Владелец системы (он же админ Mini App): ему — инфраструктурные алерты (LLM легла и т.п.),
+# обычным пользователям они ни к чему. По неизменяемому Telegram-id.
+ADMIN_TG_IDS = {"5222335152"}
+
+
+def admin_accounts() -> list[str]:
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT account FROM users WHERE tg_user_id::text = ANY(%s)",
+                        (list(ADMIN_TG_IDS),))
+            return [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def notify_admins(priority: int, text: str, dedup_key: str, category: str = "action",
+                  link: str | None = None) -> None:
+    """Уведомление только владельцу системы (dedup_key общий — одно на всех пользователей)."""
+    for acc in admin_accounts():
+        notify(priority, text, category=category, link=link, dedup_key=dedup_key, account=acc)
+
+
 # --- Телефон/шифрование/TG-api (без изменений) ---
 
 def _norm_phone(p) -> str:

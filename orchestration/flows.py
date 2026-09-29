@@ -25,6 +25,9 @@ JOBS: list[dict] = [
          feature="browse", cron="*/7 * * * *",   jitter=120,  tags=[],          timeout=180),
     dict(name="followup-stalled", command=["python", "/app/services/followup_stalled.py"],
          feature="reply",  cron="45 6-15/3 * * *",  jitter=200,  tags=[],          timeout=600),
+    # напоминания по горячим чатам: приглашение передано тебе, а ответа нет (3 ч / сутки / 3 дня)
+    dict(name="remind-handoffs", command=["python", "/app/services/remind_handoffs.py"],
+         feature="reply",  cron="35 6-18 * * *",    jitter=120,  tags=[],          timeout=600),
     dict(name="views-snapshot", command=["python", "/app/services/views_snapshot.py"],
          feature=None,     cron="7 * * * *",       jitter=120,  tags=[],          timeout=300),
     dict(name="apply-similar",  command=["python", "-m", "hh_applicant_tool", "apply-similar", "--order-by", "relevance"],

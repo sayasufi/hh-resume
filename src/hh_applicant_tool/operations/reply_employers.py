@@ -17,6 +17,7 @@ from ..ai import ChatOpenAI
 from ..storage import answer_bank
 from ..utils import answer_match as am
 from ..utils import dialog_rules as rules
+from ..utils import handoff
 from ..utils import prefs as cprefs
 from ..utils import tg_bot_api
 from ..utils.string import rand_text
@@ -520,6 +521,38 @@ class Operation(BaseOperation):
         print(f"🙋 Вопрос отправлен в Telegram: {question[:80]} ({link})")
         return True
 
+    async def _send_prep(self, negotiation: dict, placeholders: dict, invite_text: str,
+                         link: str) -> None:
+        """Приглашение передано тебе — сразу шпаргалка к разговору в Telegram (компания, что
+        им важно, твои кейсы, вероятные вопросы). Любой сбой — просто без шпаргалки."""
+        token = (self._app_cfg.get("telegram") or {}).get("token")
+        chat_id = self._app_cfg.get("tg_user_id")
+        if not (token and chat_id):
+            return
+        vacancy = negotiation.get("vacancy") or {}
+        prep = ""
+        try:
+            full = await self.api_client.get(f"/vacancies/{vacancy.get('id')}")
+            desc = " ".join(re.sub(r"<[^>]+>", " ", full.get("description") or "").split())
+            emp_desc = ""
+            if (emp_id := (full.get("employer") or {}).get("id")):
+                emp = await self.api_client.get(f"/employers/{emp_id}")
+                emp_desc = " ".join(re.sub(r"<[^>]+>", " ", emp.get("description") or "").split())
+            _oa = self._app_cfg.get("openai") or {}
+            if _oa.get("token"):
+                chat = ChatOpenAI(token=_oa["token"], model=_oa.get("model"),
+                                  completion_endpoint=_oa.get("completion_endpoint"),
+                                  system_prompt=handoff.PREP_SYS, temperature=0.3,
+                                  max_completion_tokens=700)
+                prep = await chat.send_message(
+                    f"ВАКАНСИЯ: {placeholders['vacancy_name']} ({placeholders['employer_name']})\n"
+                    f"{desc[:2500]}\n\nО КОМПАНИИ: {emp_desc[:800]}\n\n"
+                    f"РЕЗЮМЕ КАНДИДАТА:\n{(self.tool.config.get('resume_text') or '')[:3000]}")
+        except Exception as ex:
+            logger.warning("шпаргалка к %s не собрана: %r", negotiation.get("id"), ex)
+        tg_bot_api.send_message(token, chat_id, handoff.prep_card(
+            placeholders["vacancy_name"], placeholders["employer_name"], invite_text, prep, link))
+
     async def _load_messages(self, nid) -> list[dict]:
         """Первая страница + последняя (там свежие сообщения). Пустые (вложения) не выкидываем."""
         res = await self.api_client.get(f"/negotiations/{nid}/messages", page=0, per_page=100)
@@ -629,6 +662,7 @@ class Operation(BaseOperation):
                 )
                 pgconn.add_seen("handoff", [str(nid)])
                 self.handoff_seen.add(str(nid))
+                await self._send_prep(negotiation, placeholders, last_text, link)
             print(f"🔔 ИНТЕРВЬЮ -> эскалация тебе, бот молчит: {link}")
             return "interview"
         # Файл/вложение без текста (ТЗ, презентация) — бот его не видит.

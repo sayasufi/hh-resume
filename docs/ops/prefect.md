@@ -73,6 +73,23 @@ docker exec hh_orchestrator prefect deployment resume "dispatch/hh-apply-similar
 - **Алерты падений** → Telegram: хук `on_failure` кладёт 🔴-уведомление, доставит `send-digest`.
 - **Сервисы** (web/listener) — `restart: always`.
 
+## Выкладка кода
+
+Каталог на сервере — git-чекаут ветки `pg-async` (с 29.09.2026; раньше код копировался
+руками и расходился с репо). Выкладка — одной командой, после `git push`:
+
+```bash
+ssh ds1908 /var/www1/hh-applicant-tool/scripts/deploy.sh
+```
+
+Скрипт: fetch → стоп, если на сервере незакоммиченные правки → тесты новой ревизии в
+одноразовом контейнере → fast-forward → перезапуск только того, что держит код в памяти
+(`orchestration/` → hh-orchestrator, `web_app`/`webapp_static` → hh-web, `tg_connect_bot`
+→ hh-listener). Операции и `services/*` джобы берут с диска на следующем запуске.
+Изменения `Dockerfile`/`pyproject`/`docker-compose.yml` скрипт не пересобирает — только
+предупреждает. Откат: `git reset --hard <sha> && docker compose restart <сервисы>`.
+Править файлы прямо на сервере не нужно: `git status` сразу покажет расхождение.
+
 ## Откат отдельной задачи
 
 Если задача глючит: `prefect deployment pause "dispatch/hh-<job>"`. cron удалён, поэтому

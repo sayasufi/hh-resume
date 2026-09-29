@@ -116,9 +116,10 @@ services:
     networks:
       - default
 
-  # Зашифрованный канал к vLLM, который остался на l40s: ssh -L в socat-мост
-  # (hh_llm_bridge на l40s слушает только 127.0.0.1:18000 -> tpro-vllm:8000).
-  # Наружу не торчит ничего; ключ ограничен permitopen+from в authorized_keys.
+  # Зашифрованный канал к vLLM на b6000-2 (194.67.111.92; l40s 109.120.182.219 мёртв с ~09.2026,
+  # туннель 37 962 раза перезапускался в «Connection refused» — починено 18.09): ssh -L в socat-мост
+  # (hh_llm_bridge на b6000-2 слушает только 127.0.0.1:18000 -> tpro-vllm:8000; пользователь hhtunnel,
+  # ключ ограничен restrict,port-forwarding,permitopen+from=ds1908 в authorized_keys).
   llm-tunnel:
     container_name: hh_llm_tunnel
     image: hh_applicant_tool:latest
@@ -134,7 +135,7 @@ services:
       -o ServerAliveCountMax=3
       -o TCPKeepAlive=yes
       -L 0.0.0.0:18000:127.0.0.1:18000
-      ubuntu@109.120.182.219
+      hhtunnel@194.67.111.92
     volumes:
       - .:/app
       - /etc/localtime:/etc/localtime:ro

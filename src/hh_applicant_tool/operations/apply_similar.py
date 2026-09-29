@@ -16,6 +16,7 @@ from ..ai.base import AIError
 from ..api import BadResponse, Redirect, datatypes
 from ..api.datatypes import PaginatedItems, SearchVacancy
 from ..api.errors import ApiError, LimitExceeded
+from ..utils import cover_letter as cl
 from ..utils import prefs as cprefs
 from ..utils import search_queries as sq
 
@@ -43,6 +44,10 @@ FIT_SYS = (
 # Источник «поиск по запросам» (см. utils/search_queries.py): окно и глубина выдачи.
 SEARCH_PERIOD_DAYS = 14
 SEARCH_PAGES = 2  # по 100 вакансий на запрос; свежие — первыми
+# Бережно к hh (частые запросы подряд -> капча): не больше 8 поисковых запросов за прогон
+# и пауза между ними.
+SEARCH_MAX_REQUESTS = 8
+SEARCH_PAUSE_SEC = (1.5, 3.0)
 # Мягкий тайм-бюджет прогона: с AI-письмами 200 откликов не влезают в жёсткий kill
 # оркестратора (1800с) -> выходим ЧИСТО заранее, остаток добьётся часовыми прогонами.
 APPLY_MAX_RUNTIME_SEC = int(os.getenv("APPLY_MAX_RUNTIME_SEC", "1500"))
@@ -93,6 +98,8 @@ def _ensure_hh_apps_columns() -> None:
                 cur.execute("ALTER TABLE hh_apps ADD COLUMN IF NOT EXISTS title text")
                 # откуда вакансия: search (поиск по запросам) | similar (похожие hh)
                 cur.execute("ALTER TABLE hh_apps ADD COLUMN IF NOT EXISTS source text")
+                # сколько требований работодателя к отклику нашли в вакансии (0 — не было)
+                cur.execute("ALTER TABLE hh_apps ADD COLUMN IF NOT EXISTS reqs int")
             conn.commit()
         finally:
             conn.close()
@@ -223,6 +230,11 @@ class Operation(BaseOperation):
                 "кандидата, — одна фраза об этом. Общих слов про «подход компании» не пиши.\n"
                 "- Не пиши о своей готовности к формату, графику, занятости (part-time, проект), "
                 "переезду, оформлению и другим условиям — только об опыте.\n"
+                "- Если во входных данных есть блок «ТРЕБОВАНИЯ РАБОТОДАТЕЛЯ К ОТКЛИКУ» — это "
+                "главное: выполни каждое требование. На вопросы ответь по пунктам, коротко и "
+                "по фактам из резюме (опыта нет — честно так и напиши; ЗП и контакт — из данных "
+                "ниже); кодовое слово вставь дословно, «начните письмо с…» — начни ровно с этого. "
+                "Длина тогда до 1500 знаков, остальные правила сохраняются.\n"
                 "- Закончи простой фразой вроде «Готов рассказать подробнее» и подписью ТОЛЬКО "
                 "именем (без фамилии и отчества).\n"
                 "- Пиши просто, от первого лица. Не упоминай, что ты ИИ, без плейсхолдеров.\n"
@@ -519,6 +531,9 @@ class Operation(BaseOperation):
         )
         self._applied_titles: set[tuple[str, str]] = set()  # (employer_id, название) за прогон
         self._letter_ai_errors = 0
+        # Для ответов на требования работодателя в письме (если вакансия спрашивает ЗП/контакт)
+        self._pref_salary = ((tool.config.get("preferences") or {}).get("salary") or "")
+        self._tg_username = ((await tool.storage.settings.get_value("tg_username")) or "").strip()
         await asyncio.to_thread(_ensure_hh_apps_columns)
         # Дневной лимит откликов — per-user из settings (apply.max_per_day), дефолт 100
         mpd = await tool.storage.settings.get_value("apply.max_per_day")
@@ -714,6 +729,8 @@ class Operation(BaseOperation):
                 # и реально требующих письма (#21). Раньше этот запрос делался для
                 # каждой вакансии, в т.ч. пропущенной (has_test/archived/relations/…).
                 vacancy_description = ""
+                _reqs: list[str] = []          # требования работодателя к отклику
+                _codeword: str | None = None   # кодовое слово, которое просят указать
                 vacancy_requirements = ""
                 vacancy_responsibilities = ""
                 if vacancy.get("snippet"):
@@ -877,6 +894,11 @@ class Operation(BaseOperation):
                             full_vacancy = await self.api_client.get(
                                 f"/vacancies/{vacancy['id']}"
                             )
+                            # Что просят сделать в отклике (вопросы, кодовое слово) — из ПОЛНОГО
+                            # описания: такие просьбы обычно в конце, а в промпт идёт 2000 знаков.
+                            _reqs = cl.extract_requirements(
+                                cl.description_lines(full_vacancy.get("description") or ""))
+                            _codeword = cl.extract_codeword(_reqs)
                             if full_vacancy.get("description"):
                                 desc = re.sub(
                                     r"<[^>]+>", "", full_vacancy["description"]
@@ -1013,7 +1035,19 @@ class Operation(BaseOperation):
                             msg += f"{education_text}\n"
                         if resume_file_text:
                             msg += resume_file_text
-                        
+                        if _reqs:
+                            # Работодатель просит что-то в отклике — даём данные для ответа
+                            # (ЗП/контакт — только здесь, в обычное письмо их не пишем).
+                            msg += cl.requirements_block(_reqs)
+                            if self._pref_salary:
+                                msg += f"\nМои зарплатные ожидания: {self._pref_salary}"
+                            if self._tg_username:
+                                msg += f"\nМой Telegram: {self._tg_username}"
+                            if _codeword:
+                                msg += (f"\nКодовое слово: «{_codeword[0]}» — "
+                                        + ("начни письмо ровно с него." if _codeword[1]
+                                           else "вставь его дословно."))
+
                         logger.debug("Full name in prompt: %s", full_name)
                         logger.debug("prompt length: %d chars", len(msg))
                         try:
@@ -1025,9 +1059,13 @@ class Operation(BaseOperation):
                                 logger.debug("письмо с клише %s — перегенерирую", _bad)
                                 _retry = await self.openai_chat.send_message(
                                     _prompt + "\n\nНЕ используй: " + ", ".join(_bad)
-                                    + ". Начни с «Здравствуйте!» и сразу с факта из опыта.")
+                                    + ". Начни сразу с факта из опыта.")
                                 if len(_letter_cliches(_retry)) < len(_bad):
                                     msg = _retry
+                            msg = cl.ensure_codeword(msg, _codeword)
+                            if _reqs:
+                                logger.info("Письмо с учётом требований работодателя (%d): %s",
+                                            len(_reqs), vacancy.get("alternate_url"))
                         except AIError as ex:
                             self._letter_ai_errors += 1
                             logger.warning(
@@ -1081,13 +1119,14 @@ class Operation(BaseOperation):
                             with _conn.cursor() as _cur:
                                 _cur.execute(
                                     "INSERT INTO hh_apps(account, vacancy_id, resume_id, "
-                                    "used_ai, letter_len, model, employer_id, title, source) "
-                                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                                    "used_ai, letter_len, model, employer_id, title, source, reqs) "
+                                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                                     "ON CONFLICT(account, vacancy_id) DO NOTHING",
                                     (pgconn.get_account(), int(vacancy_id),
                                      self.resume_id, bool(self.openai_chat),
                                      len(params.get("message", "")), "",
-                                     _emp_id or None, vacancy.get("name") or None, source),
+                                     _emp_id or None, vacancy.get("name") or None, source,
+                                     len(_reqs)),
                                 )
                             _conn.commit()
                             _conn.close()
@@ -1238,8 +1277,15 @@ class Operation(BaseOperation):
         if self.allowed_areas:
             base["area"] = sorted(self.allowed_areas)
         found: dict[str, SearchVacancy] = {}
+        budget = SEARCH_MAX_REQUESTS
+        # первая страница каждого запроса важнее вторых: при многих запросах — по одной
+        pages = SEARCH_PAGES if len(queries) * SEARCH_PAGES <= budget else 1
         for q in queries:
-            for page in range(SEARCH_PAGES):
+            for page in range(pages):
+                if budget <= 0:
+                    break
+                budget -= 1
+                await asyncio.sleep(random.uniform(*SEARCH_PAUSE_SEC))
                 try:
                     res = await self.api_client.get("/vacancies", {**base, "text": q, "page": page})
                 except ApiError as ex:

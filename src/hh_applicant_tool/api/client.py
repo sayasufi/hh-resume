@@ -195,6 +195,28 @@ class OAuthClient(BaseClient):
         )
 
 
+def _notify_captcha(ex: errors.CaptchaRequired) -> None:
+    """hh требует капчу: зовём человека — 🔴 уведомление со ссылкой в Telegram (не чаще раза
+    в час). Сами капчу не решаем: её проходит владелец аккаунта в своём браузере.
+    Раньше ссылка уходила только в лог, и джобы по аккаунту вставали молча."""
+    try:
+        from datetime import datetime
+
+        from ..storage import pgconn
+        url = ex.captcha_url
+        if not url:
+            return
+        pgconn.notify(
+            pgconn.PRIORITY_HIGH,
+            "hh просит пройти капчу — пока не пройдёшь, отклики и ответы по аккаунту могут "
+            "вставать. Открой ссылку в браузере, где ты вошёл в hh.",
+            category="action", link=url,
+            dedup_key=f"captcha:{datetime.now():%Y-%m-%d-%H}",
+        )
+    except Exception as e:  # уведомление — best-effort, исходную ошибку не маскируем
+        logger.debug("captcha notify failed: %r", e)
+
+
 @dataclass
 class ApiClient(BaseClient):
     access_token: str | None = None
@@ -254,6 +276,9 @@ class ApiClient(BaseClient):
 
         try:
             return await do_request()
+        except errors.CaptchaRequired as ex:
+            _notify_captcha(ex)
+            raise
         except errors.Forbidden as ex:
             if not self.is_access_expired or not self.refresh_token:
                 raise ex

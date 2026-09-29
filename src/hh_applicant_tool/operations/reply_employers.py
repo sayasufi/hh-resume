@@ -13,8 +13,12 @@ from ..api import ApiError, datatypes
 from ..main import BaseNamespace, BaseOperation
 from ..storage import pgconn
 from ..utils.date import parse_api_datetime
+from ..ai import ChatOpenAI
+from ..storage import answer_bank
+from ..utils import answer_match as am
 from ..utils import dialog_rules as rules
 from ..utils import prefs as cprefs
+from ..utils import tg_bot_api
 from ..utils.string import rand_text
 
 # Классификатор хэндоффа: приглашение на ЖИВОЙ разговор с человеком -> человеку.
@@ -338,6 +342,17 @@ class Operation(BaseOperation):
             tool.get_openai_chat(HANDOFF_SYS) if args.use_ai else None
         )
         self.handoff_seen = pgconn.seen_keys("handoff")
+        # База ответов кандидата: на уже отвеченный им по смыслу вопрос бот отвечает сам.
+        self._account = pgconn.get_account()
+        self._app_cfg = pgconn.app_config()
+        self._bank = answer_bank.list_answers(self._account)
+        _oa = self._app_cfg.get("openai") or {}
+        self.bank_chat = (
+            ChatOpenAI(token=_oa["token"], model=_oa.get("model"),
+                       completion_endpoint=_oa.get("completion_endpoint"),
+                       system_prompt=am.MATCH_SYS, temperature=0, max_completion_tokens=8)
+            if (args.use_ai and _oa.get("token")) else None
+        )
         # Смотрим чаты status=all (не только active: вопрос мог прийти в архивный отклик),
         # отсортированные по свежести, до чатов старше period дней (дефолт 21).
         self.period = args.period or DEFAULT_PERIOD_DAYS
@@ -441,6 +456,69 @@ class Operation(BaseOperation):
         if not self.dry_run:
             pgconn.notify(pgconn.PRIORITY_HIGH, text, category="question", link=link,
                           dedup_key=key)
+
+    async def _ask_candidate(self, nid, last: dict, question: str, placeholders: dict,
+                             link: str, ask_key: str, reason: str, applicant_texts: list[str],
+                             yes_no: bool) -> str:
+        """Вопрос, на который отвечает только кандидат. Уже отвечал на такой же по смыслу —
+        отвечаем из базы ответов сами; иначе — вопрос в Telegram (кнопки Да/Нет или реплай),
+        а без Telegram — прежнее уведомление в дайджест."""
+        reply = await self._from_bank(question, yes_no, applicant_texts)
+        if reply:
+            if self.dry_run:
+                print(f"🧪 dry-run {nid} из базы ответов: {reply[:200]}")
+                return "bank"
+            await self.api_client.post(f"/negotiations/{nid}/messages", message=reply,
+                                       delay=random.uniform(1, 3))
+            pgconn.bump_activity("reply", 1)
+            print(f"📚 Ответ из базы ответов в чат {nid}: {reply[:80]}")
+            return "bank"
+        if not self.dry_run and self._send_question(nid, last, question, placeholders, link,
+                                                    yes_no):
+            return "tg"
+        self._ask(placeholders, link, ask_key, reason, question)
+        return "notify"
+
+    async def _from_bank(self, question: str, yes_no: bool,
+                         applicant_texts: list[str]) -> str | None:
+        if not (self._bank and self.bank_chat and question):
+            return None
+        try:
+            raw = await self.bank_chat.send_message(am.build_match_query(question, self._bank))
+        except AIError:
+            return None
+        hit = am.parse_match(raw, self._bank)
+        reply = am.reply_from_bank(hit["answer"], yes_no) if hit else None
+        # этот же ответ уже уходил в чат (анкета его не приняла) — не зацикливаемся, зовём человека
+        if not reply or reply.strip() in {t.strip() for t in applicant_texts}:
+            return None
+        if not self.dry_run:
+            answer_bank.bump_used(hit["id"])
+        return reply
+
+    def _send_question(self, nid, last: dict, question: str, placeholders: dict, link: str,
+                       yes_no: bool) -> bool:
+        """Вопрос в личку кандидату через общего бота; ответ примет tg_connect_bot."""
+        token = (self._app_cfg.get("telegram") or {}).get("token")
+        chat_id = self._app_cfg.get("tg_user_id")
+        if not (token and chat_id):
+            return False
+        pid = answer_bank.create_pending(
+            self._account, nid, last.get("id"), question, placeholders["vacancy_name"],
+            placeholders["employer_name"], link, yes_no)
+        if pid is None:
+            return True  # этот вопрос уже задан кандидату — не дублируем
+        mid = tg_bot_api.send_message(
+            token, chat_id,
+            am.question_card(question, placeholders["vacancy_name"],
+                             placeholders["employer_name"], link, yes_no),
+            am.question_keyboard(pid, yes_no))
+        if not mid:
+            answer_bank.close_pending(pid, "failed")
+            return False
+        answer_bank.set_tg_msg(pid, mid)
+        print(f"🙋 Вопрос отправлен в Telegram: {question[:80]} ({link})")
+        return True
 
     async def _load_messages(self, nid) -> list[dict]:
         """Первая страница + последняя (там свежие сообщения). Пустые (вложения) не выкидываем."""
@@ -563,18 +641,21 @@ class Operation(BaseOperation):
             self._done(done_key)
             return "no_reply_needed"
         questionnaire = rules.is_hh_questionnaire(employer_texts)
+        yes_no_q = questionnaire and rules.is_yes_no_question(last_text)
         # Анкета hh повторила вопрос сразу после нашего ответа: текстом она его не принимает.
         if self._answer_rejected(text_msgs, last_text):
-            self._ask(placeholders, link, ask_key,
-                      "анкета hh не принимает ответ текстом, ответь сам", last_text)
+            out = await self._ask_candidate(
+                nid, last, last_text, placeholders, link, ask_key,
+                "анкета hh не принимает ответ текстом, ответь сам", applicant_texts, yes_no_q)
             self._done(done_key)
-            return "rejected"
+            return f"rejected/{out}"
         # Условия оформления, СВО, работа за долю и т.п. — решает только кандидат.
         if rules.is_sensitive(last_text):
-            self._ask(placeholders, link, ask_key, "вопрос, на который отвечаешь только ты",
-                      last_text)
+            out = await self._ask_candidate(
+                nid, last, last_text, placeholders, link, ask_key,
+                "вопрос, на который отвечаешь только ты", applicant_texts, yes_no_q)
             self._done(done_key)
-            return "sensitive"
+            return f"sensitive/{out}"
         # Анти-петля «бот против бота» (работодатель-бот повторяет один и тот же текст).
         if employer_texts.count(last_text) >= 3 and len(applicant_texts) >= 3:
             if not self.dry_run:
@@ -624,11 +705,15 @@ class Operation(BaseOperation):
                 return "skip"
             if verdict != "ok":
                 logger.warning("reply %s -> человеку (%s): %.200s", nid, verdict, send_message)
-                self._ask(placeholders, link, ask_key,
-                          "бот не смог ответить сам" if verdict in ("bad", "fix")
-                          else "вопрос, на который отвечаешь только ты", last_text)
+                if verdict == "ask":  # вопрос о решении кандидата — база ответов / Telegram
+                    out = await self._ask_candidate(
+                        nid, last, last_text, placeholders, link, ask_key,
+                        "вопрос, на который отвечаешь только ты", applicant_texts, yes_no)
+                else:
+                    self._ask(placeholders, link, ask_key, "бот не смог ответить сам", last_text)
+                    out = "ask"
                 self._done(done_key)
-                return "ask"
+                return f"ask/{out}"
         else:
             send_message = self._interactive(negotiation, placeholders, history, resume)
             if send_message is None:

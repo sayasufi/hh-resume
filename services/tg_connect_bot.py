@@ -6,6 +6,7 @@ aiogram — бот-сторона; Telethon — user-сессия (qr_login). 2F
 Запуск (watchdog/startup): HH_DB_SCHEMA=u_egor python tg_connect_bot.py
 """
 import asyncio
+import html
 import io
 import json
 import re
@@ -14,7 +15,7 @@ import time
 import psycopg
 import qrcode
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command
+from aiogram.filters import Command, Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -23,6 +24,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    LinkPreviewOptions,
     KeyboardButton,
     MenuButtonWebApp,
     Message,
@@ -41,6 +43,9 @@ from telethon.errors import (
 )
 from telethon.sessions import StringSession
 
+from hh_applicant_tool.api.client import ApiClient
+from hh_applicant_tool.api.user_agent import generate_android_useragent
+from hh_applicant_tool.storage import answer_bank as ab
 from hh_applicant_tool.storage import pgconn
 
 API_ID, API_HASH = pgconn.tg_api()
@@ -117,7 +122,8 @@ HELP_TEXT = (
     "<b>Команды:</b>\n"
     "/start — открыть кабинет / привязать профиль по номеру\n"
     "/addaccount — привязать аккаунт: hh (логин+пароль), GetMatch (код) или Habr (email+пароль)\n"
-    "/connect — дать доступ к Telegram для авто-функций (интервью, коды GetMatch)\n\n"
+    "/connect — дать доступ к Telegram для авто-функций (интервью, коды GetMatch)\n"
+    "/answers — база твоих ответов на вопросы работодателей (можно удалить лишнее)\n\n"
     "Важное (интервью, контакты работодателей) приходит автоматически "
     "дайджестом 🔴🟡🟢."
 )
@@ -947,6 +953,128 @@ async def cb_help(cq: CallbackQuery):
     await cq.message.answer(HELP_TEXT, parse_mode="HTML")
 
 
+# --- база ответов: вопрос работодателя -> ответ кандидата кнопкой или реплаем ---
+# Вопросы присылает reply-employers (utils/answer_match.question_card). Ответ сразу уходит
+# работодателю в чат hh и запоминается: на такой же вопрос дальше бот ответит сам.
+
+async def _send_to_employer(pending: dict, answer: str) -> str | None:
+    """Ответ кандидата -> в чат hh. Без рефреша токена: этот бот общий и живёт под чужим
+    HH_ACCOUNT, а locked_token_refresh пишет токен в аккаунт процесса (свежесть токенов
+    держит джоба refresh-token). None — отправлено, иначе причина ошибки."""
+    tok = pgconn.app_config(pending["account"]).get("token") or {}
+    if not tok.get("access_token"):
+        return "нет hh-токена"
+    api = ApiClient(access_token=tok["access_token"], refresh_token=None,
+                    access_expires_at=tok.get("access_expires_at", 0),
+                    user_agent=generate_android_useragent())
+    try:
+        await api.post(f"/negotiations/{pending['nid']}/messages", message=answer)
+        return None
+    except Exception as e:
+        return type(e).__name__
+    finally:
+        await api.aclose()
+
+
+def _accept_answer(pending: dict, answer: str) -> None:
+    ab.add_answer(pending["account"], pending["question"], answer)
+    ab.close_pending(pending["id"], "answered", answer)
+
+
+async def _edit_question(cq: CallbackQuery, suffix: str) -> None:
+    try:
+        await cq.message.edit_text((cq.message.html_text or "") + "\n\n" + suffix,
+                                   parse_mode="HTML",
+                                   link_preview_options=LinkPreviewOptions(is_disabled=True))
+    except Exception as e:
+        print("edit question:", repr(e)[:80])
+
+
+@dp.callback_query(F.data.startswith("qa:"))
+async def cb_question_answer(cq: CallbackQuery):
+    try:
+        _, pid, act = cq.data.split(":")
+        pending = ab.get_pending(int(pid))
+    except Exception:
+        await cq.answer("Не понял кнопку")
+        return
+    acc = _account_by("tg_user_id", cq.from_user.id)
+    if not pending or pending["account"] != acc:
+        await cq.answer("Вопрос не найден", show_alert=True)
+        return
+    if pending["status"] != "open":
+        await cq.answer("На этот вопрос уже ответили")
+        return
+    if act == "skip":
+        ab.close_pending(pending["id"], "dismissed")
+        await cq.answer("Пропустил")
+        await _edit_question(cq, "⏭ Пропущено — отвечать не буду.")
+        return
+    answer = "Да" if act == "yes" else "Нет"
+    err = await _send_to_employer(pending, answer)
+    if err:
+        await cq.answer("Не отправилось", show_alert=True)
+        await _edit_question(cq, f"⚠️ Не смог отправить ({html.escape(err)}) — ответь в чате сам.")
+        return
+    _accept_answer(pending, answer)
+    await cq.answer("Отправил")
+    await _edit_question(cq, f"✅ Отправил: «{answer}». Запомнил — на такой же вопрос дальше отвечу сам.")
+
+
+class _PendingReply(Filter):
+    """Реплай кандидата на наше сообщение-вопрос (по message_id в pending_questions)."""
+
+    async def __call__(self, message: Message):
+        r = message.reply_to_message
+        if not (r and message.text and message.from_user):
+            return False
+        acc = _account_by("tg_user_id", message.from_user.id)
+        pending = ab.pending_by_tg(acc, r.message_id) if acc else None
+        return {"pending": pending} if pending else False
+
+
+@dp.message(_PendingReply())
+async def on_question_reply(message: Message, pending: dict):
+    if pending["status"] != "open":
+        await message.reply("На этот вопрос уже ответили.")
+        return
+    answer = message.text.strip()[:1000]
+    err = await _send_to_employer(pending, answer)
+    if err:
+        await message.reply(f"⚠️ Не смог отправить ({err}) — ответь в чате сам: {pending['link']}")
+        return
+    _accept_answer(pending, answer)
+    await message.reply("✅ Отправил работодателю и запомнил — на такой же вопрос дальше отвечу сам.")
+
+
+@dp.message(Command("answers"))
+async def cmd_answers(message: Message):
+    acc = _account_by("tg_user_id", message.from_user.id)
+    if not acc:
+        await message.answer("Сначала привяжи профиль: /start")
+        return
+    items = ab.list_answers(acc)
+    if not items:
+        await message.answer(
+            "База ответов пуста. Когда работодатель спросит то, на что отвечаешь только ты, "
+            "пришлю вопрос — ответишь один раз, и дальше я отвечу сам.")
+        return
+    for a in items[-30:]:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="🗑 Удалить", callback_data=f"ab:del:{a['id']}")]])
+        await message.answer(f"«{html.escape(a['question'][:300])}»\n→ {html.escape(a['answer'][:300])}",
+                             reply_markup=kb, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("ab:del:"))
+async def cb_answer_delete(cq: CallbackQuery):
+    acc = _account_by("tg_user_id", cq.from_user.id)
+    ok = bool(acc) and ab.delete_answer(acc, int(cq.data.split(":")[2]))
+    await cq.answer("Удалил" if ok else "Не нашёл")
+    if ok:
+        await _edit_question(cq, "🗑 Удалено — так больше отвечать не буду.")
+
+
 async def main():
     token = (pgconn.app_config().get("telegram") or {}).get("token")
     if not token:
@@ -957,6 +1085,7 @@ async def main():
         BotCommand(command="start", description="Открыть кабинет / привязать профиль"),
         BotCommand(command="addaccount", description="Привязать аккаунт (hh / GetMatch)"),
         BotCommand(command="connect", description="Дать доступ к Telegram (для авто-функций)"),
+        BotCommand(command="answers", description="Мои ответы на вопросы работодателей"),
         BotCommand(command="help", description="Помощь"),
     ])
     try:

@@ -30,20 +30,26 @@ DEFAULT_TITLE_STOP = (
 # уплывает: 27.09.2026 у backend-разработчика 49 из 52 откликов ушли в продажи, плюс PHP/1С/iOS.
 # Стоп-слова по названию ловят только очевидное; стек и профессию решает этот фильтр.
 FIT_SYS = (
-    "Ты фильтр вакансий для соискателя. По профилю кандидата и вакансии ответь ОДНИМ словом: "
-    "ДА или НЕТ.\n"
-    "НЕТ — если вакансия относится к ДРУГОЙ профессии, чем у кандидата (например, продажи, "
-    "работа с клиентами, колл-центр, поддержка пользователей, маркетинг, SMM, рекрутинг, "
-    "преподавание, авторство курсов/контента — для инженера, разработчика или аналитика), ИЛИ "
-    "требует другого ОСНОВНОГО стека/специализации, которых нет в профиле (например, PHP, 1С, "
-    "Java, C#, iOS, Unity, C++, embedded для Python/Go-бэкендера; программист или консультант 1С "
-    "для аналитика данных).\n"
-    "ДА — если профессия та же или смежная и основной стек/направление совпадает хотя бы "
-    "частично. Смежные специализации внутри одной профессии — это ДА, а не другая профессия: "
-    "аналитик данных ↔ системный / продуктовый / BI / финансовый аналитик, data scientist, "
-    "data engineer; backend ↔ platform / devops / SRE / data / ML / AI engineer. "
-    "Если сомневаешься — ДА."
+    "По названию вакансии определи, в той ли она УКРУПНЁННОЙ профессии, что и кандидат. "
+    "Укрупнённые профессии:\n"
+    "А) разработка и инженерия ПО: backend, frontend, fullstack, devops, SRE, platform, "
+    "data engineer, ML/AI engineer, архитектор, техлид;\n"
+    "Б) аналитика: аналитик данных, BI, продуктовый, системный, бизнес-, финансовый, "
+    "маркетинговый аналитик, data scientist, data engineer;\n"
+    "В) управление IT-проектами и продуктом;\n"
+    "Г) всё остальное: продажи, работа с клиентами, поддержка, маркетинг/SMM, рекрутинг, "
+    "преподавание, администрирование сетей/железа/СУБД, не-IT.\n"
+    "Ответь ОДНИМ словом: ДА — если вакансия в той же укрупнённой профессии, что и кандидат "
+    "(грейд, отрасль, домен и конкретный стек не важны); НЕТ — если в другой. "
+    "Сомневаешься — ДА."
 )
+# Чужая экосистема по НАЗВАНИЮ вакансии — детерминированно, без LLM (LLM на пограничных
+# случаях нестабильна: «Системный аналитик» у одних компаний проходил, у других нет).
+# Отсекаем, только если этого стека нет в профиле кандидата.
+FOREIGN_STACK = re.compile(
+    r"(?<![\w])(?:1[сc]|php|laravel|symfony|bitrix|битрикс|java(?!\s*script)|kotlin|c#|\.net|"
+    r"ios|android|swift|flutter|unity|unreal|c\+\+|embedded|встраиваем\w*|cognos|sap|dba|"
+    r"ms\s*sql|администратор\s+баз)(?![\w+#])", re.I)
 # Источник «поиск по запросам» (см. utils/search_queries.py): окно и глубина выдачи.
 SEARCH_PERIOD_DAYS = 14
 SEARCH_PAGES = 2  # по 100 вакансий на запрос; свежие — первыми
@@ -84,10 +90,6 @@ def _letter_cliches(text: str) -> list[str]:
 
 def _norm_title(name: str) -> str:
     return " ".join((name or "").lower().split())
-
-
-def _strip_tags(s: str | None) -> str:
-    return " ".join(re.sub(r"<[^>]+>", " ", s or "").split())
 
 
 def _ensure_hh_apps_columns() -> None:
@@ -719,6 +721,8 @@ class Operation(BaseOperation):
         self._full_resume = full_resume
         self._resume_file_content = resume_file_content
         self._profile_text = self._build_profile(resume, full_resume, resume_file_content)
+        # стеки из «чужого» списка, которые у кандидата ЕСТЬ (тем же regex: JavaScript ≠ Java)
+        self._profile_stacks = {m.lower() for m in FOREIGN_STACK.findall(self._profile_text)}
 
         do_apply = True
 
@@ -1381,22 +1385,20 @@ class Operation(BaseOperation):
         vid = str(vacancy.get("id"))
         if vid in self._fit_no:
             return False
-        snippet = vacancy.get("snippet") or {}
-        roles = ", ".join(r.get("name", "") for r in vacancy.get("professional_roles") or [])
-        query = (
-            f"КАНДИДАТ:\n{self._profile_text}\n\n"
-            f"ВАКАНСИЯ: {vacancy.get('name') or ''}\n"
-            f"Компания: {(vacancy.get('employer') or {}).get('name') or ''}\n"
-            + (f"Проф. роль: {roles}\n" if roles else "")
-            + f"Требования: {_strip_tags(snippet.get('requirement'))[:400]}\n"
-            f"Обязанности: {_strip_tags(snippet.get('responsibility'))[:400]}"
-        )
-        try:
-            ans = (await self.fit_chat.send_message(query)).strip().upper()
-        except AIError as ex:
-            logger.debug("fit-check недоступен (%s) — пропускаю в отклик", ex)
-            return True
-        if ans.startswith(("НЕТ", "NO")):
+        title = vacancy.get("name") or ""
+        foreign = FOREIGN_STACK.search(title)
+        if foreign and foreign.group(0).lower() not in self._profile_stacks:
+            reject = True  # чужая экосистема в названии (1С, PHP, Java…), которой нет в резюме
+        else:
+            # Только название: требования/компания/роль сбивали модель на смежных ролях.
+            query = f"КАНДИДАТ:\n{self._profile_text}\n\nВАКАНСИЯ: {title}"
+            try:
+                ans = (await self.fit_chat.send_message(query)).strip().upper()
+            except AIError as ex:
+                logger.debug("fit-check недоступен (%s) — пропускаю в отклик", ex)
+                return True
+            reject = ans.startswith(("НЕТ", "NO"))
+        if reject:
             from ..storage import pgconn
             self._fit_no.add(vid)
             await asyncio.to_thread(pgconn.add_seen, "fit_no", vid)

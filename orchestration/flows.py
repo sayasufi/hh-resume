@@ -13,8 +13,8 @@ from .runner import run_op
 from .targets import active_targets
 
 JOBS: list[dict] = [
-    # Cron — в UTC (МСК = UTC+3). Всё, что ПИШЕТ работодателям (apply/reply/followup), держим
-    # в 09:00–21:59 МСК: сообщения в час ночи выдают бота.
+    # Cron — в UTC (МСК = UTC+3). Всё, что ПИШЕТ работодателям, — днём: ответы и фоллоуапы
+    # 09:00–21:59 МСК, отклики 08:00–21:59 (сообщения в час ночи выдают бота).
     dict(name="refresh-token",  command=["python", "-m", "hh_applicant_tool", "refresh-token"],
          feature=None,     cron="* * * * *",        jitter=0,    tags=[],          timeout=120),
     dict(name="update-resumes", command=["python", "-m", "hh_applicant_tool", "update-resumes"],
@@ -31,7 +31,7 @@ JOBS: list[dict] = [
     dict(name="views-snapshot", command=["python", "/app/services/views_snapshot.py"],
          feature=None,     cron="7 * * * *",       jitter=120,  tags=[],          timeout=300),
     dict(name="apply-similar",  command=["python", "-m", "hh_applicant_tool", "apply-similar", "--order-by", "relevance"],
-         feature="apply",  cron="0 6-17 * * *",     jitter=300,  tags=["llm"],     timeout=1800),
+         feature="apply",  cron="0 5-18 * * *",     jitter=300,  tags=["llm"],     timeout=1800),
     dict(name="notify-actions", command=["python", "/app/services/notify_actions.py"],
          feature="notify", cron="20 5-19 * * *",    jitter=120,  tags=["llm"],     timeout=900),
     # авто-заполнение внешних анкет/форм из «Дел» (Playwright + LLM). LIVE: реально отправляет.

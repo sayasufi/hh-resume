@@ -39,7 +39,10 @@ FIT_SYS = (
     "Java, C#, iOS, Unity, C++, embedded для Python/Go-бэкендера; программист или консультант 1С "
     "для аналитика данных).\n"
     "ДА — если профессия та же или смежная и основной стек/направление совпадает хотя бы "
-    "частично. Если сомневаешься — ДА."
+    "частично. Смежные специализации внутри одной профессии — это ДА, а не другая профессия: "
+    "аналитик данных ↔ системный / продуктовый / BI / финансовый аналитик, data scientist, "
+    "data engineer; backend ↔ platform / devops / SRE / data / ML / AI engineer. "
+    "Если сомневаешься — ДА."
 )
 # Источник «поиск по запросам» (см. utils/search_queries.py): окно и глубина выдачи.
 SEARCH_PERIOD_DAYS = 14
@@ -107,24 +110,41 @@ def _ensure_hh_apps_columns() -> None:
         logger.debug("hh_apps: колонки не добавлены: %r", ex)
 
 
-def _already_applied_same(employer_id: str, title: str, vacancy_id) -> bool:
-    """Уже откликались на вакансию с тем же названием у того же работодателя (перевыложенная
-    вакансия или дубль): раньше одному работодателю уходило по 3–4 одинаковых отклика."""
+def _salary_key(vacancy: dict) -> tuple[int, int]:
+    """Вилка как её хранит модель вакансии (пустая сторона = другая сторона, нет ЗП = 0)."""
+    s = vacancy.get("salary") or {}
+    lo, hi = s.get("from"), s.get("to")
+    return int(lo or hi or 0), int(hi or lo or 0)
+
+
+def _already_applied_same(employer_id: str, title: str, vacancy: dict) -> bool:
+    """Перевыложенная вакансия: тот же работодатель, название, город и вилка, на которую уже
+    откликались за 30 дней. Только название не годится: у агентств (Selecty, Aston) и
+    крупных компаний «Аналитик данных» — это разные клиенты/команды, и такой дедуп
+    29.09–01.10 срезал заметную часть откликов."""
     from ..storage import pgconn
     try:
+        sf, st = _salary_key(vacancy)
+        area = (vacancy.get("area") or {}).get("id")
         conn = pgconn.connect()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT 1 FROM hh_apps WHERE account=%s AND employer_id=%s AND "
-                    "lower(regexp_replace(title, '\\s+', ' ', 'g'))=%s "
-                    "AND created_at > now() - interval '60 days' "
-                    "UNION ALL "
-                    "SELECT 1 FROM negotiations n JOIN vacancies v ON v.id=n.vacancy_id "
-                    "WHERE n.account=%s AND n.employer_id=%s AND n.vacancy_id<>%s AND "
-                    "lower(regexp_replace(v.name, '\\s+', ' ', 'g'))=%s LIMIT 1",
-                    (pgconn.get_account(), str(employer_id), title,
-                     pgconn.get_account(), int(employer_id), int(vacancy_id), title),
+                    "SELECT 1 FROM ("
+                    "  SELECT vacancy_id, created_at FROM hh_apps"
+                    "   WHERE account=%(a)s AND employer_id=%(e)s"
+                    "  UNION ALL"
+                    "  SELECT vacancy_id, created_at FROM negotiations"
+                    "   WHERE account=%(a)s AND employer_id::text=%(e)s"
+                    ") x JOIN vacancies v ON v.id = x.vacancy_id"
+                    " WHERE x.vacancy_id <> %(vid)s"
+                    "   AND x.created_at > now() - interval '30 days'"
+                    "   AND lower(regexp_replace(v.name, '\\s+', ' ', 'g')) = %(t)s"
+                    "   AND v.area_id IS NOT DISTINCT FROM %(area)s"
+                    "   AND coalesce(v.salary_from, 0) = %(sf)s AND coalesce(v.salary_to, 0) = %(st)s"
+                    " LIMIT 1",
+                    {"a": pgconn.get_account(), "e": str(employer_id), "vid": int(vacancy["id"]),
+                     "t": title, "area": int(area) if area else None, "sf": sf, "st": st},
                 )
                 return cur.fetchone() is not None
         finally:
@@ -529,7 +549,7 @@ class Operation(BaseOperation):
                        system_prompt=sq.QUERY_SYS, temperature=0.2, max_completion_tokens=200)
             if (args.use_ai and self.search_source and _oa.get("token")) else None
         )
-        self._applied_titles: set[tuple[str, str]] = set()  # (employer_id, название) за прогон
+        self._applied_titles: set[tuple] = set()  # (работодатель, название, город, вилка) за прогон
         self._letter_ai_errors = 0
         # Для ответов на требования работодателя в письме (если вакансия спрашивает ЗП/контакт)
         self._pref_salary = ((tool.config.get("preferences") or {}).get("salary") or "")
@@ -857,11 +877,12 @@ class Operation(BaseOperation):
                     continue
 
                 _emp_id = str(employer.get("id") or "")
-                _title_key = (_emp_id, _norm_title(vacancy.get("name") or ""))
+                _title_key = (_emp_id, _norm_title(vacancy.get("name") or ""),
+                              str((vacancy.get("area") or {}).get("id")), _salary_key(vacancy))
                 if _emp_id and (
                     _title_key in self._applied_titles
                     or await asyncio.to_thread(
-                        _already_applied_same, _emp_id, _title_key[1], vacancy_id)
+                        _already_applied_same, _emp_id, _title_key[1], vacancy)
                 ):
                     logger.warning("Пропуск дубля: уже откликались на «%s» (%s)",
                                    vacancy.get("name"), employer.get("name"))

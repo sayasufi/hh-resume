@@ -14,6 +14,8 @@ from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.ai import ChatOpenAI
 from hh_applicant_tool.storage import pgconn
+from hh_applicant_tool.operations import apply_similar as AS
+from hh_applicant_tool.utils import prefs as cprefs
 
 APPLY = "--apply" in sys.argv
 LIMIT = int(sys.argv[sys.argv.index("--limit") + 1]) if "--limit" in sys.argv else 1
@@ -254,6 +256,51 @@ async def fill_task(page, task, llm, vname):
     return "ok", q, o["label"]
 
 
+def _vacancy_formats(v: dict) -> list:
+    vf = [w.get("id") for w in (v.get("work_format") or [])]
+    if (sch := (v.get("schedule") or {}).get("id")):
+        vf.append(sch)
+    return vf
+
+
+async def _filter_like_apply(tvs: list, cfg: dict, full_resume: dict, resume_text: str, oa: dict) -> list:
+    """Те же фильтры, что у обычного авто-отклика (apply_similar): стоп-слова в названии,
+    исключённые словосочетания, формат работы, профиль резюме (чужой стек / LLM).
+    Без этого тесты уходили на вакансии, которые основной отклик сознательно пропускает."""
+    op = AS.Operation()
+    _title = pgconn.get_setting("apply.excluded_title_terms")
+    op.excluded_title_terms = (op._parse_excluded_terms(_title) if _title
+                               else list(AS.DEFAULT_TITLE_STOP))
+    op.excluded_terms = op._parse_excluded_terms(pgconn.get_setting("apply.excluded_terms"))
+    wanted_wf = cprefs.wanted_formats(cfg.get("preferences") or {})
+    _fit = pgconn.get_setting("apply.fit_check")
+    fit_on = str(_fit).lower() not in ("false", "0", "no") if _fit is not None else True
+    op.fit_chat = (ChatOpenAI(token=oa["token"], model=oa.get("model"),
+                              completion_endpoint=oa.get("completion_endpoint"),
+                              system_prompt=AS.FIT_SYS, temperature=0, max_completion_tokens=8)
+                   if fit_on else None)
+    op._fit_no = pgconn.seen_keys("fit_no") if op.fit_chat else set()
+    op._profile_text = op._build_profile(full_resume, full_resume, resume_text)
+    op._profile_stacks = {m.lower() for m in AS.FOREIGN_STACK.findall(op._profile_text)}
+
+    out, why = [], {"стоп-слово": 0, "словосочетание": 0, "формат": 0, "профиль": 0}
+    for v in tvs:
+        if op._is_title_excluded(v):
+            why["стоп-слово"] += 1; continue
+        if op.excluded_terms and op._is_excluded(v):
+            why["словосочетание"] += 1; continue
+        if not cprefs.format_ok(_vacancy_formats(v), wanted_wf):
+            why["формат"] += 1; continue
+        if not await op._fits_profile(v):
+            why["профиль"] += 1
+            print("  не по профилю:", v.get("name"))
+            continue
+        out.append(v)
+    print(f"после фильтров отклика: {len(out)} (отсеяно: "
+          + ", ".join(f"{k} {n}" for k, n in why.items() if n) + ")")
+    return out
+
+
 async def main():
     if not pgconn.feature_enabled("tests"):
         print("feat.tests выключен в Mini App — пропуск apply_tests")
@@ -290,9 +337,10 @@ async def main():
     # Город берём из hh-резюме (area.name — авторитетно), НЕ угадываем по тексту:
     # в resume_text может не быть текущего города, и LLM брал его из строки про вуз
     # и отвечал неверно (напр. «Волгоград», когда кандидат на самом деле в Москве).
-    city = None
+    city, full_resume = None, {}
     try:
-        city = ((await api.get(f"/resumes/{resume_id}")).get("area") or {}).get("name")
+        full_resume = await api.get(f"/resumes/{resume_id}")
+        city = (full_resume.get("area") or {}).get("name")
     except Exception as e:
         print("не удалось получить город из резюме:", repr(e)[:60])
 
@@ -320,9 +368,10 @@ async def main():
     finally:
         await api.aclose()  # api больше не нужен — дальше только браузер
     tvs = [v for v in r.get("items", [])
-           if v.get("has_test") and str(v["id"]) not in seen
+           if v.get("has_test") and str(v["id"]) not in seen and not v.get("relations")
            and (not gph_only or v.get("civil_law_contracts"))]
     print(f"test vacancies (new): {len(tvs)}" + (" [только ГПХ]" if gph_only else ""))
+    tvs = await _filter_like_apply(tvs, cfg, full_resume, resume, oa)
     if not tvs:
         return
 

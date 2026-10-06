@@ -34,3 +34,9 @@ def test_filters_stop_words_format_and_stack(at):
     out = asyncio.run(at._filter_like_apply(tvs, cfg, {"title": "Аналитик данных"}, "SQL, Python", {}))
     # 1С отсекается только при включённом fit_check — здесь он выключен
     assert [v["id"] for v in out] == [1, 4]
+
+
+def test_login_redirect_detected(at):
+    assert at.is_login_url("https://spb.hh.ru/account/login?postponed=&backurl=%2Fsearch%2Fvacancy")
+    assert not at.is_login_url("https://hh.ru/applicant/vacancy_response?vacancyId=1")
+    assert not at.is_login_url("https://hh.ru/applicant/resumes")

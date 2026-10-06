@@ -89,6 +89,11 @@ def bad_answer(a):
             or "текст вопрос" in low or "уточните вопрос" in low or "сформулирую" in low)
 
 
+def is_login_url(url: str) -> bool:
+    u = (url or "").lower()
+    return any(x in u for x in ("/account/login", "/account/signup", "/auth/", "otp"))
+
+
 async def web_login(page, user, pw):
     await page.goto("https://hh.ru/account/login", timeout=40000, wait_until="domcontentloaded")
     if not await page.query_selector('input[data-qa="credential-type-EMAIL"]'):
@@ -385,10 +390,7 @@ async def main():
         await page.goto("https://hh.ru/applicant/resumes", timeout=40000, wait_until="domcontentloaded")
         await page.wait_for_timeout(1500)
         # Логинимся, если нет сохранённой веб-сессии ИЛИ страница ушла на login/signup/account
-        need_login = (
-            not cfg.get("web_state")
-            or any(x in page.url.lower() for x in ("login", "signup", "account", "auth"))
-        )
+        need_login = not cfg.get("web_state") or is_login_url(page.url)
         if need_login:
             print("веб-сессия отсутствует/невалидна -> логин")
             if not await web_login(page, user, pw):
@@ -405,14 +407,33 @@ async def main():
 
         done = 0
         transient_streak = 0  # подряд идущие блипы LLM/сети
+        relogged = need_login  # перелогин не чаще раза за прогон
         for v in tvs:
             if done >= LIMIT:
                 break
             vid = v["id"]; vname = v.get("name", "")
             try:
-                await page.goto(f"https://hh.ru/applicant/vacancy_response?vacancyId={vid}",
-                                timeout=40000, wait_until="domcontentloaded")
+                url = f"https://hh.ru/applicant/vacancy_response?vacancyId={vid}"
+                await page.goto(url, timeout=40000, wait_until="domcontentloaded")
                 await page.wait_for_timeout(3500)
+                # /applicant/resumes разлогин не выдаёт, а форма отклика уводит на логин:
+                # без этой проверки протухшая веб-сессия месяцами давала «форма не найдена».
+                if is_login_url(page.url):
+                    ok = False
+                    if not relogged:
+                        relogged = True
+                        print("веб-сессия протухла -> перелогин")
+                        if await web_login(page, user, pw):
+                            pgconn.set_app_config("web_state", await ctx.storage_state())
+                            await page.goto(url, timeout=40000, wait_until="domcontentloaded")
+                            await page.wait_for_timeout(3500)
+                            ok = not is_login_url(page.url)
+                    if not ok:
+                        print("веб-сессия hh невалидна, перелогин не удался -> прогон остановлен")
+                        tg_alert("веб-сессия hh истекла, авто-вход не удался (капча/код) — "
+                                 "отклики на тесты стоят; переподключи аккаунт в боте",
+                                 pgconn.PRIORITY_MED, key="login")
+                        break
                 if not await page.query_selector('input[name="testRequired"], [data-qa="task-question"], textarea[name^="task_"]'):
                     print(f"[{vid}] форма теста не найдена ({page.url})")
                     continue  # не помечаем seen — попробуем в след. раз

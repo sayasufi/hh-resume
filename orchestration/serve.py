@@ -19,7 +19,8 @@ def main() -> None:
         return
     deployments = build_deployments(names)
     print(f"serve: {len(deployments)} deployment(s): {[d.name for d in deployments]}")
-    serve(*deployments)
+    # Потолок одновременных ранов: без него после простоя Prefect запускал всё разом.
+    serve(*deployments, limit=int(os.environ.get("ORCH_LIMIT") or 8))
 
 
 if __name__ == "__main__":

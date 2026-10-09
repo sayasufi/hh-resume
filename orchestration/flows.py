@@ -3,7 +3,10 @@
 берутся из JOBS по job_name. Так флоу импортируем по entrypoint (нужно serve()),
 а per-job-идентичность несёт ИМЯ ДЕПЛОЙМЕНТА `<platform>-<name>`.
 JOBS — единственный источник правды (см. план/спеку §4.5). Сейчас платформа одна — hh."""
+from datetime import datetime, timezone
+
 from prefect import flow, task
+from prefect.runtime import flow_run
 
 from hh_applicant_tool.storage import pgconn
 
@@ -15,8 +18,10 @@ from .targets import active_targets
 JOBS: list[dict] = [
     # Cron — в UTC (МСК = UTC+3). Всё, что ПИШЕТ работодателям, — днём: ответы и фоллоуапы
     # 09:00–21:59 МСК, отклики 08:00–21:59 (сообщения в час ночи выдают бота).
+    # Раз в 10 мин: токен меняется только при истечении, а джобы и сами рефрешат его по
+    # refresh_hook. Ежеминутный запуск × аккаунты после простоя давал залп из ~30 процессов.
     dict(name="refresh-token",  command=["python", "-m", "hh_applicant_tool", "refresh-token"],
-         feature=None,     cron="* * * * *",        jitter=0,    tags=[],          timeout=120),
+         feature=None,     cron="*/10 * * * *",     jitter=0,    tags=[],          timeout=120),
     dict(name="update-resumes", command=["python", "-m", "hh_applicant_tool", "update-resumes"],
          feature=None,     cron="0 */2 * * *",      jitter=300,  tags=[],          timeout=600),
     dict(name="browse-activity", command=["python", "/app/services/browse_activity.py"],
@@ -80,6 +85,17 @@ JOBS: list[dict] = [
 ]
 JOBS_BY_NAME: dict[str, dict] = {j["name"]: j for j in JOBS}
 
+# Ран, опоздавший сильнее, — пропускаем: после простоя оркестратора/сервера Prefect
+# отдаёт всё накопленное расписание разом (09.10: сотни ранов -> своп и 504 у соседей).
+MAX_LATE_SEC = 20 * 60
+
+
+def _late_sec() -> float:
+    sched = flow_run.scheduled_start_time
+    if not sched:
+        return 0.0
+    return (datetime.now(timezone.utc) - sched).total_seconds()
+
 
 @task(retries=2, retry_delay_seconds=[30, 120])
 async def run_target(job_name: str, target: str):
@@ -106,6 +122,9 @@ async def dispatch(job_name: str):
     """Один ран = одна задача: джиттер -> активные цели -> per-target сабтаски."""
     job = JOBS_BY_NAME[job_name]
     platform = job.get("platform", "hh")
+    if (late := _late_sec()) > MAX_LATE_SEC:
+        print(f"{job_name}: опоздание {late / 60:.0f} мин > {MAX_LATE_SEC // 60} — пропуск, ждём следующий по расписанию")
+        return
     await human_jitter(job["jitter"])
     targets = active_targets(platform, job["feature"])
     tagged = run_target.with_options(tags=[platform, *job["tags"]])

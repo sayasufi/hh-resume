@@ -27,10 +27,17 @@ async def main():
         tv += (t.get("total") if isinstance(t, dict) else (t or 0))
         nv += (n.get("total") if isinstance(n, dict) else (n or 0))
     acc = pgconn.get_account()
-    c = pgconn.connect(); cur = c.cursor()
-    cur.execute(DDL)
-    cur.execute("INSERT INTO resume_views(account, views, new_views) VALUES (%s,%s,%s)", (acc, tv, nv))
-    c.commit(); c.close()
+    c = pgconn.connect()
+    try:
+        cur = c.cursor()
+        cur.execute(DDL)
+        # Release schema/index locks before upgrading to a write lock. Parallel
+        # account jobs otherwise deadlock when all run DDL and INSERT together.
+        c.commit()
+        cur.execute("INSERT INTO resume_views(account, views, new_views) VALUES (%s,%s,%s)", (acc, tv, nv))
+        c.commit()
+    finally:
+        c.close()
     print(f"views-snapshot {acc}: {tv} (new {nv})")
 
 if __name__ == "__main__":

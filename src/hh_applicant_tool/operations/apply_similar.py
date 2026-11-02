@@ -15,7 +15,8 @@ from ..ai import ChatOpenAI
 from ..ai.base import AIError
 from ..api import BadResponse, Redirect, datatypes
 from ..api.datatypes import PaginatedItems, SearchVacancy
-from ..api.errors import ApiError, LimitExceeded
+from ..api.errors import ApiError, CaptchaRequired, LimitExceeded
+from ..utils.areas import expand_areas
 from ..utils import cover_letter as cl
 from ..utils import prefs as cprefs
 from ..utils import search_queries as sq
@@ -477,6 +478,8 @@ class Operation(BaseOperation):
         # у себя — детерминированно, как стоп-слова. Пусто -> географию не ограничиваем.
         _area = await tool.storage.settings.get_value("apply.area")
         self.allowed_areas = {a.strip() for a in str(_area or "").split(",") if a.strip()}
+        self.search_areas = set(self.allowed_areas)
+        self.allowed_areas = await expand_areas(self.api_client, self.allowed_areas)
         self.bottom_lat = args.bottom_lat
         self.currency = args.currency
         self.date_from = args.date_from
@@ -1182,6 +1185,10 @@ class Operation(BaseOperation):
                 do_apply = False
                 await self._pause_until_next_day()
                 break
+            except CaptchaRequired:
+                # A captcha blocks the account, not just this vacancy. Let the CLI
+                # fail the run so orchestration reports unhealthy instead of success.
+                raise
             except ApiError as ex:
                 logger.warning(ex)
             except (BadResponse, AIError) as ex:
@@ -1300,26 +1307,31 @@ class Operation(BaseOperation):
         if (wf := cprefs.hh_work_format_ids(self.wanted_wf)):
             base["work_format"] = wf
         if self.allowed_areas:
-            base["area"] = sorted(self.allowed_areas)
+            base["area"] = sorted(getattr(self, "search_areas", self.allowed_areas))
         found: dict[str, SearchVacancy] = {}
         budget = SEARCH_MAX_REQUESTS
-        # первая страница каждого запроса важнее вторых: при многих запросах — по одной
-        pages = SEARCH_PAGES if len(queries) * SEARCH_PAGES <= budget else 1
-        for q in queries:
-            for page in range(pages):
+        # First cover every query, then spend the remaining budget on second pages.
+        exhausted = set()
+        for page in range(SEARCH_PAGES):
+            for q in queries:
                 if budget <= 0:
                     break
+                if q in exhausted:
+                    continue
                 budget -= 1
                 await asyncio.sleep(random.uniform(*SEARCH_PAUSE_SEC))
                 try:
                     res = await self.api_client.get("/vacancies", {**base, "text": q, "page": page})
+                except CaptchaRequired:
+                    raise
                 except ApiError as ex:
                     logger.warning("Поиск «%s» не удался: %s", q, ex)
-                    break
+                    exhausted.add(q)
+                    continue
                 for item in res.get("items") or []:
                     found.setdefault(str(item["id"]), item)
                 if page + 1 >= (res.get("pages") or 0):
-                    break
+                    exhausted.add(q)
         items = sorted(found.values(), key=lambda v: v.get("published_at") or "", reverse=True)
         logger.info("Поиск по запросам %s: %d вакансий", queries, len(items))
         print(f"🔎 Поиск по запросам: {len(items)} вакансий ({'; '.join(queries)})")

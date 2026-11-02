@@ -67,6 +67,15 @@ def hh_work_format_ids(wanted: set) -> list:
     return [WF[c][0] for c in WF_ORDER if c in wanted]
 
 
+def hh_vacancy_formats(vacancy: dict) -> list:
+    """Explicit work format wins; legacy schedule is only a fallback."""
+    formats = [w.get("id") for w in vacancy.get("work_format") or []]
+    if any(canon_wf(value) for value in formats):
+        return formats
+    schedule = (vacancy.get("schedule") or {}).get("id")
+    return [schedule] if schedule else []
+
+
 def parse_salary(s) -> int | None:
     """'300000' / '300 000 руб' / '300к' / 300000 -> 300000 (int) или None."""
     if s is None:

@@ -16,6 +16,7 @@ from hh_applicant_tool.ai import ChatOpenAI
 from hh_applicant_tool.storage import pgconn
 from hh_applicant_tool.operations import apply_similar as AS
 from hh_applicant_tool.utils import prefs as cprefs
+from hh_applicant_tool.utils.areas import expand_areas
 
 APPLY = "--apply" in sys.argv
 LIMIT = int(sys.argv[sys.argv.index("--limit") + 1]) if "--limit" in sys.argv else 1
@@ -262,13 +263,26 @@ async def fill_task(page, task, llm, vname):
 
 
 def _vacancy_formats(v: dict) -> list:
-    vf = [w.get("id") for w in (v.get("work_format") or [])]
-    if (sch := (v.get("schedule") or {}).get("id")):
-        vf.append(sch)
-    return vf
+    return cprefs.hh_vacancy_formats(v)
 
 
-async def _filter_like_apply(tvs: list, cfg: dict, full_resume: dict, resume_text: str, oa: dict) -> list:
+def _daily_budget(per_run: int) -> int:
+    """Remaining test applications today, bounded by the run cap."""
+    daily = max(0, int(pgconn.get_setting("apply.tests_per_day", 10)))
+    if daily == 0 or per_run <= 0:
+        return 0
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count FROM activity_daily WHERE account=%s "
+                        "AND day=current_date AND kind='tests'", (pgconn.get_account(),))
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    return min(per_run, max(0, daily - (row[0] if row else 0)))
+
+
+async def _filter_like_apply(tvs: list, cfg: dict, full_resume: dict, resume_text: str, oa: dict, api=None) -> list:
     """Те же фильтры, что у обычного авто-отклика (apply_similar): стоп-слова в названии,
     исключённые словосочетания, формат работы, профиль резюме (чужой стек / LLM).
     Без этого тесты уходили на вакансии, которые основной отклик сознательно пропускает."""
@@ -288,8 +302,12 @@ async def _filter_like_apply(tvs: list, cfg: dict, full_resume: dict, resume_tex
     op._profile_text = op._build_profile(full_resume, full_resume, resume_text)
     op._profile_stacks = {m.lower() for m in AS.FOREIGN_STACK.findall(op._profile_text)}
 
-    out, why = [], {"стоп-слово": 0, "словосочетание": 0, "формат": 0, "профиль": 0}
+    selected = {x.strip() for x in str(pgconn.get_setting("apply.area") or "").split(',') if x.strip()}
+    allowed = await expand_areas(api, selected)
+    out, why = [], {"город": 0, "стоп-слово": 0, "словосочетание": 0, "формат": 0, "профиль": 0}
     for v in tvs:
+        if allowed and str((v.get('area') or {}).get('id')) not in allowed:
+            why["город"] += 1; continue
         if op._is_title_excluded(v):
             why["стоп-слово"] += 1; continue
         if op.excluded_terms and op._is_excluded(v):
@@ -314,6 +332,10 @@ async def main():
     if "--limit" not in sys.argv:  # лимит тестов = 25% от лимита авто-откликов (200 -> 50)
         _al = int(pgconn.get_setting("apply.max_per_day", 200) or 200)
         LIMIT = max(1, round(_al * 0.25))
+    run_limit = _daily_budget(LIMIT) if APPLY else LIMIT
+    if run_limit <= 0:
+        print("apply_tests: дневной лимит исчерпан или отклики отключены лимитом")
+        return
     gph_only = bool(pgconn.get_setting("apply.civil_law_only", False))  # общий фильтр ГПХ
     cfg = pgconn.app_config()
     # Аккаунт без hh-токена (напр. служебный Telegram-краулер) — не цель для откликов:
@@ -370,13 +392,13 @@ async def main():
 
     try:
         r = await api.get(f"/resumes/{resume_id}/similar_vacancies", page=0, per_page=80)
+        tvs = [v for v in r.get("items", [])
+               if v.get("has_test") and str(v["id"]) not in seen and not v.get("relations")
+               and (not gph_only or v.get("civil_law_contracts"))]
+        print(f"test vacancies (new): {len(tvs)}" + (" [только ГПХ]" if gph_only else ""))
+        tvs = await _filter_like_apply(tvs, cfg, full_resume, resume, oa, api=api)
     finally:
         await api.aclose()  # api больше не нужен — дальше только браузер
-    tvs = [v for v in r.get("items", [])
-           if v.get("has_test") and str(v["id"]) not in seen and not v.get("relations")
-           and (not gph_only or v.get("civil_law_contracts"))]
-    print(f"test vacancies (new): {len(tvs)}" + (" [только ГПХ]" if gph_only else ""))
-    tvs = await _filter_like_apply(tvs, cfg, full_resume, resume, oa)
     if not tvs:
         return
 
@@ -409,7 +431,7 @@ async def main():
         transient_streak = 0  # подряд идущие блипы LLM/сети
         relogged = need_login  # перелогин не чаще раза за прогон
         for v in tvs:
-            if done >= LIMIT:
+            if done >= run_limit:
                 break
             vid = v["id"]; vname = v.get("name", "")
             try:

@@ -20,6 +20,18 @@ DEFAULT_MAX = 15
 DEFAULT_TITLE_STOP = ("преподавател", "учител", "репетитор", "воспитател", "педагог", "вожат", "методист")
 
 
+def _today_count(account: str) -> int:
+    conn = pgconn.connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count FROM activity_daily WHERE account=%s "
+                        "AND kind='habr' AND day=current_date", (account,))
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
 def _title_stop_terms(account):
     raw = pgconn.get_setting("apply.excluded_title_terms", account=account)
     if raw:
@@ -108,6 +120,10 @@ async def run():
 
         _lim = pgconn.get_setting("habr.max_per_day", DEFAULT_MAX)
         limit = DEFAULT_MAX if _lim is None else int(_lim)
+        sent_today = _today_count(account)
+        if sent_today >= limit:
+            print(f"habr: дневной лимит достигнут ({sent_today}/{limit})")
+            return
         oa = cfg.get("openai")
         resume = (cfg.get("resume_text") or "").strip()
         # Общие предпочтения: ЗП/формат -> заземление письма + жёсткий фильтр формата
@@ -128,12 +144,12 @@ async def run():
         applied = 0
         page = 1
         MAX_PAGES = 8  # до ~200 вакансий за прогон
-        while applied < limit and page <= MAX_PAGES:
+        while sent_today + applied < limit and page <= MAX_PAGES:
             offers = await api.offers(page=page, type="suitable")
             if not offers:
                 break
             for v in offers:
-                if applied >= limit:
+                if sent_today + applied >= limit:
                     break
                 vid = str(v["id"])
                 kind = (v.get("response") or {}).get("kind")

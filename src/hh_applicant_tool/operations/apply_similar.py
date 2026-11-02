@@ -841,9 +841,7 @@ class Operation(BaseOperation):
                 # Жёсткий фильтр формата работы (общая настройка кандидата): пропускаем,
                 # только если у вакансии формат УКАЗАН и не пересекается с выбранным.
                 if self.wanted_wf:
-                    _vf = [w.get("id") for w in (vacancy.get("work_format") or [])]
-                    if (_sch := (vacancy.get("schedule") or {}).get("id")):
-                        _vf.append(_sch)
+                    _vf = cprefs.hh_vacancy_formats(vacancy)
                     if not cprefs.format_ok(_vf, self.wanted_wf):
                         logger.debug(
                             "Пропускаем по формату работы: %s", vacancy["alternate_url"]

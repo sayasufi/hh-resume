@@ -14,6 +14,7 @@ import re
 
 import httpx
 
+from hh_applicant_tool.utils.telegram_proxy import telethon_proxy
 from hh_applicant_tool.storage import pgconn
 
 BASE = "https://getmatch.ru"
@@ -81,7 +82,7 @@ class GetMatchAPI:
         from telethon import TelegramClient
         from telethon.sessions import StringSession
         api_id, api_hash = pgconn.tg_api()
-        return TelegramClient(StringSession(pgconn.dec_session(self.tg_session_enc)), api_id, api_hash)
+        return TelegramClient(StringSession(pgconn.dec_session(self.tg_session_enc)), api_id, api_hash, proxy=telethon_proxy())
 
     async def _otp_login(self):
         """OTP-логин: запросить код, прочитать из бота, авторизоваться, сохранить сессию."""

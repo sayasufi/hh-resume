@@ -2,6 +2,7 @@
 inline-кнопками из джобы. Ответы на кнопки/реплаи обрабатывает общий бот (tg_connect_bot)."""
 from __future__ import annotations
 
+from hh_applicant_tool.utils.telegram_proxy import telegram_proxy
 import logging
 
 import httpx
@@ -18,6 +19,7 @@ def send_message(token: str, chat_id, text: str, reply_markup: dict | None = Non
                   "disable_web_page_preview": True,
                   **({"reply_markup": reply_markup} if reply_markup else {})},
             timeout=20,
+            proxy=telegram_proxy(),
         )
         data = r.json()
         if not data.get("ok"):

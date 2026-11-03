@@ -13,6 +13,7 @@ import time
 
 import giga_recruiter as gr
 from tg_channels import _hh_resume_pdf  # переиспользуем скачивание PDF-резюме (файл + ФИО)
+from hh_applicant_tool.utils.telegram_proxy import telethon_proxy
 from hh_applicant_tool.ai import ChatOpenAI
 from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
@@ -403,7 +404,7 @@ async def main():
     if pdf[0]:
         print(f"auto_screen[{account}]: PDF-резюме готово ({pdf[1]}) — прикрепляю файлом")
     api_id, api_hash = pgconn.tg_api()
-    client = TelegramClient(StringSession(pgconn.dec_session(enc)), api_id, api_hash)
+    client = TelegramClient(StringSession(pgconn.dec_session(enc)), api_id, api_hash, proxy=telethon_proxy())
     await client.connect()
     if not await client.is_user_authorized():
         print("auto_screen: tg-сессия слетела — пропуск")

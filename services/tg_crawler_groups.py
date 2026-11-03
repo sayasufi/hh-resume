@@ -9,6 +9,7 @@ JOIN_N/прогон — вступление флудит, аккаунт нов
 import sys, os, re, json, asyncio
 from datetime import datetime, timezone, timedelta
 sys.path.insert(0, "/app")
+from hh_applicant_tool.utils.telegram_proxy import telethon_proxy
 from hh_applicant_tool.storage import pgconn
 from hh_applicant_tool.ai import ChatOpenAI
 from telethon import TelegramClient, functions
@@ -105,7 +106,7 @@ async def main():
     groups,cat_of=_catalog_groups()
     known=_known_channels()  # для отсева контактов-каналов
     cfg=pgconn.app_config(CRAWLER)
-    client=TelegramClient(StringSession(pgconn.dec_session(cfg["tg_user_session"])), *pgconn.tg_api())
+    client=TelegramClient(StringSession(pgconn.dec_session(cfg["tg_user_session"])), *pgconn.tg_api(), proxy=telethon_proxy())
     await client.connect()
     if not await client.is_user_authorized(): print("сессия краулера не авторизована"); return
     joined={}

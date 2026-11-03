@@ -16,6 +16,7 @@ import re
 import sys
 from datetime import datetime, timedelta, timezone
 
+from hh_applicant_tool.utils.telegram_proxy import telethon_proxy
 from hh_applicant_tool.ai import ChatOpenAI
 from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
@@ -413,7 +414,7 @@ async def run():
     client = None
     if send_mode:
         api_id, api_hash = pgconn.tg_api()
-        client = TelegramClient(StringSession(pgconn.dec_session(enc)), api_id, api_hash)
+        client = TelegramClient(StringSession(pgconn.dec_session(enc)), api_id, api_hash, proxy=telethon_proxy())
         await client.connect()
         if not await client.is_user_authorized():
             print("tg_channels: tg-сессия слетела — перехожу в режим-подсказку")

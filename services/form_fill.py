@@ -23,6 +23,7 @@ import re
 import sys
 
 from playwright.async_api import async_playwright
+from hh_applicant_tool.utils.telegram_proxy import telethon_proxy
 from hh_applicant_tool.ai import ChatOpenAI
 from hh_applicant_tool.ai.openai import OpenAIError
 from hh_applicant_tool.api.client import ApiClient
@@ -260,7 +261,7 @@ async def build_profile(api, acc, cfg):
             from telethon import TelegramClient
             from telethon.sessions import StringSession
             aid, ah = pgconn.tg_api()
-            c = TelegramClient(StringSession(pgconn.dec_session(enc)), aid, ah)
+            c = TelegramClient(StringSession(pgconn.dec_session(enc)), aid, ah, proxy=telethon_proxy())
             await c.connect()
             if await c.is_user_authorized():
                 me2 = await c.get_me()

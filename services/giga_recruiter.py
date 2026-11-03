@@ -21,6 +21,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import StartBotRequest
 
+from hh_applicant_tool.utils.telegram_proxy import telethon_proxy
 from hh_applicant_tool.ai import ChatOpenAI
 from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
@@ -596,7 +597,7 @@ async def main() -> None:
             "приемлемые. Форматы, которых нет в списке, не называй.")
     bot_username = pgconn.get_setting("giga.bot", DEFAULT_BOT) or DEFAULT_BOT
     api_id, api_hash = pgconn.tg_api()
-    client = TelegramClient(StringSession(pgconn.dec_session(enc_sess)), api_id, api_hash)
+    client = TelegramClient(StringSession(pgconn.dec_session(enc_sess)), api_id, api_hash, proxy=telethon_proxy())
 
     try:
         # 1) ПОИСК новых приглашений в hh

@@ -18,6 +18,7 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BufferedInputFile
 
+from hh_applicant_tool.utils.telegram_proxy import bot_session
 from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import pgconn
@@ -346,7 +347,7 @@ async def main() -> None:
         print("Пользователь не привязан (/link) или нет токена — дайджест в очереди.")
         return
 
-    bot = Bot(token, default=DefaultBotProperties(parse_mode="HTML", link_preview_is_disabled=True))
+    bot = Bot(token, session=bot_session(), default=DefaultBotProperties(parse_mode="HTML", link_preview_is_disabled=True))
     ok = True
     try:
         if png:

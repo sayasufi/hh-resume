@@ -3,6 +3,7 @@
 Запуск: python /app/services/tg_session_health.py  (через Prefect JOBS, feature=None)."""
 import asyncio, sys, time
 sys.path.insert(0, "/app")
+from hh_applicant_tool.utils.telegram_proxy import telethon_proxy
 from hh_applicant_tool.storage import pgconn
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -10,7 +11,7 @@ from telethon.errors import FloodWaitError
 
 
 async def _probe(enc):
-    c = TelegramClient(StringSession(pgconn.dec_session(enc)), *pgconn.tg_api())
+    c = TelegramClient(StringSession(pgconn.dec_session(enc)), *pgconn.tg_api(), proxy=telethon_proxy())
     try:
         await c.connect()
         if not await c.is_user_authorized():

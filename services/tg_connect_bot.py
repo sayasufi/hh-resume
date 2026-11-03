@@ -43,6 +43,7 @@ from telethon.errors import (
 )
 from telethon.sessions import StringSession
 
+from hh_applicant_tool.utils.telegram_proxy import bot_session, telethon_proxy
 from hh_applicant_tool.api.client import ApiClient
 from hh_applicant_tool.api.user_agent import generate_android_useragent
 from hh_applicant_tool.storage import answer_bank as ab
@@ -263,7 +264,7 @@ async def _connect_send_code(message: Message, state: FSMContext, phone: str) ->
     """Запросить у Telegram код входа для phone, перейти к вводу кода."""
     await message.answer(f"⏳ Отправляю код входа на {phone}…",
                          reply_markup=ReplyKeyboardRemove())
-    client = TelegramClient(StringSession(), API_ID, API_HASH)
+    client = TelegramClient(StringSession(), API_ID, API_HASH, proxy=telethon_proxy())
     try:
         await client.connect()
         sent = await client.send_code_request(phone)
@@ -386,7 +387,7 @@ async def conn_got_code(message: Message, state: FSMContext):
 async def _connect_qr(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Генерирую QR-код…")
-    client = TelegramClient(StringSession(), API_ID, API_HASH)
+    client = TelegramClient(StringSession(), API_ID, API_HASH, proxy=telethon_proxy())
     await client.connect()
     qr = await client.qr_login()
     qr_msg = None
@@ -1080,7 +1081,7 @@ async def main():
     if not token:
         print("tg_connect_bot: нет telegram-токена")
         return
-    bot = Bot(token)
+    bot = Bot(token, session=bot_session())
     await bot.set_my_commands([
         BotCommand(command="start", description="Открыть кабинет / привязать профиль"),
         BotCommand(command="addaccount", description="Привязать аккаунт (hh / GetMatch)"),

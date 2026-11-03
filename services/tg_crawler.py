@@ -9,6 +9,7 @@ Env для теста: CRAWL_N (только первые N каналов), CRA
 import sys, os, re, json, asyncio, html as _html
 from datetime import datetime, timezone, timedelta
 sys.path.insert(0, "/app")
+from hh_applicant_tool.utils.telegram_proxy import telegram_proxy
 from hh_applicant_tool.storage import pgconn
 from hh_applicant_tool.ai import ChatOpenAI
 import httpx
@@ -131,7 +132,7 @@ async def main():
     cutoff = datetime.now(timezone.utc) - timedelta(days=FRESH_DAYS)
     conn = pgconn.connect(); cur = conn.cursor()
     llm = stored = scanned = 0
-    async with httpx.AsyncClient(headers={"user-agent": "Mozilla/5.0"}, follow_redirects=True) as cl:
+    async with httpx.AsyncClient(headers={"user-agent": "Mozilla/5.0"}, follow_redirects=True, proxy=telegram_proxy()) as cl:
         for ch in channels:
             if llm >= MAX_LLM: print(f"tg_crawler: лимит LLM {MAX_LLM} — стоп на @{ch}"); break
             try:

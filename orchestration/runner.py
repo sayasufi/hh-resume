@@ -3,6 +3,7 @@
 Контекст цели выставляется через PLATFORM_ENV (hh -> HH_ACCOUNT)."""
 import asyncio
 import os
+import signal
 
 from prefect import get_run_logger
 
@@ -24,6 +25,7 @@ async def run_op(command: list[str], platform: str, target: str, timeout: int = 
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=os.name == "posix",
     )
     assert proc.stdout is not None
 
@@ -33,11 +35,20 @@ async def run_op(command: list[str], platform: str, target: str, timeout: int = 
 
     try:
         await asyncio.wait_for(asyncio.gather(_pump(), proc.wait()), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
+    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        try:
+            if os.name == "posix":
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+        if isinstance(exc, asyncio.CancelledError):
+            raise
         raise RuntimeError(
             f"{' '.join(command)} (platform={platform} target={target}) timed out after {timeout}s"
-        )
+        ) from exc
     rc = proc.returncode or 0
     if rc != 0:
         raise RuntimeError(

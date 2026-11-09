@@ -109,3 +109,31 @@ def test_account_lock_and_cooldown_prevent_duplicate_solver_charges(monkeypatch,
     assert asyncio.run(captcha.solve_captcha('https://hh.ru/account/captcha?state=test')) == expected
     assert browser.await_count == int(expected)
     conn.close.assert_called_once()
+
+
+def test_captcha_after_token_refresh_is_resolved(monkeypatch):
+    solver = AsyncMock(return_value=True)
+    monkeypatch.setattr(captcha, 'solve_captcha', solver)
+    requests = []
+    def respond(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(403, json={'errors': [{'type': 'forbidden'}]})
+        if len(requests) == 2:
+            return httpx.Response(403, json={'errors': [{'value': 'captcha_required',
+                'captcha_url': 'https://hh.ru/account/captcha?state=test'}]})
+        return httpx.Response(200, json={'id': 'test'})
+    async def refresh(client):
+        client.access_token = 'USERnew'
+        client.access_expires_at = 9999999999
+    async def run():
+        client = api.ApiClient(access_token='USERold', refresh_token='refresh',
+            refresh_hook=refresh, client=httpx.AsyncClient(transport=httpx.MockTransport(respond)))
+        try:
+            assert await client.get('/me') == {'id': 'test'}
+        finally:
+            await client.aclose()
+    asyncio.run(run())
+    assert len(requests) == 3
+    assert requests[2].headers['authorization'] == 'Bearer USERnew'
+    solver.assert_awaited_once()

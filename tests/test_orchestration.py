@@ -63,3 +63,18 @@ def test_build_deployments_filters_by_name():
     deps = build_deployments({"refresh-token"})
     assert len(deps) == 1 and deps[0].name == "hh-refresh-token"
     assert len(build_deployments(None)) == len(JOBS)
+
+
+@pytest.mark.parametrize('job,expected', [
+    ('tg-crawl', ['8510841974']), ('tg-join-crawl', ['8510841974']),
+    ('apply-similar', ['a', 'b']), ('tg-channels', ['a', 'b'])])
+def test_shared_crawlers_run_once_but_candidate_jobs_fan_out(monkeypatch, job, expected):
+    from unittest.mock import AsyncMock, MagicMock
+    import orchestration.flows as flows
+    monkeypatch.setattr(flows, '_late_sec', lambda: 0)
+    monkeypatch.setattr(flows, 'human_jitter', AsyncMock())
+    monkeypatch.setattr(flows, 'active_targets', lambda *args: ['a', 'b'])
+    task = MagicMock()
+    monkeypatch.setattr(flows, 'run_target', task)
+    asyncio.run(flows.dispatch.fn(job))
+    assert [call.args[1] for call in task.with_options.return_value.submit.call_args_list] == expected

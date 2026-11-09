@@ -274,8 +274,18 @@ class ApiClient(BaseClient):
                 self, method, endpoint, params, delay, as_json, **kwargs
             )
 
+        async def authenticated_request():
+            try:
+                return await do_request()
+            except errors.Forbidden:
+                if not self.is_access_expired or not self.refresh_token:
+                    raise
+                logger.info("try to refresh access_token")
+                await self.refresh_access_token()
+                return await do_request()
+
         try:
-            return await do_request()
+            return await authenticated_request()
         except errors.CaptchaRequired as ex:
             from ..utils.hh_captcha import solve_captcha
 
@@ -283,18 +293,12 @@ class ApiClient(BaseClient):
                 self._captcha_attempts += 1
                 if await solve_captcha(ex.captcha_url, self.user_agent, self.proxy):
                     try:
-                        return await do_request()
+                        return await authenticated_request()
                     except errors.CaptchaRequired as retry_error:
                         _notify_captcha(retry_error)
                         raise
             _notify_captcha(ex)
             raise
-        except errors.Forbidden as ex:
-            if not self.is_access_expired or not self.refresh_token:
-                raise ex
-            logger.info("try to refresh access_token")
-            await self.refresh_access_token()
-            return await do_request()
 
     def handle_access_token(self, token: AccessToken) -> None:
         for f in ("access_token", "refresh_token", "access_expires_at"):

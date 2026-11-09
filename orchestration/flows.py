@@ -78,10 +78,10 @@ JOBS: list[dict] = [
          feature=None,     cron="40 9-19/4 * * *", jitter=300, tags=["llm"],  timeout=1200),
     # центральный краулер вакансий (наш аккаунт-краулер) — broadcast-каналы через t.me/s, без флуда
     dict(name="tg-crawl",       command=["python", "/app/services/tg_crawler.py"],
-         feature=None,     cron="20 6-21/3 * * *",  jitter=300,  tags=["llm"],     timeout=2400),
+         targets=["8510841974"], feature=None, cron="20 6-21/3 * * *", jitter=300, tags=["llm"], timeout=2400),
     # вступление в чаты (постепенно, аккаунт-краулер новый) + краул групп — раз в день
     dict(name="tg-join-crawl",  command=["python", "/app/services/tg_crawler_groups.py"],
-         feature=None,     cron="35 7 * * *",       jitter=600,  tags=["llm"],     timeout=2400),
+         targets=["8510841974"], feature=None, cron="35 7 * * *", jitter=600, tags=["llm"], timeout=2400),
 ]
 JOBS_BY_NAME: dict[str, dict] = {j["name"]: j for j in JOBS}
 
@@ -126,7 +126,9 @@ async def dispatch(job_name: str):
         print(f"{job_name}: опоздание {late / 60:.0f} мин > {MAX_LATE_SEC // 60} — пропуск, ждём следующий по расписанию")
         return
     await human_jitter(job["jitter"])
-    targets = active_targets(platform, job["feature"])
+    # Shared crawlers run once using their service account. Candidate operations
+    # still fan out to every eligible account.
+    targets = job["targets"] if "targets" in job else active_targets(platform, job["feature"])
     tagged = run_target.with_options(tags=[platform, *job["tags"]])
     futures = [tagged.submit(job_name, t) for t in targets]
     # Изолируем падения: одна цель упала — остальные идут, флоу не валится из-за одной.

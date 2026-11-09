@@ -196,9 +196,8 @@ class OAuthClient(BaseClient):
 
 
 def _notify_captcha(ex: errors.CaptchaRequired) -> None:
-    """hh требует капчу: зовём человека — 🔴 уведомление со ссылкой в Telegram (не чаще раза
-    в час). Сами капчу не решаем: её проходит владелец аккаунта в своём браузере.
-    Раньше ссылка уходила только в лог, и джобы по аккаунту вставали молча."""
+    """Fallback when automatic captcha resolution failed or is unavailable.
+    Notify the account owner at most once per hour."""
     try:
         from datetime import datetime
 
@@ -232,6 +231,7 @@ class ApiClient(BaseClient):
     # Выставляется хуком, когда токен уже записан в PG под локом — тогда внешнему
     # save_token повторная запись не нужна (см. #7: убираем вторую транзакцию).
     _token_persisted: bool = False
+    _captcha_attempts: int = field(default=0, init=False, repr=False)
 
     @property
     def is_access_expired(self) -> bool:
@@ -277,6 +277,16 @@ class ApiClient(BaseClient):
         try:
             return await do_request()
         except errors.CaptchaRequired as ex:
+            from ..utils.hh_captcha import solve_captcha
+
+            if self._captcha_attempts < 2:
+                self._captcha_attempts += 1
+                if await solve_captcha(ex.captcha_url, self.user_agent, self.proxy):
+                    try:
+                        return await do_request()
+                    except errors.CaptchaRequired as retry_error:
+                        _notify_captcha(retry_error)
+                        raise
             _notify_captcha(ex)
             raise
         except errors.Forbidden as ex:
